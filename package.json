@@ -1,0 +1,34 @@
+{
+  "name": "quorum-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Quorum: a self-hosted, human-governed coordination layer for AI coding agents.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.0",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.3"
+  }
+}

@@ -1,0 +1,7 @@
+# Normalise line endings so Windows, macOS and Linux contributors produce identical files
+# (hash-chained logs and signatures depend on byte-exact content).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary

@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+
+# Local Quorum state (databases, blobs, tokens) must never be committed.
+.quorum/
+*.sqlite
+*.sqlite-*
+*.db
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Repomix
+repomix-output.md
