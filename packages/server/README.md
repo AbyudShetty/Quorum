@@ -23,4 +23,4 @@ The Quorum server. So far: storage and the local-mode building blocks. The `/v1`
 
 ## Dependency note
 
-`better-sqlite3` ships prebuilt binaries for Windows, Linux and macOS inside the package, so its install script is not needed; it is denied in the root `package.json` (`allowScripts`), and nothing is ever compiled on install.
+`better-sqlite3` ships prebuilt binaries for Windows, Linux and macOS inside the package. Install scripts are switched off for the whole project (`.npmrc`: `ignore-scripts=true`), because npm 10 (Node 22) would otherwise try to compile it and fail without Visual Studio. The `allowScripts` entry in `package.json` records the same decision for npm 11.

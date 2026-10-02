@@ -17,6 +17,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- CI on Windows and Linux (first run of the server package): a race in the local start lock that let two starters both win (now atomic hard-link creation with per-attempt tokens and a confirm step, plus new race tests); Windows permission checks breaking under PowerShell 7 (now plain .NET, no module loading, PSModulePath stripped) and timing out on slow machines; npm 10 trying to compile `better-sqlite3` (install scripts are now off project-wide via `.npmrc`).
 - Dependabot no longer proposes major upgrades of `@types/node` and `typescript`, which broke CI (types must match the oldest supported Node LTS; typescript-eslint does not support TypeScript 7 yet).
 
 ### Changed

@@ -17,13 +17,30 @@ const POWERSHELL = join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 export const SYSTEM_SID = 'S-1-5-18';
 export const ADMINISTRATORS_SID = 'S-1-5-32-544';
 
-/** The SID of the user running this process. */
-export const currentUserSid = async (): Promise<string> => {
-  const { stdout } = await run(WHOAMI, ['/user', '/fo', 'csv', '/nh'], { windowsHide: true });
-  const sid = /"(S-1-[0-9-]+)"/.exec(stdout)?.[1];
-  if (!sid) throw new Error('could not determine the current Windows user SID');
-  return sid;
+let userSid: Promise<string> | undefined;
+
+/** The SID of the user running this process (looked up once). */
+export const currentUserSid = (): Promise<string> => {
+  userSid ??= run(WHOAMI, ['/user', '/fo', 'csv', '/nh'], { windowsHide: true }).then(
+    ({ stdout }) => {
+      const sid = /"(S-1-[0-9-]+)"/.exec(stdout)?.[1];
+      if (!sid) throw new Error('could not determine the current Windows user SID');
+      return sid;
+    },
+  );
+  return userSid;
 };
+
+/**
+ * Environment for Windows PowerShell 5.1: no PSModulePath, because one inherited from
+ * PowerShell 7 (e.g. a pwsh terminal or GitHub Actions) breaks 5.1's module loading.
+ */
+const powershellEnv = (extra: Record<string, string>): NodeJS.ProcessEnv => ({
+  ...Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'),
+  ),
+  ...extra,
+});
 
 export interface AllowEntry {
   sid: string;
@@ -36,17 +53,16 @@ export interface AllowEntry {
  * the script, so unusual folder names cannot inject PowerShell.
  */
 export const allowEntries = async (path: string): Promise<AllowEntry[]> => {
+  // Plain .NET (no Get-Acl), so no PowerShell module has to load; rules come back as SIDs.
   const script = [
     "$ErrorActionPreference='Stop';",
-    '(Get-Acl -LiteralPath $env:QUORUM_ACL_PATH).Access |',
+    '$acl = [System.IO.Directory]::GetAccessControl($env:QUORUM_ACL_PATH);',
+    '$acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) |',
     " Where-Object { $_.AccessControlType -eq 'Allow' } |",
-    ' ForEach-Object {',
-    '  $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value +',
-    "  '|' + $_.IsInherited",
-    ' }',
+    " ForEach-Object { $_.IdentityReference.Value + '|' + $_.IsInherited }",
   ].join('');
   const { stdout } = await run(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', script], {
-    env: { ...process.env, QUORUM_ACL_PATH: path },
+    env: powershellEnv({ QUORUM_ACL_PATH: path }),
     windowsHide: true,
   });
   const entries = new Map<string, AllowEntry>();

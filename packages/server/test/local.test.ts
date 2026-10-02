@@ -31,7 +31,8 @@ afterAll(() => {
 const ids = createIdFactory();
 const windows = process.platform === 'win32';
 
-describe('data directory (INV-25)', () => {
+// Each Windows check starts PowerShell, which can take seconds on CI machines.
+describe('data directory (INV-25)', { timeout: 60_000 }, () => {
   it('uses QUORUM_HOME, else %LOCALAPPDATA%\\Quorum on Windows, else ~/.quorum', () => {
     expect(defaultDataDir({ QUORUM_HOME: '/custom' }, 'linux', '/home/a')).toBe('/custom');
     expect(defaultDataDir({}, 'linux', '/home/a')).toBe(join('/home/a', '.quorum'));
@@ -166,12 +167,35 @@ describe('start lock (one local server per user)', () => {
     expect((await acquireStartLock(dir)).acquired).toBe(true);
   });
 
+  const crashedLock = `999999\n${'0'.repeat(8)}-0000-0000-0000-${'0'.repeat(12)}\n`;
+  const deadIs999999 = (pid: number) => pid !== 999999;
+
   it('takes over a lock left by a crashed process', async () => {
     const dir = lockDir();
-    writeFileSync(lockPath(dir), '999999');
-    const attempt = await acquireStartLock(dir, (pid) => pid !== 999999);
+    writeFileSync(lockPath(dir), crashedLock);
+    const attempt = await acquireStartLock(dir, deadIs999999);
     expect(attempt.acquired).toBe(true);
-    expect(readFileSync(lockPath(dir), 'utf8')).toBe(String(process.pid));
+    expect(readFileSync(lockPath(dir), 'utf8').startsWith(`${String(process.pid)}\n`)).toBe(true);
+  });
+
+  it('lets exactly one of several simultaneous starters take over a crashed lock', async () => {
+    for (let round = 0; round < 10; round++) {
+      const dir = lockDir();
+      writeFileSync(lockPath(dir), crashedLock);
+      const attempts = await Promise.all(
+        Array.from({ length: 4 }, () => acquireStartLock(dir, deadIs999999)),
+      );
+      expect(attempts.filter((a) => a.acquired)).toHaveLength(1);
+    }
+  });
+
+  it('never releases a lock that someone else now holds', async () => {
+    const dir = lockDir();
+    const mine = await acquireStartLock(dir);
+    const theirs = `4242\n${'1'.repeat(8)}-1111-1111-1111-${'1'.repeat(12)}\n`;
+    writeFileSync(lockPath(dir), theirs);
+    if (mine.acquired) await mine.lock.release();
+    expect(readFileSync(lockPath(dir), 'utf8')).toBe(theirs);
   });
 
   it('takes over an unreadable lock file', async () => {
