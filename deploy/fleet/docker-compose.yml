@@ -1,0 +1,82 @@
+# Simulated fleet: one fake /v1 server plus N fake agents on a private network.
+#   FLEET_AGENTS=20 docker compose -f deploy/fleet/docker-compose.yml up --build --abort-on-container-exit --exit-code-from report
+# See deploy/fleet/README.md. The server's port is NOT published: only the agents reach it.
+name: quorum-fleet
+
+x-fleet-env: &fleet-env
+  FLEET_MANIFEST: /shared/fleet.json
+  FLEET_AGENTS: ${FLEET_AGENTS:-20}
+  FLEET_DURATION_S: ${FLEET_DURATION_S:-30}
+  FLEET_DRAIN_S: ${FLEET_DRAIN_S:-3}
+  FLEET_RATE: ${FLEET_RATE:-2}
+  FLEET_POLL_MS: ${FLEET_POLL_MS:-100}
+
+services:
+  prepare:
+    # A named volume is created root-owned; hand it to the unprivileged user once.
+    image: busybox:1.37
+    user: root
+    command: ['sh', '-c', 'mkdir -p /shared && rm -rf /shared/* && chown -R 1000:1000 /shared']
+    volumes:
+      - shared:/shared
+
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/fleet/Dockerfile
+    command: ['node', 'tests/fakes/fake-server/dist/serve.js']
+    environment:
+      <<: *fleet-env
+      FLEET_PORT: '8787'
+      FLEET_HOST: 0.0.0.0
+      FLEET_PUBLIC_URL: http://server:8787
+    volumes:
+      - shared:/shared
+    depends_on:
+      prepare:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://localhost:8787/v1/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    mem_limit: 512m
+
+  agent:
+    build:
+      context: ../..
+      dockerfile: deploy/fleet/Dockerfile
+    command: ['node', 'packages/fleet/bin/fleet.js', 'agent']
+    environment: *fleet-env
+    volumes:
+      - shared:/shared
+    depends_on:
+      server:
+        condition: service_healthy
+    deploy:
+      replicas: ${FLEET_AGENTS:-20}
+    mem_limit: 128m
+    restart: 'no'
+
+  report:
+    # Waits until every agent has written its result (or the timeout), prints the summary; its exit
+    # code is the run's verdict (0 = nothing lost, misdelivered or failed, no replica missing).
+    build:
+      context: ../..
+      dockerfile: deploy/fleet/Dockerfile
+    command: ['node', 'packages/fleet/bin/fleet.js', 'report']
+    environment: *fleet-env
+    volumes:
+      - shared:/shared
+    depends_on:
+      server:
+        condition: service_healthy
+
+volumes:
+  shared:

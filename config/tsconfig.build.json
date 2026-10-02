@@ -21,6 +21,9 @@
     },
     {
       "path": "../tests/fakes/fake-server/tsconfig.build.json"
+    },
+    {
+      "path": "../packages/fleet/tsconfig.build.json"
     }
   ]
 }

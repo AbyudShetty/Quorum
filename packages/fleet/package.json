@@ -1,0 +1,27 @@
+{
+  "name": "@quorum/fleet",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Simulated fleet: many fake agents talking to a /v1 server, with loss and latency summaries. Test tooling for scale and chaos runs; not part of the product.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "quorum-fleet": "./bin/fleet.js"
+  },
+  "exports": {
+    ".": {
+      "quorum-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "dependencies": {
+    "@quorum/adapter-mcp": "0.0.0",
+    "@quorum/core": "0.0.0",
+    "@quorum/schemas": "0.0.0"
+  }
+}
