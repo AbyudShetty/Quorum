@@ -1,15 +1,15 @@
 # Phase 0 — Foundations: status
 
-Phase 1 MUST NOT start until every exit criterion below is ✅ (AGENTS.md rule 1).
+**Status: CLOSED 2026-10-02 by joint decision (DECISIONS D-16). Phase 1 may start.** E3 met; E1, E2 and E4 waived, with mitigations recorded in D-16.
 
 ## Exit criteria (plan §13)
 
-| #   | Criterion                                            | Owner          | Status                                                                                     |
-| --- | ---------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------ |
-| E1  | Specs reviewed by abyud                              | abyud          | ⏳ pending — review the specs **as updated 2026-10-01** (local mode, INV-23–31)            |
-| E2  | Specs reviewed by **one other person**               | abhijna        | ⏳ pending — review the pushed docs, confirm/challenge D-14, record below (TEAM_PLAN §5.2) |
-| E3  | CI green on an empty skeleton                        | abyud          | ✅ CI green on `main` after the first push (2026-10-01)                                    |
-| E4  | Interview notes saved (≥ 5 people, top 3 pains each) | both (~3 each) | ⏳ 0 / 5 — kit in [interviews/](interviews/README.md)                                      |
+| #   | Criterion                                            | Owner   | Status                                                                                                  |
+| --- | ---------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------- |
+| E1  | Specs reviewed by abyud                              | abyud   | ⚠️ waived: accepted on trust (D-16); specs stay changeable via RFC                                      |
+| E2  | Specs reviewed by **one other person**               | abhijna | ⚠️ waived: accepted on trust (D-16)                                                                     |
+| E3  | CI green on an empty skeleton                        | abyud   | ✅ CI green on `main` after the first push (2026-10-01)                                                 |
+| E4  | Interview notes saved (≥ 5 people, top 3 pains each) | both    | ⚠️ waived: 1 real case (own hackathon) + 5 simulated, labelled; real interviews moved to Phase 5 (D-16) |
 
 ## Deliverables
 

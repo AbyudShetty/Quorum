@@ -22,7 +22,8 @@ defaults:
   grant_ttl: 15m # how long an issued grant can be used once approved
   quorum: 1 # approvals needed
   independent_approver: false # true → approver must not own the requesting agent; always true at high/critical
-  veto: true # any eligible reject → rejected
+  veto: true # any eligible reject → rejected, which opens a discussion (§4.1)
+  approval_required_from: low # which gated actions wait for a human: low = all of them (default); medium | high | critical = only at/above that risk. critical can never be skipped (INV-32)
   user_verification_from: high # passkey needed at/above this risk; may be lowered to medium/low, never raised above high (INV-31)
 
 humans:
@@ -112,14 +113,28 @@ Decision rules:
 2. An eligible approver is a human with an allowed role; never an agent (INV-1); never the requester (INV-2); if `independent_approver` — which is **always on for `high`/`critical`** — never the requesting agent's owner (in a two-person team, the other person approves high-risk actions of your agents). At or above `user_verification_from` (and always for `high`/`critical`), the decision must carry a hardware-backed user-verification signature bound to the request — Windows Hello from `quorum approve` in the terminal, or a passkey in the browser (INV-31).
 3. Each human counts once. A decision is bound to the `preview_hash` (INV-3).
 4. When `approvals ≥ quorum` → `approved` and a single-use grant is issued (expires after `grant_ttl`).
-5. If `veto` and any eligible human rejects → `rejected`.
+5. If `veto` and any eligible human rejects → `rejected`, and the request enters **discussion** (§4.1).
 6. On `approval_expiry` → `expired`. Never approved (INV-4).
 7. If the request is modified, all collected decisions are discarded (new `preview_hash`).
+8. Gated actions whose effective risk is **below** `approval_required_from` do not wait for a human: they are allowed, but always logged and shown on the timeline as "done without approval (policy)". `critical` actions always wait (INV-32). Moving `approval_required_from` up is loosening (§5).
+
+### 4.1 After a rejection: a discussion, not a dead end
+
+A rejection starts a conversation aimed at a common position:
+
+1. **The rejecting human gives a reason** (required).
+2. The request moves to `discussing` and stays in the queue, blocked. Nothing is executed.
+3. **The agent may justify itself** (evidence, test results, a clarification) and **the humans share their thoughts**, as messages in the request's thread. Agent messages are untrusted text and shown as such (INV-9). They count against the wake budget and agent-only-loop limit (INV-29), so an agent cannot argue endlessly.
+4. The discussion ends in one of three ways, always by a **human** action (INV-1):
+   - **Revised:** the agent submits a revised request (`supersedes` the old one, new `preview_hash`) reflecting the common position; it goes through approval again.
+   - **Reconsidered:** the human who rejected changes their mind and approves the original (same `preview_hash`), with a comment.
+   - **Closed:** a human closes it; the work is **stashed, never deleted** (e.g. kept on a branch or as an artifact) and the agent is told to stop.
+5. Nothing happens automatically: expiry during a discussion yields `expired`, never `approved` (INV-4).
 
 ## 5. Policy changes
 
 - The active policy is stored in the event log (`policy.activated` events with the full text and SHA-256), so any past decision can be explained by the policy that was active at the time.
-- `quorum policy diff` shows the proposed change. The server classifies it as **tightening** or **loosening** (any of: un-gating, lowering quorum, removing `independent_approver`, removing `veto`, lengthening expiry/TTL, widening scopes or limits, raising `wakes_per_hour` or `agent_only_messages_before_pause`, raising `user_verification_from`, adding approvers). Loosening requires approval via `policy.change`.
+- `quorum policy diff` shows the proposed change. The server classifies it as **tightening** or **loosening** (any of: un-gating, lowering quorum, removing `independent_approver`, removing `veto`, lengthening expiry/TTL, widening scopes or limits, raising `wakes_per_hour` or `agent_only_messages_before_pause`, raising `user_verification_from`, raising `approval_required_from`, adding approvers). Loosening requires approval via `policy.change`.
 - Editing the YAML file on disk while the server is running is treated as a _proposed_ change, not an applied one.
 
 ## 6. Local mode and per-attachment settings
@@ -138,7 +153,7 @@ Policy templates (ML competition, web app, data pipeline) are deferred to Phase 
 
 Answers recorded 2026-10-01 by abyud (D-14); abhijna confirms or challenges them in the E2 review.
 
-1. **Rejection behaviour — still open** (THREAT_MODEL §8 Q3, D-14): what happens after a rejection (reason required, reconsideration, preserving the work) is being designed; final calls stay with humans.
+1. ~~Rejection behaviour~~ — **decided 2026-10-02 (D-14):** a rejection opens a discussion between agent and humans (§4.1); how much needs approval is configurable with `approval_required_from` (every gated action by default, down to critical-only).
 2. ~~Quorum size~~ — **decided:** depends on the action; `quorum` is set per action and may be any value up to the number of eligible approvers.
 3. ~~CLI approvals~~ — **decided:** yes, `quorum approve` in the terminal for every risk level; for `high`/`critical` it triggers **Windows Hello** directly from the terminal (no browser). Other OSes use a browser passkey until a terminal option is verified (spike S6, ARCHITECTURE §15.4).
 4. ~~Wake limits~~ — **accepted:** start with `wakes_per_hour: 20`, `agent_only_messages_before_pause: 12`; calibrate during Phase 1 dogfooding.

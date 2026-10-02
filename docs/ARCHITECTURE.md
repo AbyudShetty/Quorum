@@ -5,15 +5,15 @@ Status: **draft for Phase 0 review** · Source: plan §7 · Decisions: [DECISION
 ## 1. Shape of the system
 
 ```
-            ┌──────────────────────────── Quorum Server (one Node.js process) ───────────────────────────┐
+            ┌──────────────────────────── Quorum Server (one Node.js process) ────────────────────────────┐
             │  HTTP API /v1 (JSON)   ·  SSE push  ·  HTML routes (server-rendered + HTMX)  · [A2A: Ph. 6] │
-            │  ──────────────────────────────── core (pure TypeScript) ─────────────────────────────────  │
+            │  ──────────────────────────────── core (pure TypeScript) ────────────────────────────────── │
             │  commands → validate (JSON Schema) → authorize (scopes, policy) → append event → project    │
             │  ─────────────────────────────────────── ports ──────────────────────────────────────────── │
             │  EventStore · ProjectionStore · BlobStore · Clock · Ids · Crypto · Notifier                 │
             │  ─────────────────────────────────────── adapters ───────────────────────────────────────── │
-            │  SQLite (default) | Postgres (later)   ·   local disk blobs   ·   SSE | WebSocket (later)    │
-            └──────────────▲───────────────────────▲───────────────────────────────▲─────────────────────┘
+            │  SQLite (default) | Postgres (later)   ·   local disk blobs   ·   SSE | WebSocket (later)   │
+            └──────────────▲───────────────────────▲───────────────────────────────▲──────────────────────┘
                            │ loopback or HTTPS     │                               │ loopback or HTTPS
                            │ + agent token         │                               │ + session cookie
                  MCP adapter (stdio) + hooks   CLI (`quorum ...`)         Browser / phone (humans)

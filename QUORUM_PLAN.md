@@ -250,6 +250,7 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 - Write `THREAT_MODEL.md`, `MESSAGE_SPEC.md` (from §6), `POLICY_SPEC.md`, and `ARCHITECTURE.md`.
 - Set up the repo: license (Apache-2.0 or MIT), CI, lint/format, test runner, `CLAUDE.md`/`AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`.
 - **Exit:** specs reviewed (by you + one other person), CI green on an empty skeleton, interview notes saved.
+- _Closed 2026-10-02 with the reviews and interviews waived (DECISIONS D-16); real interviews move to Phase 5._
 
 > Phases 1 and 1b were re-sequenced on 2026-10-01 (decision D-8, accepted provisionally — revisit at the Phase 0 spec review). Previously Phase 1 was "two Claude Code sessions on two machines" and Codex arrived in Phase 4.
 
@@ -269,7 +270,8 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 - **Exit:** a Claude Code session on machine A and a Codex session on machine B exchange messages in < 5 minutes from a clean install, tested over both Tailscale and Cloudflare Tunnel; all Phase 1 exit criteria still hold.
 
 ### Phase 2 — Governance: approvals and policy
-- Approval requests/decisions, policy file, gated action types, quorum (number of approvers set per action), expiry, rollback plan field, and what happens after a rejection (open, D-14).
+- Approval requests/decisions, policy file, gated action types, quorum (number of approvers set per action), expiry, rollback plan field.
+- Configurable approval need (`approval_required_from`: every gated action, or only from a chosen risk up; critical always), and rejection as a discussion: the agent can justify itself, humans share their thoughts, and a human ends it with a revised request, a reconsideration or a close (work stashed).
 - Hardware-backed user verification required to approve `high`/`critical` requests — Windows Hello directly in the terminal (`quorum approve`), or a passkey in the browser/phone — so an agent running as the same OS user cannot approve on the human's behalf.
 - Web UI approval queue, mobile-friendly; optional push notification (free options: browser push, ntfy self-hosted).
 - **Exit:** an agent cannot complete a gated action without a human approval; approvals cannot be replayed or self-approved; Playwright tests pass on phone and desktop sizes.
@@ -291,7 +293,8 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 - Documentation site: quickstart, concepts, security model, adapter guides, FAQ, troubleshooting.
 - Benchmark results published; 2-minute demo video.
 - Versioned release (semver), changelog, Docker image, npm package.
-- **Exit:** a stranger follows the quickstart and succeeds without help (watch 3 people try); no open high-severity security issues.
+- Real user interviews (deferred from Phase 0, D-16): at least 5 people who use multiple coding agents.
+- **Exit:** a stranger follows the quickstart and succeeds without help (watch 3 people try); no open high-severity security issues; real interview notes saved.
 
 ### Phase 6 — Interoperability and adoption
 - **A2A interop:** publish Agent Cards; accept/emit A2A tasks so Quorum workspaces can include A2A agents.

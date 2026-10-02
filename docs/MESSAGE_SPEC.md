@@ -207,25 +207,28 @@ resource = "gpu:" machine "/" index     ; gpu:laptop-a/0
 
 ### 5.8 `approval_request`
 
-| Field             | Type                                      | Rules                                                   |
-| ----------------- | ----------------------------------------- | ------------------------------------------------------- |
-| `action`          | string                                    | action name from the policy vocabulary (POLICY_SPEC §3) |
-| `summary`         | string                                    | 1..2000; rendered as untrusted text                     |
-| `risk`            | `low` \| `medium` \| `high` \| `critical` | the server takes `max(declared, policy risk)`           |
-| `evidence_refs`   | ref[]                                     |                                                         |
-| `diff_or_preview` | string or artifact ref                    | inline while the body stays ≤ 96 KiB; larger → artifact |
-| `rollback_plan`   | string                                    | **required** when effective risk ≥ `medium`             |
+| Field             | Type                                      | Rules                                                                               |
+| ----------------- | ----------------------------------------- | ----------------------------------------------------------------------------------- |
+| `action`          | string                                    | action name from the policy vocabulary (POLICY_SPEC §3)                             |
+| `summary`         | string                                    | 1..2000; rendered as untrusted text                                                 |
+| `risk`            | `low` \| `medium` \| `high` \| `critical` | the server takes `max(declared, policy risk)`                                       |
+| `evidence_refs`   | ref[]                                     |                                                                                     |
+| `diff_or_preview` | string or artifact ref                    | inline while the body stays ≤ 96 KiB; larger → artifact                             |
+| `rollback_plan`   | string                                    | **required** when effective risk ≥ `medium`                                         |
+| `supersedes?`     | `ap_` id                                  | **[added]** marks a revised request after a rejection discussion (POLICY_SPEC §4.1) |
 
 Server-computed **[added]**: `ap_` id, `preview_hash` (INV-3), `expires_at` (policy), required approver set and quorum.
 
 ### 5.9 `approval_decision`
 
-| Field          | Type                  | Rules                                                     |
-| -------------- | --------------------- | --------------------------------------------------------- |
-| `request_id`   | `ap_` id              | must be pending                                           |
-| `decision`     | `approve` \| `reject` |                                                           |
-| `preview_hash` | hex(64)               | **[added]** MUST equal the request's current hash (INV-3) |
-| `comment?`     | string                | required for `reject`                                     |
+| Field          | Type                             | Rules                                                     |
+| -------------- | -------------------------------- | --------------------------------------------------------- |
+| `request_id`   | `ap_` id                         | must be pending                                           |
+| `decision`     | `approve` \| `reject` \| `close` |                                                           |
+| `preview_hash` | hex(64)                          | **[added]** MUST equal the request's current hash (INV-3) |
+| `comment?`     | string                           | required for `reject`                                     |
+
+`close` ends a rejection discussion and stashes the work (POLICY_SPEC §4.1). Discussion messages are ordinary `note`s whose `reply_to` is the request message, with `body.kind: "approval_discussion"`.
 
 `by` is set by the server from the human session — never accepted from the client. Only humans (INV-1); approver ≠ requester (INV-2). When enough approvals are collected the server emits an `approval_granted` event and issues a **grant**: `{request_id, action, preview_hash, expires_at, single_use: true}` signed by the server key, which enforcement points verify (THREAT_MODEL §6.1).
 

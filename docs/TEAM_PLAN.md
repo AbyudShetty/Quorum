@@ -12,7 +12,7 @@ How abyud and abhijna split Quorum so that neither blocks the other. There are *
 | Machine   | M1 laptop: Intel Core i7-13650H, 16 GB RAM, RTX 4050 (6 GB)                                          | M2 laptop: Intel Core Ultra 9 285H, 32 GB RAM, RTX 5070 (8 GB) |
 | OS        | Windows 11                                                                                           | Windows 11                                                     |
 | Always on | yes                                                                                                  | yes                                                            |
-| Agents    | Claude Code + Codex                                                                                  | Claude Code + Codex                                            |
+| Agents    | Primarily Claude Code                                                                                | Primarily Claude Code                                          |
 | Location  | remote from each other (~10 km) — cross-machine work always goes over Tailscale or Cloudflare Tunnel |                                                                |
 
 Extra "machines" without new hardware: a WSL2 Ubuntu instance on each laptop (Linux coverage), Docker containers (simulated fleet), and GitHub Actions runners (Linux/Windows in CI; macOS can be added since public repos get it free).
