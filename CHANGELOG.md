@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added (Phase 1)
 
+- `@quorum/schemas`: JSON Schemas (draft 2020-12) for the common definitions, all ten message bodies, submitted and delivered envelopes, the error response and `quorum.policy.yaml` v1; matching TypeScript types; validators returning path/rule/message issues; 100 tests covering the spec rules (INV-1, INV-5, INV-6, INV-7, INV-16, INV-27, INV-31, the 96 KiB body limit). New dependency: `ajv` (MIT), already planned in ARCHITECTURE §11.
 - Workspace scaffolding: first package `@quorum/schemas` (exports `SPEC_VERSION`), a standard package layout enforced by `tests/repo/packages.test.ts`, `npm run build` (TypeScript project references) in `check` and CI, and a `quorum-source` export condition so typecheck and tests use workspace sources without building. See CONTRIBUTING "Adding a package".
 
 ### Fixed

@@ -166,19 +166,19 @@ SQLite in WAL mode with a single writer comfortably meets these; Postgres exists
 
 ## 11. Planned runtime dependencies (each justified when added, plan §19)
 
-| Dependency                    | Why                                                                                                                                        | Phase |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----- |
-| `fastify`                     | HTTP server, schema-based validation hooks, mature                                                                                         | 1     |
-| `better-sqlite3`              | Fast, synchronous, transactional SQLite                                                                                                    | 1     |
-| `ajv` (+ `ajv-formats`)       | JSON Schema 2020-12 validation                                                                                                             | 1     |
-| `ulid`                        | Sortable IDs                                                                                                                               | 1     |
-| `canonicalize` (RFC 8785 JCS) | Hashing/signing canonical JSON                                                                                                             | 1     |
-| `@modelcontextprotocol/sdk`   | Official MCP SDK (also used for Claude Code channels)                                                                                      | 1     |
-| `@napi-rs/keyring`            | OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service) for client credentials; MIT, ~5.5 M weekly downloads (D-11) | 1     |
-| `htmx.org` (vendored file)    | UI interactivity without a build step                                                                                                      | 1     |
-| `yaml`                        | Policy file parsing                                                                                                                        | 2     |
-| `@simplewebauthn/server`      | Passkey verification for high-risk approvals; MIT, ~5.9 M weekly downloads (D-10)                                                          | 2     |
-| Node `crypto` built-ins       | SHA-256, random, Ed25519 (no libsodium needed)                                                                                             | 1/3   |
+| Dependency                    | Why                                                                                                                                                                 | Phase |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `fastify`                     | HTTP server, schema-based validation hooks, mature                                                                                                                  | 1     |
+| `better-sqlite3`              | Fast, synchronous, transactional SQLite                                                                                                                             | 1     |
+| `ajv`                         | JSON Schema 2020-12 validation (in `@quorum/schemas`; MIT, ~456 M weekly downloads). RFC 3339 dates are checked by our own function, so `ajv-formats` is not needed | 1     |
+| `ulid`                        | Sortable IDs                                                                                                                                                        | 1     |
+| `canonicalize` (RFC 8785 JCS) | Hashing/signing canonical JSON                                                                                                                                      | 1     |
+| `@modelcontextprotocol/sdk`   | Official MCP SDK (also used for Claude Code channels)                                                                                                               | 1     |
+| `@napi-rs/keyring`            | OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service) for client credentials; MIT, ~5.5 M weekly downloads (D-11)                          | 1     |
+| `htmx.org` (vendored file)    | UI interactivity without a build step                                                                                                                               | 1     |
+| `yaml`                        | Policy file parsing                                                                                                                                                 | 2     |
+| `@simplewebauthn/server`      | Passkey verification for high-risk approvals; MIT, ~5.9 M weekly downloads (D-10)                                                                                   | 2     |
+| Node `crypto` built-ins       | SHA-256, random, Ed25519 (no libsodium needed)                                                                                                                      | 1/3   |
 
 Exact package choices for templating and CLI parsing are made in Phase 1, with the reason in the PR.
 

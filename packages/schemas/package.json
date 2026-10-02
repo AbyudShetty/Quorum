@@ -14,5 +14,8 @@
   },
   "files": [
     "dist"
-  ]
+  ],
+  "dependencies": {
+    "ajv": "^8.20.0"
+  }
 }
