@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Dependabot no longer proposes major upgrades of `@types/node` and `typescript`, which broke CI (types must match the oldest supported Node LTS; typescript-eslint does not support TypeScript 7 yet).
+
 ### Changed
 
 - Plan and specs now cover three topologies: same machine/different folders (T1), same machine/mixed vendors incl. a shared folder (T2), and different machines (T3). Adds zero-network **local mode** (loopback, auto-start, tokens, server identity pinning), attachments/sessions and flexible agent identity, shared-working-tree detection and a worktree helper, `local_ref` artifacts, per-vendor delivery and wake modes for Claude Code and Codex (verified against official docs), local-mode latency targets, and invariants INV-23–INV-31.

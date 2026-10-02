@@ -7,6 +7,13 @@ updates:
     groups:
       dev-tooling:
         dependency-type: development
+    ignore:
+      # Types must match our oldest supported Node LTS line, not the newest Node (DECISIONS D-7).
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # typescript-eslint does not support TypeScript 7 yet; move deliberately when it does (D-7).
+      - dependency-name: 'typescript'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
     directory: /
     schedule:
