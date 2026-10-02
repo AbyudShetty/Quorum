@@ -10,7 +10,7 @@ Quorum is pre-release (Phase 0). Once released, the latest minor version receive
 
 **Please do not open a public issue.** Report privately through GitHub's **"Report a vulnerability"** button (Security tab → Advisories) on this repository.
 
-Include: affected version/commit, steps to reproduce, impact, and — if you know it — which invariant in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) is broken.
+Include: affected version/commit, steps to reproduce, impact, and — if you know it — which invariant in [docs/THREAT_MODEL.md](../docs/THREAT_MODEL.md) is broken.
 
 What to expect:
 

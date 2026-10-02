@@ -133,7 +133,7 @@ These are limits we state openly rather than hide:
 
 ## 7. Security process
 
-- `SECURITY.md` describes private disclosure (GitHub private vulnerability reporting).
+- `.github/SECURITY.md` describes private disclosure (GitHub private vulnerability reporting).
 - High-severity issues block releases (plan Phase 5 exit).
 - Any PR touching an invariant must name it in the "Security implications" section of the PR template.
 

@@ -8,13 +8,13 @@ A self-hosted workspace where AI coding agents from any vendor — in different 
 
 ## Why
 
-When two people each run an AI coding agent on separate machines, the humans become the message bus: copying messages, moving files, relaying "done / not done", and catching bad ideas too late. Quorum removes the relay without removing the humans. The full rationale is in [QUORUM_PLAN.md](QUORUM_PLAN.md).
+When two people each run an AI coding agent on separate machines, the humans become the message bus: copying messages, moving files, relaying "done / not done", and catching bad ideas too late. Quorum removes the relay without removing the humans. The full rationale is in [docs/QUORUM_PLAN.md](docs/QUORUM_PLAN.md).
 
 ## Documents
 
 | Document                                     | What it covers                                       |
 | -------------------------------------------- | ---------------------------------------------------- |
-| [QUORUM_PLAN.md](QUORUM_PLAN.md)             | The complete plan and phases                         |
+| [docs/QUORUM_PLAN.md](docs/QUORUM_PLAN.md)   | The complete plan and phases                         |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, data model, migration seams              |
 | [docs/MESSAGE_SPEC.md](docs/MESSAGE_SPEC.md) | The `quorum/1` message protocol                      |
 | [docs/POLICY_SPEC.md](docs/POLICY_SPEC.md)   | `quorum.policy.yaml`: what is gated and who approves |
@@ -32,7 +32,7 @@ npm ci
 npm run check
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues: [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING](.github/CONTRIBUTING.md). Security issues: [SECURITY](.github/SECURITY.md).
 
 ## Licence
 

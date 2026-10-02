@@ -13,8 +13,9 @@ const packages = readdirSync(join(root, 'packages'), { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name);
 
-const buildReferences = (readJson('tsconfig.build.json') as { references: { path: string }[] })
-  .references;
+const buildReferences = (
+  readJson('config/tsconfig.build.json') as { references: { path: string }[] }
+).references;
 
 describe('workspace packages', () => {
   it('exist', () => {
@@ -47,8 +48,8 @@ describe('workspace packages', () => {
       },
     );
 
-    it('is referenced from the root tsconfig.build.json', () => {
-      expect(buildReferences).toContainEqual({ path: `./${dir}/tsconfig.build.json` });
+    it('is referenced from config/tsconfig.build.json', () => {
+      expect(buildReferences).toContainEqual({ path: `../${dir}/tsconfig.build.json` });
     });
   });
 

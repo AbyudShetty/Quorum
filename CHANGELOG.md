@@ -20,6 +20,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- Tidier repository root (no content changed): `CONTRIBUTING.md` and `SECURITY.md` → `.github/` (GitHub still finds both), `QUORUM_PLAN.md` → `docs/` (byte-identical, still excluded from formatting), `CLAUDE.md` → `.claude/CLAUDE.md` (imports `../AGENTS.md`), Prettier settings → `package.json`, `tsconfig.base.json`/`tsconfig.build.json` → `config/`. All links and paths updated.
 - Phase 0 closed by joint decision (D-16): spec reviews and interviews waived; real interviews moved to Phase 5; five simulated interviews added (labelled as not counting).
 - Rejection flow decided: a rejection opens a discussion (agent justifies, humans share thoughts, a human ends it); new `approval_required_from` lets users require approval for every gated action or only from a chosen risk up, never skipping `critical` (INV-32).
 - Repository process recorded (D-15): `main` unprotected for now; no AI agent runs git — agents give the humans the commands to run (AGENTS.md).

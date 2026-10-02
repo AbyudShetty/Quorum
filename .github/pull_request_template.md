@@ -2,7 +2,7 @@
 
 <!-- One paragraph. Link the issue and the plan section / phase. -->
 
-## Definition of done (QUORUM_PLAN.md §19)
+## Definition of done (docs/QUORUM_PLAN.md §19)
 
 - [ ] Tests added and passing (unit + relevant integration/adversarial cases)
 - [ ] Docs updated

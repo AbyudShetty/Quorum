@@ -153,7 +153,7 @@ The exit needs "3+ machines". With two laptops, the third is a WSL2 instance or 
 /packages/schemas/             @AbyudShetty @thorOdinson16
 /tests/contract/               @AbyudShetty @thorOdinson16
 /docs/                         @AbyudShetty @thorOdinson16
-/QUORUM_PLAN.md                @AbyudShetty @thorOdinson16
+/docs/QUORUM_PLAN.md           @AbyudShetty @thorOdinson16
 /AGENTS.md                     @AbyudShetty @thorOdinson16
 /.github/                      @AbyudShetty @thorOdinson16
 ```
@@ -225,7 +225,7 @@ Security invariants follow the same path. Weakening one is never proposed as a q
 
   Triage dogfood issues at each sync.
 
-- Anything security-relevant gets the `security` label. If it's exploitable, follow SECURITY.md instead of filing a public issue.
+- Anything security-relevant gets the `security` label. If it's exploitable, follow `.github/SECURITY.md` instead of filing a public issue.
 - Calibrate the wake defaults (`wakes_per_hour`, `agent_only_messages_before_pause`; POLICY_SPEC open question 4) from real dogfooding.
 
 ## 8. Open items for this plan

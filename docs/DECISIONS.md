@@ -36,7 +36,7 @@ Lightweight ADRs. Each records the decision, why, how to undo it, and what would
 ## D-3 Apache-2.0
 
 - **Why:** permissive like MIT, plus an explicit patent grant and contributor patent terms — valuable for a security/governance tool that companies may adopt.
-- **Consequences:** keep `LICENSE`; a `NOTICE` file only if we ever need attributions; contributions are under Apache-2.0 (inbound = outbound, see CONTRIBUTING).
+- **Consequences:** keep `LICENSE`; a `NOTICE` file only if we ever need attributions; contributions are under Apache-2.0 (inbound = outbound, see `.github/CONTRIBUTING.md`).
 - **Revisit if:** never expected. Relicensing later requires contributor consent, so this is the stickiest decision.
 
 ## D-4 Server-rendered + HTMX
