@@ -86,6 +86,14 @@ const examples: ApiPayloads = {
       },
     ],
   },
+  localDiscovery: {
+    instance_id: U1,
+    pid: 4242,
+    port: 51234,
+    public_key: 'k'.repeat(43),
+    version: '0.0.0',
+    started_at: '2026-10-02T10:00:00Z',
+  },
   event: {
     ev_id: `ev_${U1}`,
     workspace: `ws_${U1}`,

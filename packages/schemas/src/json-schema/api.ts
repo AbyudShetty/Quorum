@@ -224,6 +224,24 @@ export const apiSchemas = {
     },
   }),
 
+  /**
+   * Local mode discovery file `<data dir>/local/server.json` (ARCHITECTURE §8.2). Not an HTTP
+   * payload, but part of the contract: adapters and the CLI read it to find the local server and
+   * the key to pin. It holds no secrets; the data directory is private (INV-25).
+   */
+  localDiscovery: schema('local-discovery', {
+    type: 'object',
+    required: ['instance_id', 'pid', 'port', 'public_key', 'version', 'started_at'],
+    properties: {
+      instance_id: { type: 'string', pattern: `^${ULID}$` },
+      pid: { type: 'integer', minimum: 1 },
+      port: { type: 'integer', minimum: 1, maximum: 65535 },
+      public_key: base64url(32),
+      version: { type: 'string', minLength: 1, maxLength: 64 },
+      started_at: common('timestamp'),
+    },
+  }),
+
   /** One line of `quorum export` (JSONL); the hash chain from ARCHITECTURE §3 and INV-8. */
   event: schema('event', {
     type: 'object',

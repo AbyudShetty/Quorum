@@ -166,19 +166,19 @@ SQLite in WAL mode with a single writer comfortably meets these; Postgres exists
 
 ## 11. Planned runtime dependencies (each justified when added, plan §19)
 
-| Dependency                  | Why                                                                                                                                                                 | Phase |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| `fastify`                   | HTTP server, schema-based validation hooks, mature                                                                                                                  | 1     |
-| `better-sqlite3`            | Fast, synchronous, transactional SQLite                                                                                                                             | 1     |
-| `ajv`                       | JSON Schema 2020-12 validation (in `@quorum/schemas`; MIT, ~456 M weekly downloads). RFC 3339 dates are checked by our own function, so `ajv-formats` is not needed | 1     |
-| `ulid`                      | Sortable IDs                                                                                                                                                        | 1     |
-| _(none)_ for RFC 8785 JCS   | Implemented in `@quorum/core` (~30 lines): for JSON values JCS is sorted keys plus ECMAScript serialization, tested against the RFC examples                        | 1     |
-| `@modelcontextprotocol/sdk` | Official MCP SDK (also used for Claude Code channels)                                                                                                               | 1     |
-| `@napi-rs/keyring`          | OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service) for client credentials; MIT, ~5.5 M weekly downloads (D-11)                          | 1     |
-| `htmx.org` (vendored file)  | UI interactivity without a build step                                                                                                                               | 1     |
-| `yaml`                      | Policy file parsing                                                                                                                                                 | 2     |
-| `@simplewebauthn/server`    | Passkey verification for high-risk approvals; MIT, ~5.9 M weekly downloads (D-10)                                                                                   | 2     |
-| Node `crypto` built-ins     | SHA-256, random, Ed25519 (no libsodium needed)                                                                                                                      | 1/3   |
+| Dependency                  | Why                                                                                                                                                                                                                       | Phase |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `fastify`                   | HTTP server, schema-based validation hooks, mature                                                                                                                                                                        | 1     |
+| `better-sqlite3`            | Fast, synchronous, transactional SQLite; MIT, ~13 M weekly downloads. Ships prebuilt binaries for Windows/Linux/macOS, so its install script is denied (`allowScripts` in `package.json`) and nothing compiles on install | 1     |
+| `ajv`                       | JSON Schema 2020-12 validation (in `@quorum/schemas`; MIT, ~456 M weekly downloads). RFC 3339 dates are checked by our own function, so `ajv-formats` is not needed                                                       | 1     |
+| `ulid`                      | Sortable IDs                                                                                                                                                                                                              | 1     |
+| _(none)_ for RFC 8785 JCS   | Implemented in `@quorum/core` (~30 lines): for JSON values JCS is sorted keys plus ECMAScript serialization, tested against the RFC examples                                                                              | 1     |
+| `@modelcontextprotocol/sdk` | Official MCP SDK (also used for Claude Code channels)                                                                                                                                                                     | 1     |
+| `@napi-rs/keyring`          | OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service) for client credentials; MIT, ~5.5 M weekly downloads (D-11)                                                                                | 1     |
+| `htmx.org` (vendored file)  | UI interactivity without a build step                                                                                                                                                                                     | 1     |
+| `yaml`                      | Policy file parsing                                                                                                                                                                                                       | 2     |
+| `@simplewebauthn/server`    | Passkey verification for high-risk approvals; MIT, ~5.9 M weekly downloads (D-10)                                                                                                                                         | 2     |
+| Node `crypto` built-ins     | SHA-256, random, Ed25519 (no libsodium needed)                                                                                                                                                                            | 1/3   |
 
 Exact package choices for templating and CLI parsing are made in Phase 1, with the reason in the PR.
 
@@ -286,6 +286,6 @@ Optional `wake_types` narrows further (e.g. only `request` and `retraction`). Wh
 - **S1** `asyncRewake` background watcher wakes an idle Claude Code session; behaviour on Windows.
 - **S2** One stdio MCP server acting as both tool server and channel; behaviour without the development flag (events silently dropped).
 - **S3** Turn continuation on `Stop` for both vendors; loop protection.
-- **S4** Codex MCP server `args`/`cwd` per project; hook trust flow in `codex exec` (non-interactive).
+- **S4** Codex MCP server `args`/`cwd` per project; hook trust flow in `codex exec` (non-interactive). On Windows, **which account runs Codex MCP servers and hooks**: Codex creates a `CodexSandboxUsers` group for sandboxed commands. If the adapter ran as that account, it could not read the user-only Quorum data directory or the user's Credential Manager, so the adapter must run as the user (found 2026-10-02 while implementing INV-25).
 - **S5** Latency measurement harness for §15.3.
 - **S6 (Phase 2)** Terminal approval with Windows Hello: create a TPM-backed key credential per human (`KeyCredentialManager.RequestCreateAsync`), sign the approval challenge with `KeyCredential.RequestSignAsync` (prompts Windows Hello), verify on the server. Decide how the CLI reaches the WinRT API (built-in PowerShell or a small helper; dependency justified in the PR). Check the key's isolation for unpackaged desktop apps ([KeyCredentialManager](https://learn.microsoft.com/en-us/uwp/api/windows.security.credentials.keycredentialmanager), [Windows Hello for apps](https://learn.microsoft.com/en-us/windows/apps/develop/security/windows-hello)). Fallback on other OSes: browser passkey; FIDO2 security keys from the terminal later.

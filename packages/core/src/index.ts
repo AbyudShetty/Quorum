@@ -48,3 +48,4 @@ export {
   pathKey,
   sharedWorktreeWith,
 } from './workspace-members.js';
+export { helloMessage, newHelloNonce, verifyHello } from './hello.js';

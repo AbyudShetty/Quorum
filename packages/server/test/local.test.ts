@@ -1,0 +1,225 @@
+import { execFileSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createIdFactory, newHelloNonce, verifyHello } from '@quorum/core';
+import { afterAll, describe, expect, it } from 'vitest';
+import {
+  acquireStartLock,
+  checkLocalRequest,
+  checkPrivate,
+  defaultDataDir,
+  discoveryPath,
+  ensurePrivateDir,
+  isProcessAlive,
+  loadOrCreateInstance,
+  lockPath,
+  readDiscovery,
+  removeDiscovery,
+  writeDiscovery,
+} from '../src/index.js';
+
+const dirs: string[] = [];
+const tempDir = () => {
+  const dir = mkdtempSync(join(tmpdir(), 'quorum-local-'));
+  dirs.push(dir);
+  return dir;
+};
+afterAll(() => {
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+});
+const ids = createIdFactory();
+const windows = process.platform === 'win32';
+
+describe('data directory (INV-25)', () => {
+  it('uses QUORUM_HOME, else %LOCALAPPDATA%\\Quorum on Windows, else ~/.quorum', () => {
+    expect(defaultDataDir({ QUORUM_HOME: '/custom' }, 'linux', '/home/a')).toBe('/custom');
+    expect(defaultDataDir({}, 'linux', '/home/a')).toBe(join('/home/a', '.quorum'));
+    expect(
+      defaultDataDir({ LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' }, 'win32', 'C:\\Users\\a'),
+    ).toBe(join('C:\\Users\\a\\AppData\\Local', 'Quorum'));
+  });
+
+  it('makes a new data directory private and verifies it', async () => {
+    const dir = join(tempDir(), 'Quorum');
+    await ensurePrivateDir(dir);
+    expect(await checkPrivate(dir)).toEqual({ ok: true });
+  });
+
+  it.runIf(windows)(
+    'detects a Windows folder readable by another group and gives the fix',
+    async () => {
+      const dir = join(tempDir(), 'Quorum');
+      await ensurePrivateDir(dir);
+      // Grant BUILTIN\Users read access, like an inherited sandbox group would have.
+      execFileSync('icacls', [dir, '/grant', '*S-1-5-32-545:(OI)(CI)R'], { windowsHide: true });
+      const check = await checkPrivate(dir);
+      expect(check.ok).toBe(false);
+      if (!check.ok) {
+        expect(check.problem).toContain('S-1-5-32-545');
+        // The fix both stops inheritance and removes the explicit grant to the other group.
+        expect(check.fix).toMatch(
+          /^icacls ".*" \/inheritance:r \/grant:r .*; icacls ".*" \/remove:g \*S-1-5-32-545$/,
+        );
+      }
+      // ensurePrivateDir repairs it.
+      await ensurePrivateDir(dir);
+      expect(await checkPrivate(dir)).toEqual({ ok: true });
+    },
+  );
+
+  it.runIf(!windows)(
+    'detects a POSIX folder open to group or others and gives the fix',
+    async () => {
+      const dir = join(tempDir(), 'Quorum');
+      mkdirSync(dir);
+      chmodSync(dir, 0o755);
+      expect(await checkPrivate(dir)).toMatchObject({ ok: false, fix: `chmod 700 "${dir}"` });
+      await ensurePrivateDir(dir);
+      expect(await checkPrivate(dir)).toEqual({ ok: true });
+    },
+  );
+});
+
+describe('server instance identity (INV-24)', () => {
+  it('creates a key once and reuses it on restart', async () => {
+    const dir = tempDir();
+    const first = await loadOrCreateInstance(dir, ids);
+    const again = await loadOrCreateInstance(dir, ids);
+    expect(again.instanceId).toBe(first.instanceId);
+    expect(again.publicKey).toBe(first.publicKey);
+    expect(first.publicKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  });
+
+  it('answers hello so that a client holding the pinned key can verify it', async () => {
+    const server = await loadOrCreateInstance(tempDir(), ids);
+    const nonce = newHelloNonce();
+    expect(verifyHello(server.publicKey, nonce, server.hello(nonce))).toBe(true);
+  });
+
+  it('fails verification for another server (port squatting), another nonce or a tampered signature', async () => {
+    const real = await loadOrCreateInstance(tempDir(), ids);
+    const squatter = await loadOrCreateInstance(tempDir(), ids);
+    const nonce = newHelloNonce();
+    expect(verifyHello(real.publicKey, nonce, squatter.hello(nonce))).toBe(false);
+    expect(verifyHello(real.publicKey, nonce, real.hello(newHelloNonce()))).toBe(false);
+    const forged = { ...squatter.hello(nonce), public_key: real.publicKey };
+    expect(verifyHello(real.publicKey, nonce, forged)).toBe(false);
+  });
+
+  it('never writes the private key into the identity file', async () => {
+    const dir = tempDir();
+    await loadOrCreateInstance(dir, ids);
+    expect(readFileSync(join(dir, 'instance.json'), 'utf8')).not.toContain('PRIVATE KEY');
+    expect(readFileSync(join(dir, 'instance.key'), 'utf8')).toContain('PRIVATE KEY');
+  });
+});
+
+describe('discovery file', () => {
+  const info = {
+    instance_id: '01J9Z8X7W6V5T4S3R2Q1P0N9M8',
+    pid: 4242,
+    port: 51234,
+    public_key: 'k'.repeat(43),
+    version: '0.0.0',
+    started_at: '2026-10-02T10:00:00Z',
+  };
+
+  it('writes, reads back and removes the discovery file', async () => {
+    const dir = tempDir();
+    mkdirSync(join(dir, 'local'));
+    expect(await readDiscovery(dir)).toBeUndefined();
+    await writeDiscovery(dir, info);
+    expect(await readDiscovery(dir)).toEqual(info);
+    await removeDiscovery(dir);
+    expect(await readDiscovery(dir)).toBeUndefined();
+  });
+
+  it('treats a malformed or tampered file as missing', async () => {
+    const dir = tempDir();
+    mkdirSync(join(dir, 'local'));
+    writeFileSync(discoveryPath(dir), '{not json');
+    expect(await readDiscovery(dir)).toBeUndefined();
+    writeFileSync(discoveryPath(dir), JSON.stringify({ ...info, port: 70000 }));
+    expect(await readDiscovery(dir)).toBeUndefined();
+  });
+});
+
+describe('start lock (one local server per user)', () => {
+  const lockDir = () => {
+    const dir = tempDir();
+    mkdirSync(join(dir, 'local'));
+    return dir;
+  };
+
+  it('lets exactly one of two simultaneous starters win', async () => {
+    const dir = lockDir();
+    const attempts = await Promise.all([acquireStartLock(dir), acquireStartLock(dir)]);
+    expect(attempts.filter((a) => a.acquired)).toHaveLength(1);
+    expect(attempts.find((a) => !a.acquired)).toEqual({ acquired: false, holderPid: process.pid });
+  });
+
+  it('can be taken again after release', async () => {
+    const dir = lockDir();
+    const first = await acquireStartLock(dir);
+    if (first.acquired) await first.lock.release();
+    expect((await acquireStartLock(dir)).acquired).toBe(true);
+  });
+
+  it('takes over a lock left by a crashed process', async () => {
+    const dir = lockDir();
+    writeFileSync(lockPath(dir), '999999');
+    const attempt = await acquireStartLock(dir, (pid) => pid !== 999999);
+    expect(attempt.acquired).toBe(true);
+    expect(readFileSync(lockPath(dir), 'utf8')).toBe(String(process.pid));
+  });
+
+  it('takes over an unreadable lock file', async () => {
+    const dir = lockDir();
+    writeFileSync(lockPath(dir), 'garbage');
+    expect((await acquireStartLock(dir)).acquired).toBe(true);
+  });
+
+  it('knows this process is alive and a nonsense pid is not', () => {
+    expect(isProcessAlive(process.pid)).toBe(true);
+    expect(isProcessAlive(2 ** 30)).toBe(false);
+  });
+});
+
+describe('local request guard (INV-26)', () => {
+  const port = 51234;
+  const check = (method: string, host: string | undefined, origin?: string) =>
+    checkLocalRequest({ method, host, origin }, port)?.code;
+
+  it.each(['localhost:51234', '127.0.0.1:51234', '[::1]:51234', 'LOCALHOST:51234'])(
+    'accepts Host %s',
+    (host) => {
+      expect(check('GET', host)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ['DNS rebinding', 'attacker.example:51234'],
+    ['wrong port', 'localhost:80'],
+    ['missing Host', undefined],
+    ['LAN address', '192.168.1.5:51234'],
+  ])('rejects %s', (_case, host) => {
+    expect(check('GET', host)).toBe('request.foreign_host');
+  });
+
+  it('rejects state-changing requests from another site', () => {
+    expect(check('POST', 'localhost:51234', 'https://attacker.example')).toBe(
+      'request.foreign_origin',
+    );
+    expect(check('DELETE', 'localhost:51234', 'null')).toBe('request.foreign_origin');
+  });
+
+  it('accepts writes from our own UI and from clients that send no Origin (CLI, adapters)', () => {
+    expect(check('POST', 'localhost:51234', 'http://localhost:51234')).toBeUndefined();
+    expect(check('POST', 'localhost:51234')).toBeUndefined();
+  });
+
+  it('does not block reads by Origin (they still need a token)', () => {
+    expect(check('GET', 'localhost:51234', 'https://attacker.example')).toBeUndefined();
+  });
+});

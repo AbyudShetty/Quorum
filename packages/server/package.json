@@ -1,0 +1,26 @@
+{
+  "name": "@quorum/server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Quorum server: storage, local mode and (after contract-v1) the /v1 HTTP API.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "quorum-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@quorum/core": "0.0.0",
+    "@quorum/schemas": "0.0.0",
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0"
+  }
+}

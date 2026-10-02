@@ -38,5 +38,8 @@
     "trailingComma": "all",
     "printWidth": 100,
     "endOfLine": "lf"
+  },
+  "allowScripts": {
+    "better-sqlite3": false
   }
 }

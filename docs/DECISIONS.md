@@ -89,7 +89,7 @@ Stays in Phase 6 per plan. Ask both maintainers before moving it earlier. Cheap 
 
 - **Decision (delegated to the planning lead, "any safe option"):** adapters and CLI store tokens in the OS keychain through `@napi-rs/keyring` (MIT, ~5.5 M weekly downloads, maintained; Windows Credential Manager, macOS Keychain, Linux Secret Service). Where no keychain exists (headless Linux), `attach` fails with instructions instead of writing a plain-text file. Test containers in the simulated fleet receive short-lived test tokens through environment variables only.
 - **Why:** plan §10 forbids plain-text secrets; the keychain separates OS users and is the platform default.
-- **Limit:** it does not stop a same-user agent (THREAT_MODEL §6.6); D-10 covers that.
+- **Limit:** it does not stop a same-user agent (THREAT_MODEL §6.7); D-10 covers that.
 - **Migration path:** `CredentialStore` port (ARCHITECTURE §9).
 
 ## D-12 Agent identity

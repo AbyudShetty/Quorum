@@ -326,6 +326,17 @@ export interface AgentList {
   }[];
 }
 
+/** Local mode discovery file: how adapters find the local server and which key to pin. */
+export interface LocalDiscovery {
+  instance_id: string;
+  pid: number;
+  port: number;
+  /** Ed25519 public key, base64url (pin this, INV-24). */
+  public_key: string;
+  version: string;
+  started_at: Timestamp;
+}
+
 /** One line of `quorum export`. */
 export interface EventRecord {
   ev_id: string;
@@ -357,5 +368,6 @@ export interface ApiPayloads {
   inboxPage: InboxPage;
   ackRequest: AckRequest;
   agentList: AgentList;
+  localDiscovery: LocalDiscovery;
   event: EventRecord;
 }
