@@ -24,6 +24,40 @@ npm run check      # format:check, lint, typecheck, test
 
 On Windows, Git is configured by `.gitattributes` to use LF line endings; please don't override it.
 
+## Adding a package
+
+Every package under `packages/` uses the same layout; `tests/repo/packages.test.ts` fails if one doesn't. Copy `packages/schemas` and change the names:
+
+```
+packages/<name>/
+  package.json         name "@quorum/<name>", private, Apache-2.0, type module, exports below
+  tsconfig.json        editor/lint/typecheck: extends ../../tsconfig.base.json, includes src + test, noEmit
+  tsconfig.build.json  build: composite, rootDir src, outDir dist, tsBuildInfoFile dist/.tsbuildinfo
+  README.md            which track owns it (docs/TEAM_PLAN.md §2) and what it does
+  src/index.ts         public entry point
+  test/*.test.ts       tests (picked up automatically)
+```
+
+`package.json` exports:
+
+```json
+"exports": {
+  ".": {
+    "quorum-source": "./src/index.ts",
+    "types": "./dist/index.d.ts",
+    "default": "./dist/index.js"
+  }
+}
+```
+
+Then:
+
+1. Add `{ "path": "./packages/<name>/tsconfig.build.json" }` to `references` in the root `tsconfig.build.json`, plus a `references` entry in your package's `tsconfig.build.json` for each workspace package it imports.
+2. Depend on another package with `"@quorum/<other>": "0.0.0"` in `dependencies`, then run `npm install` (links the workspace).
+3. `npm run check`.
+
+The `quorum-source` condition lets typecheck and tests use other packages' TypeScript source directly, so you never need to build before testing; `npm run build` produces `dist/` for running the real thing.
+
 ## Commits and PRs
 
 - Maintainers: abyud and abhijna. Tracks, branch naming, review rules and the contract-change (RFC) flow are in [docs/TEAM_PLAN.md](docs/TEAM_PLAN.md) §5.

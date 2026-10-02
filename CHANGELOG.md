@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added (Phase 1)
+
+- Workspace scaffolding: first package `@quorum/schemas` (exports `SPEC_VERSION`), a standard package layout enforced by `tests/repo/packages.test.ts`, `npm run build` (TypeScript project references) in `check` and CI, and a `quorum-source` export condition so typecheck and tests use workspace sources without building. See CONTRIBUTING "Adding a package".
+
 ### Fixed
 
 - Dependabot no longer proposes major upgrades of `@types/node` and `typescript`, which broke CI (types must match the oldest supported Node LTS; typescript-eslint does not support TypeScript 7 yet).

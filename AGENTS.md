@@ -18,7 +18,7 @@ Keep it boring: proven, free, widely used dependencies only.
 
 ```sh
 npm ci              # install (Node 22.12+ or 24 LTS; see .nvmrc)
-npm run check       # format:check + lint + typecheck + test — must pass before any commit
+npm run check       # format:check + lint + typecheck + build + test — must pass before any commit
 npm run format      # auto-format
 ```
 
