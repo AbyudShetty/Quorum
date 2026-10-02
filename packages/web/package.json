@@ -1,0 +1,24 @@
+{
+  "name": "@quorum/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Quorum web UI: server-rendered, read-only timeline (HTMX, strict CSP). Route wiring lives in the server; templates and views live here.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "quorum-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "assets"
+  ],
+  "dependencies": {
+    "@quorum/core": "0.0.0",
+    "@quorum/schemas": "0.0.0",
+    "htmx.org": "^2.0.11"
+  }
+}

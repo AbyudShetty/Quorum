@@ -17,6 +17,9 @@
       "path": "../packages/cli/tsconfig.build.json"
     },
     {
+      "path": "../packages/web/tsconfig.build.json"
+    },
+    {
       "path": "../tests/fakes/fake-server/tsconfig.build.json"
     }
   ]
