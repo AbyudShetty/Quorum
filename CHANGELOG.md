@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- Repository process recorded (D-15): `main` unprotected for now; no AI agent runs git — agents give the humans the commands to run (AGENTS.md).
 - Plan and specs now cover three topologies: same machine/different folders (T1), same machine/mixed vendors incl. a shared folder (T2), and different machines (T3). Adds zero-network **local mode** (loopback, auto-start, tokens, server identity pinning), attachments/sessions and flexible agent identity, shared-working-tree detection and a worktree helper, `local_ref` artifacts, per-vendor delivery and wake modes for Claude Code and Codex (verified against official docs), local-mode latency targets, and invariants INV-23–INV-31.
 - Phases re-sequenced (D-8, accepted provisionally): Phase 1 is Claude Code ↔ Codex on one machine; cross-machine moves to Phase 1b; Codex moves from Phase 4 to Phase 1.
 - Decisions are made jointly by both maintainers; D-8–D-13 recorded; D-5 marked for revisit (Cloudflare Tunnel proposed).

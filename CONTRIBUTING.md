@@ -27,7 +27,7 @@ On Windows, Git is configured by `.gitattributes` to use LF line endings; please
 ## Commits and PRs
 
 - Maintainers: abyud and abhijna. Tracks, branch naming, review rules and the contract-change (RFC) flow are in [docs/TEAM_PLAN.md](docs/TEAM_PLAN.md) §5.
-- Every PR is reviewed by someone other than its author.
+- `main` is currently unprotected (DECISIONS D-15): maintainers may push directly after `npm run check` passes. Outside contributors use PRs, reviewed by a maintainer.
 - Small, focused PRs. Describe _why_.
 - AI-assisted contributions are welcome; you are responsible for every line. Agents working on this repo follow [AGENTS.md](AGENTS.md).
 

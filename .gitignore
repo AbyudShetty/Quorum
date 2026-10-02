@@ -19,5 +19,8 @@ Thumbs.db
 !.vscode/extensions.json
 .idea/
 
+# Personal Claude Code settings (per developer, never shared)
+.claude/settings.local.json
+
 # Repomix
 repomix-output.md

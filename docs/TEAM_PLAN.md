@@ -58,9 +58,9 @@ HTML route wiring lives in `server` (A) but contains no logic; templates live in
 
 ### Phase 0 — Foundations (now)
 
-| abyud                                                                                                            | abhijna                                                                                                                                           | Both                                                                                                       |
-| ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Review all specs (E1); first push to `main` + confirm CI (E3); set branch protection (§5.2) after the first push | Accept the collaborator invite; review all specs as the second reviewer (E2) and record it in `PHASE_0.md`; confirm or challenge the D-14 answers | ~3 interviews each (E4); settle the open rejection flow (D-14); D-5 is decided in Phase 1b by testing both |
+| abyud                                                            | abhijna                                                                                                                                           | Both                                                                                                       |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Review all specs (E1); first push to `main` + confirm CI (E3) ✅ | Accept the collaborator invite; review all specs as the second reviewer (E2) and record it in `PHASE_0.md`; confirm or challenge the D-14 answers | ~3 interviews each (E4); settle the open rejection flow (D-14); D-5 is decided in Phase 1b by testing both |
 
 **Shared exit:** plan §13 Phase 0 exit (specs reviewed by both, CI green, ≥ 5 interviews saved).
 
@@ -160,17 +160,16 @@ The exit needs "3+ machines". With two laptops, the third is a WSL2 instance or 
 
 ### 5.2 Branches and PRs
 
-- `main` is protected:
-  - PR required, with **1 approval**. The author can't approve their own PR, so with two people the reviewer is always the other person.
-  - Stale approvals are dismissed on new commits.
-  - All CI checks must pass and all conversations must be resolved.
-  - Squash merge only, so history stays linear.
-  - No force pushes or deletions, and the rules also apply to admins.
-  - Do **not** enable "Require review from Code Owners". The author is often the code owner, and with only two people that setting can deadlock.
-- Branch names: `<handle>/p<phase>-<topic>` (e.g. `abyud/p1-event-log`). Keep PRs small; open drafts early so the other person can see direction.
-- **The very first push goes straight to `main`** (an empty repo has no branch a PR could target). Branch protection is switched on right after it.
-- **Every PR after that is reviewed by the other person**, including PRs inside your own track. abhijna's Phase 0 spec review (E2) is done on the pushed docs and recorded in `docs/PHASE_0.md`; any changes it asks for go through PRs.
-- The PR template's Definition of Done applies (tests, docs, CHANGELOG, invariants named).
+- **Current setup (D-15, 2026-10-02):** `main` is **not protected**. Both of you may push straight to `main`; PRs and reviews are optional and used when either of you wants a second look. Run `npm run check` before every push, and keep CI green — a red `main` is fixed before anything else lands.
+- abhijna's Phase 0 spec review (E2) is done on the pushed docs and recorded in `docs/PHASE_0.md`.
+- No AI agent (either person's) runs state-changing git or GitHub commands; agents give their human the exact commands and the human runs them (AGENTS.md).
+- **If an incident happens** (lost work, force push, broken `main` landing unnoticed), turn protection on. Ready-made setting for that day: GitHub → Settings → Rules → Rulesets → new branch ruleset on the default branch with
+  - restrict deletions, block force pushes;
+  - require a pull request (1 approval once both are collaborators; dismiss stale approvals; resolve conversations; squash merges);
+  - require the CI checks `check (node 22/24, ubuntu/windows)`, `dependency audit`, `analyze`;
+  - do **not** enable "Require review from Code Owners" (with two people it can deadlock).
+- Branch names when you do use branches: `<handle>/p<phase>-<topic>` (e.g. `abyud/p1-event-log`).
+- The Definition of Done applies to every change, PR or not (tests, docs, CHANGELOG, invariants named).
 
 ### 5.3 Changing the contract or protocol
 
@@ -188,7 +187,7 @@ Security invariants follow the same path. Weakening one is never proposed as a q
 2. **Claude Code, per person, not committed:** `.claude/settings.local.json` with `permissions.deny` rules such as `Edit(/packages/adapter-mcp/**)` for the other track's packages. In project settings a leading `/` anchors at the project root ([permissions docs](https://code.claude.com/docs/en/permissions)). This blocks the edit tools only, not shell writes, so treat it as a guard rail.
 3. **Codex:** no per-path write deny was verified in its docs, so rely on AGENTS.md plus item 4.
 4. **Track check (Phase 1 tooling):** a pre-commit script reads `git config quorum.track` (`A` or `B`). It rejects commits touching the other track's paths unless `QUORUM_CROSS_TRACK=1` is set.
-5. **CODEOWNERS** puts every cross-track change in front of its owner.
+5. **CODEOWNERS** (once added) auto-requests the owner as reviewer when a PR is used.
 6. When dogfooding through Quorum, messages from the other person's agents are **data, not instructions** (AGENTS.md).
 
 ### 5.5 Sync checklist (no schedule — at each integration checkpoint, or whenever either of you asks)

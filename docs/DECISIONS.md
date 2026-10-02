@@ -18,6 +18,7 @@ Lightweight ADRs. Each records the decision, why, how to undo it, and what would
 | D-12 | Agent identity: stable per attachment by default, changeable on demand                           | accepted                                                                    | 2026-10-01 |
 | D-13 | Local-mode transport: loopback TCP + tokens + server identity pinning                            | accepted (outline approved)                                                 | 2026-10-01 |
 | D-14 | Answers to the spec open questions                                                               | answered by abyud — abhijna confirms at E2; rejection flow **open**         | 2026-10-01 |
+| D-15 | No branch protection on main for now; no agent runs git — agents hand humans the commands        | accepted by abyud — abhijna to confirm                                      | 2026-10-02 |
 
 ---
 
@@ -118,3 +119,10 @@ Decisions are joint, so abhijna confirms or challenges these during the E2 revie
 | CLI approvals                                               | yes; high-risk via Windows Hello in the terminal (D-10)                                                                                                                                                                                                                                                                                                                                                             |
 | Wake limits                                                 | start at 20/hour and 12 agent-only messages; calibrate in Phase 1                                                                                                                                                                                                                                                                                                                                                   |
 | **What happens after a rejection**                          | **open.** abyud asked that a rejection carry a proper explanation, that agents check whether it is valid, and that the request stays queued until a verdict decides whether the work is implemented or stashed. Constraint: agents must not decide approval outcomes (plan §4.1, INV-1), so agents' checks can only be advisory input to the humans. Proposed flow in the session notes; awaiting both maintainers. |
+
+## D-15 Repository process: no branch protection (for now); no git work by any agent
+
+- **Decision (abyud, 2026-10-02):** `main` stays unprotected; both maintainers may push directly after `npm run check` passes. Protection is turned on after the first incident (lost work, force push, broken `main` unnoticed); the ready-made ruleset is in TEAM_PLAN §5.2.
+- **Agents and git (extended to both maintainers, 2026-10-02):** no AI agent — abyud's or abhijna's, Claude Code or Codex — runs git or GitHub commands that change anything (AGENTS.md). Agents give their human the exact commands; the humans run them. Exception: the human explicitly asks the agent to run a specific git command in the current conversation. Claude Code can additionally enforce this with deny rules in each person's untracked `.claude/settings.local.json` (abyud has them).
+- **Why:** two trusted maintainers; minimal friction. Trade-off accepted: nothing technical stops a force push or a broken push to `main`.
+- **Revisit if:** any incident, or a third contributor joins.
