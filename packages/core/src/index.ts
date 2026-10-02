@@ -14,3 +14,37 @@ export {
 } from './hash-chain.js';
 export { createIdFactory, type IdFactory, type IdFactoryOptions } from './ids.js';
 export { type JsonlProblem, parseJsonl, toJsonl } from './jsonl.js';
+export { DomainError, type DomainErrorKind } from './errors.js';
+export {
+  type AcceptOutcome,
+  type AcceptRequest,
+  acceptMessage,
+  ackEvent,
+  canSee,
+  MESSAGE_EVENTS,
+  MessageLog,
+  type Page,
+  type Principal,
+  type StoredMessage,
+} from './messages.js';
+export { type PresenceChange, PresenceBook, type PresenceEntry } from './presence.js';
+export { findSecrets, type SecretFinding } from './secrets.js';
+export {
+  decideRefresh,
+  generateToken,
+  hashToken,
+  type RefreshDecision,
+  type RefreshRecord,
+  TOKEN_PREFIXES,
+  type TokenKind,
+  tokenKind,
+  tokenMatches,
+} from './tokens.js';
+export { type WakeDecision, WakeGovernor, type WakeLimits, type WakeSettings } from './wake.js';
+export {
+  agentName,
+  folderName,
+  type LiveSession,
+  pathKey,
+  sharedWorktreeWith,
+} from './workspace-members.js';
