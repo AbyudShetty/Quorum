@@ -1,0 +1,28 @@
+{
+  "name": "@quorum/adapter-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Quorum client library and MCP server for agents: server discovery and identity check, credentials, outbox, untrusted-message framing and the quorum_* tools.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "quorum-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@quorum/server": "0.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@napi-rs/keyring": "^2.1.0",
+    "@quorum/core": "0.0.0",
+    "@quorum/schemas": "0.0.0",
+    "zod": "^4.6.5"
+  }
+}

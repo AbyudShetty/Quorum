@@ -1,0 +1,27 @@
+{
+  "name": "@quorum/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The quorum command line: status, inbox, send, verify, export and the MCP server entry point.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "quorum": "./bin/quorum.js"
+  },
+  "exports": {
+    ".": {
+      "quorum-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "dependencies": {
+    "@quorum/adapter-mcp": "0.0.0",
+    "@quorum/core": "0.0.0",
+    "@quorum/schemas": "0.0.0"
+  }
+}
