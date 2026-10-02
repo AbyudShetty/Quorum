@@ -19,7 +19,8 @@
     "build": "tsc -b tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test",
+    "generate": "npm run build && npm run generate -w @quorum/schemas"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

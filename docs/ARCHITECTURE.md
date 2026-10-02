@@ -88,7 +88,7 @@ The data directory is per OS user: `~/.quorum/` on Linux/macOS, `%LOCALAPPDATA%\
 | Join (remote)              | Join code: server URL + server key fingerprint + single-use secret, expires in 10 min, text + QR                                                                     | Exchanged for agent credentials; the human who created it becomes the agent's owner.                                                                                                                                                                 |
 | Attach (local)             | `quorum attach` run by the human                                                                                                                                     | Creates attachment + agent + credentials (§12). Phase 1: confirmed interactively and logged; Phase 2: a gated action (INV-30).                                                                                                                       |
 
-**Server identity (INV-24).** Every server has an Ed25519 instance key. Clients never send a credential until the server has signed a fresh client nonce (`POST /v1/hello`) with the key whose public half the client has pinned — from the private discovery file in local mode, or from the join code in remote mode. This defeats a local process that grabs the port, and a network attacker who isn't stopped by TLS.
+**Server identity (INV-24).** Every server has an Ed25519 instance key. Clients never send a credential until the server has signed a fresh client nonce (`POST /v1/hello`; the signed bytes are the UTF-8 text `quorum/1 hello`, a newline, the instance ID, a newline, then the nonce) with the key whose public half the client has pinned — from the private discovery file in local mode, or from the join code in remote mode. This defeats a local process that grabs the port, and a network attacker who isn't stopped by TLS.
 
 ## 7. Web UI (server-rendered + HTMX)
 
@@ -221,7 +221,7 @@ Three layers, so identity can be stable by default yet changed whenever needed (
 
 ## 13. Agents sharing a folder (T2)
 
-- **Detection (INV-28):** each session reports its canonical root plus, for git repos, `git rev-parse --show-toplevel` and `--git-common-dir`. Repo id `rp_` = hash of the canonical git common directory (all worktrees of one repo share it); worktree id `wt_` = hash of the canonical worktree root. Two live sessions with the same `wt_` trigger a `shared_worktree` notice from `system:quorum` to both agents and a banner for the humans, until one detaches or a human acknowledges.
+- **Detection (INV-28):** each session reports its canonical root plus, for git repos, `git rev-parse --show-toplevel` and `--git-common-dir`. The server assigns a stable repo id `rp_…` per canonical git common directory (all worktrees of one repo share it) and a worktree id `wt_…` per canonical worktree root; like every ID they are a prefix plus a ULID (MESSAGE_SPEC §1), not a hash. Two live sessions with the same `wt_` trigger a `shared_worktree` notice from `system:quorum` to both agents and a banner for the humans, until one detaches or a human acknowledges.
 - **Recommended: one worktree per agent.** `quorum worktree [--agent <name>]` runs `git worktree add ../<repo>-<agent> -b quorum/<agent>` and moves the attachment there. `attach` offers this automatically.
 - **If agents stay in one tree:**
   - Leases: `worktree:wt_…` (exclusive = "I am the only writer here") and `path:rp_…/<glob>` for areas.

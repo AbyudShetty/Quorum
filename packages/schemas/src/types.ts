@@ -201,3 +201,161 @@ export interface PolicyV1 {
     agent_only_messages_before_pause?: number;
   };
 }
+
+// ---------- /v1 API payloads (src/json-schema/api.ts, src/openapi.ts) ----------
+
+export type Vendor = 'claude-code' | 'codex' | 'gemini-cli' | 'opencode' | 'generic';
+export type WakeMode = 'off' | 'direct' | 'all';
+
+export interface Health {
+  status: 'ok';
+  spec: 'quorum/1';
+  version: string;
+  instance_id: string;
+}
+
+export interface HelloRequest {
+  /** 32 random bytes, base64url. */
+  nonce: string;
+}
+
+export interface HelloResponse {
+  instance_id: string;
+  /** Ed25519 public key, base64url. */
+  public_key: string;
+  /** Ed25519 signature of "quorum/1 hello\n" + instance_id + "\n" + nonce, base64url. */
+  signature: string;
+}
+
+export interface TokenRefreshRequest {
+  refresh_token: string;
+}
+
+export interface TokenPair {
+  access_token: string;
+  refresh_token: string;
+  token_type: 'Bearer';
+  expires_in: number;
+  refresh_expires_in: number;
+}
+
+export interface WorkspaceCreate {
+  name: string;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  created_at: Timestamp;
+}
+
+export interface WorkspaceList {
+  workspaces: Workspace[];
+}
+
+export interface AttachmentCreate {
+  root: string;
+  vendor: Vendor;
+  workspaces: string[];
+  agent_name?: string;
+  new_identity?: boolean;
+  wake?: WakeMode;
+  wake_types?: MessageType[];
+  lease_enforcement?: 'warn' | 'block';
+}
+
+export interface AgentRef {
+  id: string;
+  address: string;
+}
+
+export interface AttachmentCreated {
+  attachment: {
+    id: string;
+    root: string;
+    vendor: Vendor;
+    workspaces: string[];
+    wake: WakeMode;
+    lease_enforcement: 'warn' | 'block';
+  };
+  agent: AgentRef;
+  credentials: TokenPair;
+}
+
+export interface SessionCreate {
+  vendor_session_id: string;
+  root: string;
+  git?: { common_dir: string; worktree_root: string };
+}
+
+export interface SessionCreated {
+  session_id: string;
+  agent: AgentRef;
+  repo?: string;
+  worktree?: string;
+  shared_worktree_with: string[];
+}
+
+export interface MessageAccepted {
+  id: string;
+  seq: number;
+  received_at: Timestamp;
+  event: string;
+  flags?: string[];
+}
+
+export interface InboxPage {
+  messages: (DeliveredEnvelope | UnknownDeliveredEnvelope)[];
+  next_after: number;
+  has_more: boolean;
+}
+
+export interface AckRequest {
+  up_to: number;
+}
+
+export interface AgentList {
+  agents: {
+    id: string;
+    address: string;
+    vendor: Vendor;
+    presence: 'online' | 'offline';
+    status?: 'idle' | 'working' | 'blocked' | 'offline';
+    current_task?: string;
+    last_seen?: Timestamp;
+  }[];
+}
+
+/** One line of `quorum export`. */
+export interface EventRecord {
+  ev_id: string;
+  workspace: string;
+  seq: number;
+  ts: Timestamp;
+  actor: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  prev_hash: string;
+  hash: string;
+}
+
+export interface ApiPayloads {
+  health: Health;
+  helloRequest: HelloRequest;
+  helloResponse: HelloResponse;
+  tokenRefreshRequest: TokenRefreshRequest;
+  tokenPair: TokenPair;
+  workspaceCreate: WorkspaceCreate;
+  workspace: Workspace;
+  workspaceList: WorkspaceList;
+  attachmentCreate: AttachmentCreate;
+  attachmentCreated: AttachmentCreated;
+  agentRef: AgentRef;
+  sessionCreate: SessionCreate;
+  sessionCreated: SessionCreated;
+  messageAccepted: MessageAccepted;
+  inboxPage: InboxPage;
+  ackRequest: AckRequest;
+  agentList: AgentList;
+  event: EventRecord;
+}

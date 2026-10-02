@@ -1,0 +1,3273 @@
+{
+  "openapi": "3.1.1",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Quorum API",
+    "version": "1.0.0-draft",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "description": "The `/v1` API of a Quorum server: the single contract for adapters, the CLI and the web UI.\n\nRules that apply to every request:\n- Every request except `GET /v1/health` and `POST /v1/hello` needs a bearer token, also on loopback (INV-23).\n- Clients send no credential until `POST /v1/hello` has proven the server holds the key they pinned (INV-24).\n- In local mode the server rejects requests whose `Host` is not its own loopback name and port, and state-changing requests from a foreign `Origin` (INV-26).\n- Every error uses the `ErrorResponse` shape: a stable `code`, what happened, and the exact `fix` (MESSAGE_SPEC §6). Errors never echo secrets or tokens.\n- Rate limits and quotas apply per principal; `429` responses carry `Retry-After` (INV-15)."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:{port}",
+      "description": "Local mode (port from the private discovery file)",
+      "variables": {
+        "port": {
+          "default": "0"
+        }
+      }
+    },
+    {
+      "url": "https://{host}",
+      "description": "Remote mode (Tailscale, Cloudflare Tunnel or LAN with TLS)",
+      "variables": {
+        "host": {
+          "default": "quorum.example"
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "agentToken": []
+    },
+    {
+      "humanToken": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "server",
+      "description": "Health and identity"
+    },
+    {
+      "name": "auth",
+      "description": "Tokens"
+    },
+    {
+      "name": "setup",
+      "description": "Workspaces, attachments, sessions"
+    },
+    {
+      "name": "messages",
+      "description": "Send, read, acknowledge, stream"
+    },
+    {
+      "name": "members",
+      "description": "Agents, presence, revocation"
+    },
+    {
+      "name": "audit",
+      "description": "Event log export"
+    }
+  ],
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "tags": [
+          "server"
+        ],
+        "summary": "Is the server up? Never needs a token.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Server is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/hello": {
+      "post": {
+        "operationId": "hello",
+        "tags": [
+          "server"
+        ],
+        "summary": "Prove the server identity before any credential is sent (INV-24).",
+        "description": "The server signs, with its Ed25519 instance key, the UTF-8 bytes of `\"quorum/1 hello\\n\" + instance_id + \"\\n\" + nonce`. The client verifies the signature with the public key it pinned (private discovery file in local mode, join code in remote mode) and aborts on mismatch, without falling back.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HelloRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed proof of identity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HelloResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "operationId": "refreshToken",
+        "tags": [
+          "auth"
+        ],
+        "summary": "Exchange a refresh token for a new token pair (rotation).",
+        "description": "Each refresh token works once. Reusing a rotated refresh token revokes the whole token family (INV-11).",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRefreshRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New tokens. The old refresh token is now invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "tags": [
+          "setup"
+        ],
+        "summary": "Workspaces visible to the caller (agents: those their attachment grants).",
+        "security": [
+          {
+            "agentToken": []
+          },
+          {
+            "humanToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Visible workspaces.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkspace",
+        "tags": [
+          "setup"
+        ],
+        "summary": "Create a workspace (humans only).",
+        "security": [
+          {
+            "humanToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/attachments": {
+      "post": {
+        "operationId": "createAttachment",
+        "tags": [
+          "setup"
+        ],
+        "summary": "Bind a folder for one vendor to workspaces and issue agent credentials (`quorum attach`).",
+        "description": "Humans only: an agent can never attach itself or widen its own visibility (INV-30). Credentials are returned once; the CLI stores them in the OS keychain (INV-11, INV-25). The root must not be inside the Quorum data directory.",
+        "security": [
+          {
+            "humanToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Attachment, agent identity and credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/attachments/{attachment}": {
+      "delete": {
+        "operationId": "deleteAttachment",
+        "tags": [
+          "setup"
+        ],
+        "summary": "Detach a folder (`quorum detach`); revokes its agent credentials.",
+        "security": [
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "attachment",
+            "in": "path",
+            "required": true,
+            "description": "Attachment ID (`at_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/attachmentId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Detached."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/sessions": {
+      "post": {
+        "operationId": "createSession",
+        "tags": [
+          "setup"
+        ],
+        "summary": "Register a live vendor session for the calling agent.",
+        "description": "The server assigns stable repository and worktree IDs from the canonical git paths and reports other live agents in the same working tree (INV-28).",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{session}": {
+      "delete": {
+        "operationId": "endSession",
+        "tags": [
+          "setup"
+        ],
+        "summary": "End a session (the vendor session closed).",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session",
+            "in": "path",
+            "required": true,
+            "description": "Session ID (`sess_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/sessionId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Ended."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{workspace}/messages": {
+      "post": {
+        "operationId": "sendMessage",
+        "tags": [
+          "messages"
+        ],
+        "summary": "Send a message (any type the caller is allowed to send).",
+        "description": "Validated against `SubmittedEnvelope`. `from` must match the token (INV-7); agents can never send `approval_decision` (INV-1); bodies are scanned for secrets (INV-14).\n\nIdempotent by `(workspace, id)`: resending identical content returns `200` with the original result; different content under the same `id` returns `409` (MESSAGE_SPEC §2.1.3).\n\n`heartbeat` messages update presence and are not stored in the event log (MESSAGE_SPEC §5.10).",
+        "security": [
+          {
+            "agentToken": []
+          },
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "Workspace ID (`ws_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/workspaceId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmittedEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already accepted earlier with identical content.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageAccepted"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Accepted and recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{workspace}/inbox": {
+      "get": {
+        "operationId": "getInbox",
+        "tags": [
+          "messages"
+        ],
+        "summary": "Messages addressed to the caller (directly or via `*`), oldest first.",
+        "description": "For agents that cannot hold a stream open, e.g. between turns. Delivery is at-least-once; dedupe by `id`.",
+        "security": [
+          {
+            "agentToken": []
+          },
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "Workspace ID (`ws_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/workspaceId"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Return messages with `seq` greater than this. 0 = from the beginning.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{workspace}/inbox/ack": {
+      "post": {
+        "operationId": "ackInbox",
+        "tags": [
+          "messages"
+        ],
+        "summary": "Mark messages up to a `seq` as read for the caller.",
+        "security": [
+          {
+            "agentToken": []
+          },
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "Workspace ID (`ws_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/workspaceId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AckRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Acknowledged."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{workspace}/stream": {
+      "get": {
+        "operationId": "streamMessages",
+        "tags": [
+          "messages"
+        ],
+        "summary": "Live push of messages visible to the caller (Server-Sent Events).",
+        "description": "Each event is `event: message`, `id: <seq>`, `data: <DeliveredEnvelope JSON>`. Reconnect with `Last-Event-ID` to receive everything after that `seq`: no message is lost across reconnects (MESSAGE_SPEC §4). The server closes the stream when the caller is revoked (INV-13).",
+        "security": [
+          {
+            "agentToken": []
+          },
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "Workspace ID (`ws_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/workspaceId"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "description": "Resume after this `seq`.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An open event stream.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{workspace}/threads/{thread}/messages": {
+      "get": {
+        "operationId": "getThread",
+        "tags": [
+          "messages"
+        ],
+        "summary": "Messages in one thread that the caller may see, oldest first.",
+        "security": [
+          {
+            "agentToken": []
+          },
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "Workspace ID (`ws_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/workspaceId"
+            }
+          },
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "description": "Thread ID (`th_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/threadId"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Return messages with `seq` greater than this. 0 = from the beginning.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{workspace}/agents": {
+      "get": {
+        "operationId": "listAgents",
+        "tags": [
+          "members"
+        ],
+        "summary": "Agents in the workspace with their presence and current status.",
+        "security": [
+          {
+            "agentToken": []
+          },
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "Workspace ID (`ws_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/workspaceId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agents.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/agents/{agent}/revoke": {
+      "post": {
+        "operationId": "revokeAgent",
+        "tags": [
+          "members"
+        ],
+        "summary": "Revoke an agent immediately: tokens stop working and its streams close (INV-13).",
+        "security": [
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "description": "Agent ID (`ag_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/agentId"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{workspace}/export": {
+      "get": {
+        "operationId": "exportEvents",
+        "tags": [
+          "audit"
+        ],
+        "summary": "The workspace event log as JSON Lines, for `quorum verify` (INV-8).",
+        "description": "One `Event` per line, oldest first. Tokens and secrets are never included (INV-11).",
+        "security": [
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "Workspace ID (`ws_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/workspaceId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The event log.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "agentToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Access token issued to an agent at attach time (1 h; refresh to rotate)."
+      },
+      "humanToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Access token of a human (CLI). The web UI uses a session cookie instead."
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request does not match the schema; `path` points at the problem.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing, expired or revoked token.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The token's scope does not allow this.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No such object visible to the caller.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Conflicts with existing state (e.g. same message `id`, different content).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "The body exceeds 96 KiB; put large content in an artifact.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Rate limit exceeded.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds to wait.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Common": {
+        "$id": "urn:quorum:schema:common:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 common definitions",
+        "$defs": {
+          "workspaceId": {
+            "type": "string",
+            "pattern": "^ws_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "threadId": {
+            "type": "string",
+            "pattern": "^th_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "messageId": {
+            "type": "string",
+            "pattern": "^msg_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "taskId": {
+            "type": "string",
+            "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "findingId": {
+            "type": "string",
+            "pattern": "^fd_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "artifactId": {
+            "type": "string",
+            "pattern": "^art_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "leaseId": {
+            "type": "string",
+            "pattern": "^ls_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "approvalId": {
+            "type": "string",
+            "pattern": "^ap_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "agentId": {
+            "type": "string",
+            "pattern": "^ag_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "humanId": {
+            "type": "string",
+            "pattern": "^hu_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "machineId": {
+            "type": "string",
+            "pattern": "^mc_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "eventId": {
+            "type": "string",
+            "pattern": "^ev_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "attachmentId": {
+            "type": "string",
+            "pattern": "^at_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "sessionId": {
+            "type": "string",
+            "pattern": "^sess_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "repositoryId": {
+            "type": "string",
+            "pattern": "^rp_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "worktreeId": {
+            "type": "string",
+            "pattern": "^wt_[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "agentAddress": {
+            "type": "string",
+            "pattern": "^agent:[a-z][a-z0-9-]{0,31}@[a-z][a-z0-9-]{0,31}$"
+          },
+          "humanAddress": {
+            "type": "string",
+            "pattern": "^human:[a-z][a-z0-9-]{0,31}$"
+          },
+          "systemAddress": {
+            "const": "system:quorum"
+          },
+          "senderAddress": {
+            "type": "string",
+            "pattern": "^(?:agent:[a-z][a-z0-9-]{0,31}@[a-z][a-z0-9-]{0,31}|human:[a-z][a-z0-9-]{0,31})$"
+          },
+          "recipientAddress": {
+            "type": "string",
+            "pattern": "^(?:agent:[a-z][a-z0-9-]{0,31}@[a-z][a-z0-9-]{0,31}|human:[a-z][a-z0-9-]{0,31}|\\*)$"
+          },
+          "ref": {
+            "type": "string",
+            "pattern": "^(?:(?:msg:msg|task:tk|finding:fd|lease:ls|approval:ap|thread:th)_[0-9A-HJKMNP-TV-Z]{26}|artifact:art_[0-9A-HJKMNP-TV-Z]{26}(?:@v[1-9][0-9]{0,8})?)$"
+          },
+          "refList": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "urn:quorum:schema:common:1#/$defs/ref"
+            }
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "risk": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          }
+        }
+      },
+      "SubmittedEnvelope": {
+        "$id": "urn:quorum:schema:envelope:submitted:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 envelope (submitted by a client)",
+        "type": "object",
+        "required": [
+          "spec",
+          "id",
+          "workspace",
+          "from",
+          "to",
+          "type",
+          "type_version",
+          "created_at",
+          "body"
+        ],
+        "properties": {
+          "spec": {
+            "const": "quorum/1"
+          },
+          "id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/messageId"
+          },
+          "workspace": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/workspaceId"
+          },
+          "thread": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/threadId"
+          },
+          "to": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "urn:quorum:schema:common:1#/$defs/recipientAddress"
+            }
+          },
+          "type_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "created_at": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+          },
+          "reply_to": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/messageId"
+          },
+          "body": {
+            "type": "object"
+          },
+          "refs": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/refList"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^ed25519:[A-Za-z0-9_-]+$"
+          },
+          "from": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/senderAddress"
+          },
+          "type": {
+            "enum": [
+              "note",
+              "request",
+              "task_update",
+              "finding",
+              "retraction",
+              "artifact_ready",
+              "lease",
+              "approval_request",
+              "approval_decision",
+              "heartbeat"
+            ]
+          },
+          "seq": false,
+          "received_at": false,
+          "event": false,
+          "flags": false
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "note"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:note:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "request"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:request:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "task_update"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:task_update:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "finding"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:finding:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "retraction"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:retraction:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "artifact_ready"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:artifact_ready:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "lease"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:lease:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "approval_request"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:approval_request:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "approval_decision"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:approval_decision:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "heartbeat"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:heartbeat:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "request"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "to": {
+                  "type": "array",
+                  "maxItems": 1,
+                  "items": {
+                    "not": {
+                      "const": "*"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "DeliveredEnvelope": {
+        "$id": "urn:quorum:schema:envelope:delivered:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 envelope (delivered by the server)",
+        "type": "object",
+        "required": [
+          "spec",
+          "id",
+          "workspace",
+          "from",
+          "to",
+          "type",
+          "type_version",
+          "created_at",
+          "body",
+          "seq",
+          "received_at",
+          "event"
+        ],
+        "properties": {
+          "spec": {
+            "const": "quorum/1"
+          },
+          "id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/messageId"
+          },
+          "workspace": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/workspaceId"
+          },
+          "thread": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/threadId"
+          },
+          "to": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "urn:quorum:schema:common:1#/$defs/recipientAddress"
+            }
+          },
+          "type_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "created_at": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+          },
+          "reply_to": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/messageId"
+          },
+          "body": {
+            "type": "object"
+          },
+          "refs": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/refList"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^ed25519:[A-Za-z0-9_-]+$"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "$ref": "urn:quorum:schema:common:1#/$defs/senderAddress"
+              },
+              {
+                "$ref": "urn:quorum:schema:common:1#/$defs/systemAddress"
+              }
+            ]
+          },
+          "type": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "received_at": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+          },
+          "event": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/eventId"
+          },
+          "flags": {
+            "type": "array",
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "note"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:note:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "request"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:request:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "task_update"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:task_update:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "finding"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:finding:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "retraction"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:retraction:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "artifact_ready"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:artifact_ready:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "lease"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:lease:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "approval_request"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:approval_request:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "approval_decision"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:approval_decision:1"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "const": "heartbeat"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "body": {
+                  "$ref": "urn:quorum:schema:body:heartbeat:1"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ErrorResponse": {
+        "$id": "urn:quorum:schema:error:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 error response",
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "fix"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "fix": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            }
+          }
+        }
+      },
+      "Policy": {
+        "$id": "urn:quorum:schema:policy:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum.policy.yaml v1",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "defaults": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "approval_expiry": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,5}[smhd]$"
+              },
+              "grant_ttl": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,5}[smhd]$"
+              },
+              "quorum": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "independent_approver": {
+                "type": "boolean"
+              },
+              "veto": {
+                "type": "boolean"
+              },
+              "user_verification_from": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "approval_required_from": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "humans": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9-]{0,31}$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "roles"
+              ],
+              "properties": {
+                "roles": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                  }
+                }
+              }
+            }
+          },
+          "agents": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "default_scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "message_types": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "enum": [
+                        "note",
+                        "request",
+                        "task_update",
+                        "finding",
+                        "retraction",
+                        "artifact_ready",
+                        "lease",
+                        "approval_request",
+                        "heartbeat"
+                      ]
+                    }
+                  },
+                  "artifacts": {
+                    "enum": [
+                      "none",
+                      "read-only",
+                      "read-write"
+                    ]
+                  }
+                }
+              },
+              "overrides": {
+                "type": "object",
+                "propertyNames": {
+                  "pattern": "^[a-z][a-z0-9-]{0,31}@[a-z][a-z0-9-]{0,31}$"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "message_types": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "items": {
+                        "enum": [
+                          "note",
+                          "request",
+                          "task_update",
+                          "finding",
+                          "retraction",
+                          "artifact_ready",
+                          "lease",
+                          "approval_request",
+                          "heartbeat"
+                        ]
+                      }
+                    },
+                    "artifacts": {
+                      "enum": [
+                        "none",
+                        "read-only",
+                        "read-write"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "actions": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^(?!(?:read|analyse|draft|message)(?:\\.|$))[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*(?:\\.\\*)?$"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "gated": {
+                  "type": "boolean"
+                },
+                "risk": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "quorum": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "approvers": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^(?:role|human):[a-z][a-z0-9-]{0,31}$"
+                  }
+                },
+                "independent_approver": {
+                  "type": "boolean"
+                },
+                "veto": {
+                  "type": "boolean"
+                },
+                "approval_expiry": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]{0,5}[smhd]$"
+                },
+                "grant_ttl": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]{0,5}[smhd]$"
+                },
+                "ungated_reason": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                }
+              },
+              "if": {
+                "required": [
+                  "gated"
+                ],
+                "properties": {
+                  "gated": {
+                    "const": false
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "ungated_reason"
+                ]
+              }
+            }
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "messages_per_minute": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "approval_requests_per_hour": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "max_lease_ttl": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,5}[smhd]$"
+              },
+              "workspace_disk": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,9}(?:KiB|MiB|GiB|TiB)$"
+              },
+              "max_upload": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,9}(?:KiB|MiB|GiB|TiB)$"
+              },
+              "wakes_per_hour": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              },
+              "agent_only_messages_before_pause": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000
+              }
+            }
+          }
+        }
+      },
+      "NoteBody": {
+        "$id": "urn:quorum:schema:body:note:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 note body",
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/text"
+          }
+        }
+      },
+      "RequestBody": {
+        "$id": "urn:quorum:schema:body:request:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 request body",
+        "type": "object",
+        "required": [
+          "title",
+          "description",
+          "expected_outputs"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 16384
+          },
+          "inputs": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "urn:quorum:schema:common:1#/$defs/ref"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                }
+              ]
+            }
+          },
+          "expected_outputs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          },
+          "deadline": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+          },
+          "priority": {
+            "enum": [
+              "low",
+              "normal",
+              "high"
+            ],
+            "default": "normal"
+          }
+        }
+      },
+      "TaskUpdateBody": {
+        "$id": "urn:quorum:schema:body:task_update:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 task_update body",
+        "type": "object",
+        "required": [
+          "task_id",
+          "status"
+        ],
+        "properties": {
+          "task_id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/taskId"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "declined",
+              "running",
+              "blocked",
+              "done",
+              "failed"
+            ]
+          },
+          "eta": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+          },
+          "progress": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "if": {
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "const": "blocked"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "note"
+          ]
+        }
+      },
+      "FindingBody": {
+        "$id": "urn:quorum:schema:body:finding:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 finding body",
+        "type": "object",
+        "required": [
+          "claim",
+          "method",
+          "confidence"
+        ],
+        "properties": {
+          "claim": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "method": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "metrics": {
+            "type": "object",
+            "maxProperties": 64,
+            "propertyNames": {
+              "pattern": "^[A-Za-z][A-Za-z0-9_.@-]{0,63}$"
+            },
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "value"
+                  ],
+                  "properties": {
+                    "value": {
+                      "type": "number"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 32
+                    },
+                    "ci95": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ],
+                      "minItems": 2,
+                      "maxItems": 2
+                    },
+                    "baseline": {
+                      "type": "number"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "sample_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "data_refs": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/refList"
+          },
+          "reproduce": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "caveats": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          }
+        },
+        "if": {
+          "not": {
+            "required": [
+              "metrics"
+            ],
+            "properties": {
+              "metrics": {
+                "type": "object",
+                "minProperties": 1
+              }
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "reproduce"
+          ]
+        }
+      },
+      "RetractionBody": {
+        "$id": "urn:quorum:schema:body:retraction:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 retraction body",
+        "type": "object",
+        "required": [
+          "finding_id",
+          "reason"
+        ],
+        "properties": {
+          "finding_id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/findingId"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "new_evidence": {
+            "anyOf": [
+              {
+                "$ref": "urn:quorum:schema:common:1#/$defs/refList"
+              },
+              {
+                "$ref": "urn:quorum:schema:body:finding:1"
+              }
+            ]
+          }
+        }
+      },
+      "ArtifactReadyBody": {
+        "$id": "urn:quorum:schema:body:artifact_ready:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 artifact_ready body",
+        "type": "object",
+        "required": [
+          "artifact_id",
+          "version",
+          "sha256",
+          "size",
+          "storage",
+          "how_to_use"
+        ],
+        "properties": {
+          "artifact_id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/artifactId"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/sha256"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "storage": {
+            "enum": [
+              "stored",
+              "local_ref",
+              "local_only"
+            ]
+          },
+          "location": {
+            "type": "object",
+            "required": [
+              "machine",
+              "attachment",
+              "path"
+            ],
+            "properties": {
+              "machine": {
+                "$ref": "urn:quorum:schema:common:1#/$defs/name"
+              },
+              "attachment": {
+                "$ref": "urn:quorum:schema:common:1#/$defs/attachmentId"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^(?![\\\\/])(?![A-Za-z]:)(?!(?:.*[\\\\/])?\\.\\.(?:[\\\\/]|$)).+$"
+              }
+            }
+          },
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "how_to_use": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "if": {
+          "required": [
+            "storage"
+          ],
+          "properties": {
+            "storage": {
+              "const": "local_ref"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "location"
+          ]
+        }
+      },
+      "LeaseBody": {
+        "$id": "urn:quorum:schema:body:lease:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 lease body",
+        "type": "object",
+        "required": [
+          "resource",
+          "action",
+          "reason"
+        ],
+        "properties": {
+          "resource": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^(?:gpu:[a-z][a-z0-9-]{0,31}/[0-9]{1,3}|ram:[a-z][a-z0-9-]{0,31}|path:rp_[0-9A-HJKMNP-TV-Z]{26}/.+|worktree:wt_[0-9A-HJKMNP-TV-Z]{26}|dataset:[A-Za-z0-9][A-Za-z0-9._-]{0,127}|slot:[a-z][a-z0-9_-]{0,63})$"
+          },
+          "action": {
+            "enum": [
+              "acquire",
+              "renew",
+              "release"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "exclusive",
+              "shared"
+            ],
+            "default": "exclusive"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,9}(?:KiB|MiB|GiB|TiB)$"
+          },
+          "until": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "lease_id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/leaseId"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "action"
+              ],
+              "properties": {
+                "action": {
+                  "enum": [
+                    "renew",
+                    "release"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "lease_id"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "action"
+              ],
+              "properties": {
+                "action": {
+                  "enum": [
+                    "acquire",
+                    "renew"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "until"
+              ]
+            }
+          }
+        ]
+      },
+      "ApprovalRequestBody": {
+        "$id": "urn:quorum:schema:body:approval_request:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 approval_request body",
+        "type": "object",
+        "required": [
+          "action",
+          "summary",
+          "risk",
+          "evidence_refs",
+          "diff_or_preview"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "risk": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/risk"
+          },
+          "evidence_refs": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/refList"
+          },
+          "diff_or_preview": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rollback_plan": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16384
+          },
+          "supersedes": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/approvalId"
+          }
+        },
+        "if": {
+          "required": [
+            "risk"
+          ],
+          "properties": {
+            "risk": {
+              "enum": [
+                "medium",
+                "high",
+                "critical"
+              ]
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "rollback_plan"
+          ]
+        }
+      },
+      "ApprovalDecisionBody": {
+        "$id": "urn:quorum:schema:body:approval_decision:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 approval_decision body",
+        "type": "object",
+        "required": [
+          "request_id",
+          "decision",
+          "preview_hash"
+        ],
+        "properties": {
+          "request_id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/approvalId"
+          },
+          "decision": {
+            "enum": [
+              "approve",
+              "reject",
+              "close"
+            ]
+          },
+          "preview_hash": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/sha256"
+          },
+          "comment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "if": {
+          "required": [
+            "decision"
+          ],
+          "properties": {
+            "decision": {
+              "const": "reject"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "comment"
+          ]
+        }
+      },
+      "HeartbeatBody": {
+        "$id": "urn:quorum:schema:body:heartbeat:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 heartbeat body",
+        "type": "object",
+        "required": [
+          "status",
+          "resources_in_use"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "idle",
+              "working",
+              "blocked",
+              "offline"
+            ]
+          },
+          "current_task": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/taskId"
+          },
+          "resources_in_use": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "urn:quorum:schema:common:1#/$defs/leaseId"
+            }
+          }
+        }
+      },
+      "Health": {
+        "$id": "urn:quorum:schema:api:health:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API health",
+        "type": "object",
+        "required": [
+          "status",
+          "spec",
+          "version",
+          "instance_id"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          },
+          "spec": {
+            "const": "quorum/1"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "instance_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        }
+      },
+      "HelloRequest": {
+        "$id": "urn:quorum:schema:api:hello-request:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API hello-request",
+        "type": "object",
+        "required": [
+          "nonce"
+        ],
+        "properties": {
+          "nonce": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          }
+        }
+      },
+      "HelloResponse": {
+        "$id": "urn:quorum:schema:api:hello-response:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API hello-response",
+        "type": "object",
+        "required": [
+          "instance_id",
+          "public_key",
+          "signature"
+        ],
+        "properties": {
+          "instance_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "public_key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{86}$"
+          }
+        }
+      },
+      "TokenRefreshRequest": {
+        "$id": "urn:quorum:schema:api:token-refresh-request:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API token-refresh-request",
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 512
+          }
+        }
+      },
+      "TokenPair": {
+        "$id": "urn:quorum:schema:api:token-pair:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API token-pair",
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "token_type",
+          "expires_in",
+          "refresh_expires_in"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 512
+          },
+          "refresh_token": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 512
+          },
+          "token_type": {
+            "const": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "refresh_expires_in": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "WorkspaceCreate": {
+        "$id": "urn:quorum:schema:api:workspace-create:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API workspace-create",
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/name"
+          }
+        }
+      },
+      "Workspace": {
+        "$id": "urn:quorum:schema:api:workspace:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API workspace",
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/workspaceId"
+          },
+          "name": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/name"
+          },
+          "created_at": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+          }
+        }
+      },
+      "WorkspaceList": {
+        "$id": "urn:quorum:schema:api:workspace-list:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API workspace-list",
+        "type": "object",
+        "required": [
+          "workspaces"
+        ],
+        "properties": {
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "urn:quorum:schema:api:workspace:1"
+            }
+          }
+        }
+      },
+      "AttachmentCreate": {
+        "$id": "urn:quorum:schema:api:attachment-create:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API attachment-create",
+        "type": "object",
+        "required": [
+          "root",
+          "vendor",
+          "workspaces"
+        ],
+        "properties": {
+          "root": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)"
+          },
+          "vendor": {
+            "enum": [
+              "claude-code",
+              "codex",
+              "gemini-cli",
+              "opencode",
+              "generic"
+            ]
+          },
+          "workspaces": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "urn:quorum:schema:common:1#/$defs/workspaceId"
+            }
+          },
+          "agent_name": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/name"
+          },
+          "new_identity": {
+            "type": "boolean",
+            "default": false
+          },
+          "wake": {
+            "enum": [
+              "off",
+              "direct",
+              "all"
+            ],
+            "default": "off"
+          },
+          "wake_types": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "note",
+                "request",
+                "task_update",
+                "finding",
+                "retraction",
+                "artifact_ready",
+                "lease",
+                "approval_request",
+                "approval_decision",
+                "heartbeat"
+              ]
+            }
+          },
+          "lease_enforcement": {
+            "enum": [
+              "warn",
+              "block"
+            ],
+            "default": "warn"
+          }
+        }
+      },
+      "AttachmentCreated": {
+        "$id": "urn:quorum:schema:api:attachment-created:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API attachment-created",
+        "type": "object",
+        "required": [
+          "attachment",
+          "agent",
+          "credentials"
+        ],
+        "properties": {
+          "attachment": {
+            "type": "object",
+            "required": [
+              "id",
+              "root",
+              "vendor",
+              "workspaces",
+              "wake",
+              "lease_enforcement"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "urn:quorum:schema:common:1#/$defs/attachmentId"
+              },
+              "root": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)"
+              },
+              "vendor": {
+                "enum": [
+                  "claude-code",
+                  "codex",
+                  "gemini-cli",
+                  "opencode",
+                  "generic"
+                ]
+              },
+              "workspaces": {
+                "type": "array",
+                "items": {
+                  "$ref": "urn:quorum:schema:common:1#/$defs/workspaceId"
+                }
+              },
+              "wake": {
+                "enum": [
+                  "off",
+                  "direct",
+                  "all"
+                ]
+              },
+              "lease_enforcement": {
+                "enum": [
+                  "warn",
+                  "block"
+                ]
+              }
+            }
+          },
+          "agent": {
+            "$ref": "urn:quorum:schema:api:agent-ref:1"
+          },
+          "credentials": {
+            "type": "object",
+            "required": [
+              "access_token",
+              "refresh_token",
+              "token_type",
+              "expires_in",
+              "refresh_expires_in"
+            ],
+            "properties": {
+              "access_token": {
+                "type": "string",
+                "minLength": 32,
+                "maxLength": 512
+              },
+              "refresh_token": {
+                "type": "string",
+                "minLength": 32,
+                "maxLength": 512
+              },
+              "token_type": {
+                "const": "Bearer"
+              },
+              "expires_in": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "refresh_expires_in": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "AgentRef": {
+        "$id": "urn:quorum:schema:api:agent-ref:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API agent-ref",
+        "type": "object",
+        "required": [
+          "id",
+          "address"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/agentId"
+          },
+          "address": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/agentAddress"
+          }
+        }
+      },
+      "SessionCreate": {
+        "$id": "urn:quorum:schema:api:session-create:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API session-create",
+        "type": "object",
+        "required": [
+          "vendor_session_id",
+          "root"
+        ],
+        "properties": {
+          "vendor_session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)"
+          },
+          "git": {
+            "type": "object",
+            "required": [
+              "common_dir",
+              "worktree_root"
+            ],
+            "properties": {
+              "common_dir": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)"
+              },
+              "worktree_root": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096,
+                "pattern": "^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)"
+              }
+            }
+          }
+        }
+      },
+      "SessionCreated": {
+        "$id": "urn:quorum:schema:api:session-created:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API session-created",
+        "type": "object",
+        "required": [
+          "session_id",
+          "agent",
+          "shared_worktree_with"
+        ],
+        "properties": {
+          "session_id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/sessionId"
+          },
+          "agent": {
+            "$ref": "urn:quorum:schema:api:agent-ref:1"
+          },
+          "repo": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/repositoryId"
+          },
+          "worktree": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/worktreeId"
+          },
+          "shared_worktree_with": {
+            "type": "array",
+            "items": {
+              "$ref": "urn:quorum:schema:common:1#/$defs/agentAddress"
+            }
+          }
+        }
+      },
+      "MessageAccepted": {
+        "$id": "urn:quorum:schema:api:message-accepted:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API message-accepted",
+        "type": "object",
+        "required": [
+          "id",
+          "seq",
+          "received_at",
+          "event"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/messageId"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "received_at": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+          },
+          "event": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/eventId"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "InboxPage": {
+        "$id": "urn:quorum:schema:api:inbox-page:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API inbox-page",
+        "type": "object",
+        "required": [
+          "messages",
+          "next_after",
+          "has_more"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "urn:quorum:schema:envelope:delivered:1"
+            }
+          },
+          "next_after": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AckRequest": {
+        "$id": "urn:quorum:schema:api:ack-request:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API ack-request",
+        "type": "object",
+        "required": [
+          "up_to"
+        ],
+        "properties": {
+          "up_to": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AgentList": {
+        "$id": "urn:quorum:schema:api:agent-list:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API agent-list",
+        "type": "object",
+        "required": [
+          "agents"
+        ],
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "address",
+                "vendor",
+                "presence"
+              ],
+              "properties": {
+                "id": {
+                  "$ref": "urn:quorum:schema:common:1#/$defs/agentId"
+                },
+                "address": {
+                  "$ref": "urn:quorum:schema:common:1#/$defs/agentAddress"
+                },
+                "vendor": {
+                  "enum": [
+                    "claude-code",
+                    "codex",
+                    "gemini-cli",
+                    "opencode",
+                    "generic"
+                  ]
+                },
+                "presence": {
+                  "enum": [
+                    "online",
+                    "offline"
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "idle",
+                    "working",
+                    "blocked",
+                    "offline"
+                  ]
+                },
+                "current_task": {
+                  "$ref": "urn:quorum:schema:common:1#/$defs/taskId"
+                },
+                "last_seen": {
+                  "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Event": {
+        "$id": "urn:quorum:schema:api:event:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API event",
+        "type": "object",
+        "required": [
+          "ev_id",
+          "workspace",
+          "seq",
+          "ts",
+          "actor",
+          "kind",
+          "payload",
+          "prev_hash",
+          "hash"
+        ],
+        "properties": {
+          "ev_id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/eventId"
+          },
+          "workspace": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/workspaceId"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "ts": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/timestamp"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "urn:quorum:schema:common:1#/$defs/agentAddress"
+              },
+              {
+                "$ref": "urn:quorum:schema:common:1#/$defs/humanAddress"
+              },
+              {
+                "$ref": "urn:quorum:schema:common:1#/$defs/systemAddress"
+              }
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "prev_hash": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/sha256"
+          },
+          "hash": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/sha256"
+          }
+        }
+      }
+    }
+  }
+}

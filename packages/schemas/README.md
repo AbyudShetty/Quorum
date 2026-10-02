@@ -15,6 +15,11 @@ The machine-readable form of `docs/MESSAGE_SPEC.md` and `docs/POLICY_SPEC.md`. E
 | Types (`SubmittedEnvelope`, `FindingBody`, `PolicyV1`, …)                  | TypeScript view of the schemas.                                                                              |
 | `ALL_SCHEMAS`, `*Schema` objects, `LIMITS`, `MESSAGE_TYPES`, `ID_PREFIXES` | The JSON Schemas (draft 2020-12) and constants, for OpenAPI and non-TypeScript clients.                      |
 
+| `openApiDocument`, `openapi.v1.json` | The OpenAPI 3.1 description of the `/v1` API. After changing it, run `npm run generate` at the repo root; a test fails if the committed `openapi.v1.json` is out of date. |
+| `validateApiPayload(kind, x)` | Any API request/response payload (health, hello, tokens, attachments, sessions, inbox pages, exported events). |
+
+The executable form of the API contract is the suite in `tests/contract/` (see its README).
+
 Every validator returns `{ ok: true, value }` or `{ ok: false, issues: [{ path, rule, message }] }`, where `path` is a JSON Pointer.
 
 ## What the schemas do not check

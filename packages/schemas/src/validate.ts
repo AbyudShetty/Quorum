@@ -2,6 +2,7 @@
 // Errors are turned into plain issues (path + rule + message) that the server maps onto the
 // error shape in MESSAGE_SPEC §6.
 import { Ajv2020, type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
+import { API_SCHEMA_IDS, apiSchemas } from './json-schema/api.js';
 import { bodySchemas } from './json-schema/bodies.js';
 import { commonSchema, LIMITS } from './json-schema/common.js';
 import {
@@ -13,6 +14,7 @@ import {
 import { ERROR_RESPONSE_ID, errorResponseSchema } from './json-schema/error.js';
 import { POLICY_ID, policySchema } from './json-schema/policy.js';
 import type {
+  ApiPayloads,
   DeliveredEnvelope,
   ErrorResponse,
   PolicyV1,
@@ -38,6 +40,7 @@ export const ALL_SCHEMAS = [
   deliveredEnvelopeSchema,
   errorResponseSchema,
   policySchema,
+  ...Object.values(apiSchemas),
 ] as const;
 
 /** RFC 3339 date-time with a real calendar date (no ajv-formats dependency needed). */
@@ -171,3 +174,14 @@ export const validatePolicy = (input: unknown): ValidationResult<PolicyV1> =>
 /** An error response body (MESSAGE_SPEC §6). */
 export const validateErrorResponse = (input: unknown): ValidationResult<ErrorResponse> =>
   check(validators.error, input);
+
+export type ApiPayloadKind = keyof typeof apiSchemas;
+
+/**
+ * An API request or response payload (health, hello, tokens, attachments, sessions, inbox
+ * pages, …). The contract tests use this to check every server response.
+ */
+export const validateApiPayload = <K extends ApiPayloadKind>(
+  kind: K,
+  input: unknown,
+): ValidationResult<ApiPayloads[K]> => check<ApiPayloads[K]>(compiled(API_SCHEMA_IDS[kind]), input);

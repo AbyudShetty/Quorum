@@ -78,7 +78,8 @@ export const commonSchema = {
       type: 'array',
       maxItems: LIMITS.refsMax,
       uniqueItems: true,
-      items: { $ref: '#/$defs/ref' },
+      // Absolute, so it also resolves when this schema is embedded in the OpenAPI document.
+      items: { $ref: `${COMMON_ID}#/$defs/ref` },
     },
     timestamp: { type: 'string', format: 'date-time' },
     sha256: { type: 'string', pattern: '^[0-9a-f]{64}$' },

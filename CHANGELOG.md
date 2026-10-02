@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added (Phase 1)
 
+- `/v1` API contract: OpenAPI 3.1 document (`openApiDocument`, committed as `packages/schemas/openapi.v1.json`, regenerated with `npm run generate`) covering health, the server identity handshake, token refresh, workspaces, attachments, sessions, messages, inbox/ack, SSE stream, threads, agents, revocation and export; API payload schemas, types and `validateApiPayload`.
+- `tests/contract/`: the executable contract every `/v1` implementation must pass (identity handshake signature, tokens on loopback, Host check, idempotency, 400/403/409/413 rules, inbox paging and SSE resume). Runs when `QUORUM_CONTRACT_TARGET` points at an implementation; skipped until one exists. Verified once against a throwaway stub, including a deliberately broken one.
+
 - `@quorum/schemas`: JSON Schemas (draft 2020-12) for the common definitions, all ten message bodies, submitted and delivered envelopes, the error response and `quorum.policy.yaml` v1; matching TypeScript types; validators returning path/rule/message issues; 100 tests covering the spec rules (INV-1, INV-5, INV-6, INV-7, INV-16, INV-27, INV-31, the 96 KiB body limit). New dependency: `ajv` (MIT), already planned in ARCHITECTURE §11.
 - Workspace scaffolding: first package `@quorum/schemas` (exports `SPEC_VERSION`), a standard package layout enforced by `tests/repo/packages.test.ts`, `npm run build` (TypeScript project references) in `check` and CI, and a `quorum-source` export condition so typecheck and tests use workspace sources without building. See CONTRIBUTING "Adding a package".
 
