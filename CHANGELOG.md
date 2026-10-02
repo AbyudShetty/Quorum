@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added (Phase 1)
 
+- `@quorum/core` (Track A), first part: monotonic prefixed ULIDs with injectable clock/randomness; RFC 8785 canonical JSON (no dependency); the per-workspace hash chain with `verifyChain` detecting modified, inserted, deleted, reordered and foreign events plus truncation or full rewrites against client checkpoints (INV-8); JSONL export/import; the `EventStore` port with an append-only `MemoryEventStore`. 52 tests.
 - `/v1` API contract: OpenAPI 3.1 document (`openApiDocument`, committed as `packages/schemas/openapi.v1.json`, regenerated with `npm run generate`) covering health, the server identity handshake, token refresh, workspaces, attachments, sessions, messages, inbox/ack, SSE stream, threads, agents, revocation and export; API payload schemas, types and `validateApiPayload`.
 - `tests/contract/`: the executable contract every `/v1` implementation must pass (identity handshake signature, tokens on loopback, Host check, idempotency, 400/403/409/413 rules, inbox paging and SSE resume). Runs when `QUORUM_CONTRACT_TARGET` points at an implementation; skipped until one exists. Verified once against a throwaway stub, including a deliberately broken one.
 

@@ -1,0 +1,21 @@
+{
+  "name": "@quorum/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Quorum domain logic: IDs, canonical JSON, the hash-chained event log and its verification. Pure: no network, no database, no HTML.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "quorum-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@quorum/schemas": "0.0.0"
+  }
+}

@@ -26,6 +26,8 @@ export default defineConfig(
       'no-eval': 'error',
       'no-implied-eval': 'error',
       'no-new-func': 'error',
+      // `const { hash: _, ...rest } = event` is the idiomatic way to drop a field.
+      '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }],
     },
   },
   {
