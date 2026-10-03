@@ -28,14 +28,15 @@ When two people each run an AI coding agent on separate machines, the humans bec
 
 Phase 1 so far:
 
-| Part                                                                                                                                                        | State                         |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `packages/schemas`: message formats, `/v1` API (OpenAPI), validators                                                                                        | ✅                            |
-| `tests/contract`: tests every `/v1` server must pass                                                                                                        | ✅ (run once a server exists) |
-| `packages/core`: event log and hash chain, message rules, secret scanning, tokens, wake rules                                                               | ✅                            |
-| `packages/server`: SQLite storage (crash-tested), local-mode building blocks (private data folder, identity key, discovery file, start lock, request guard) | ✅                            |
-| Server HTTP endpoints                                                                                                                                       | after the contract freeze     |
-| Adapters for Claude Code and Codex, CLI, web timeline                                                                                                       | next (Track B)                |
+| Part                                                                                                                              | State                         |
+| --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `packages/schemas`: message formats, `/v1` API (OpenAPI), validators                                                              | ✅                            |
+| `tests/contract`: tests every `/v1` server must pass                                                                              | ✅ (run once a server exists) |
+| `packages/core`: event log and hash chain, message rules, secret scanning, tokens, wake rules                                     | ✅                            |
+| `packages/local`: local-mode files shared with adapters and CLI (private data folder, discovery file, bootstrap code, start lock) | ✅                            |
+| `packages/server`: SQLite storage (crash-tested), identity key, bootstrap code, request guard                                     | ✅                            |
+| Server HTTP endpoints                                                                                                             | after the contract freeze     |
+| Adapters for Claude Code and Codex, CLI, web timeline                                                                             | next (Track B)                |
 
 ## Repository layout
 
@@ -43,6 +44,7 @@ Phase 1 so far:
 packages/
   schemas/     message formats, API contract (openapi.v1.json), validators
   core/        domain logic: no network, database or HTML
+  local/       local-mode files shared by server, adapters and CLI
   server/      storage, local mode, and (next) the /v1 HTTP API
 tests/
   contract/    the /v1 contract suite

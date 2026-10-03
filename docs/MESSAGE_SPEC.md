@@ -242,6 +242,8 @@ Server-computed **[added]**: `ap_` id, `preview_hash` (INV-3), `expires_at` (pol
 
 Heartbeats are **ephemeral presence**, not log events **[added: keeps the hash chain from filling with noise]**. Only presence _transitions_ (online → offline after 3 missed intervals, back online) are recorded as events.
 
+**Interval:** a heartbeat every **30 s** while a session is live, so an agent goes offline after **90 s** of silence. The MCP adapter sends them on a timer; hook-based adapters also send one on each hook event. A session that ends cleanly sends `status: offline` at once (e.g. Claude Code's `SessionEnd`) instead of waiting out the 90 s.
+
 ## 6. Errors
 
 All errors use one shape **[added]**:

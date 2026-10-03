@@ -269,16 +269,37 @@ export interface AgentRef {
   address: string;
 }
 
+export interface Attachment {
+  id: string;
+  root: string;
+  vendor: Vendor;
+  workspaces: string[];
+  wake: WakeMode;
+  wake_types?: MessageType[];
+  lease_enforcement: 'warn' | 'block';
+}
+
+/** PATCH /v1/attachments/{id}: only the fields to change. */
+export interface AttachmentUpdate {
+  wake?: WakeMode;
+  wake_types?: MessageType[];
+  lease_enforcement?: 'warn' | 'block';
+}
+
 export interface AttachmentCreated {
-  attachment: {
-    id: string;
-    root: string;
-    vendor: Vendor;
-    workspaces: string[];
-    wake: WakeMode;
-    lease_enforcement: 'warn' | 'block';
-  };
+  attachment: Attachment;
   agent: AgentRef;
+  credentials: TokenPair;
+}
+
+/** POST /v1/auth/local-bootstrap (local mode only). */
+export interface LocalBootstrapRequest {
+  /** The one-time code from the private data directory (qrm_bc_…). */
+  code: string;
+}
+
+export interface LocalBootstrapResponse {
+  human: { id: string; address: string };
   credentials: TokenPair;
 }
 
@@ -319,6 +340,8 @@ export interface AgentList {
     id: string;
     address: string;
     vendor: Vendor;
+    /** Folder name only (e.g. "api"), never a full path. */
+    folder?: string;
     presence: 'online' | 'offline';
     status?: 'idle' | 'working' | 'blocked' | 'offline';
     current_task?: string;
@@ -335,6 +358,17 @@ export interface LocalDiscovery {
   public_key: string;
   version: string;
   started_at: Timestamp;
+}
+
+/**
+ * Local mode bootstrap code file `<data dir>/local/bootstrap.json`: written by the local server on
+ * each start, read by the CLI and exchanged at POST /v1/auth/local-bootstrap. Secret; the data
+ * directory is private (INV-25). Removed once used or expired.
+ */
+export interface LocalBootstrapFile {
+  /** `qrm_bc_…`, single use. */
+  code: string;
+  expires_at: Timestamp;
 }
 
 /** One line of `quorum export`. */
@@ -356,10 +390,14 @@ export interface ApiPayloads {
   helloResponse: HelloResponse;
   tokenRefreshRequest: TokenRefreshRequest;
   tokenPair: TokenPair;
+  localBootstrapRequest: LocalBootstrapRequest;
+  localBootstrapResponse: LocalBootstrapResponse;
   workspaceCreate: WorkspaceCreate;
   workspace: Workspace;
   workspaceList: WorkspaceList;
   attachmentCreate: AttachmentCreate;
+  attachment: Attachment;
+  attachmentUpdate: AttachmentUpdate;
   attachmentCreated: AttachmentCreated;
   agentRef: AgentRef;
   sessionCreate: SessionCreate;
@@ -369,5 +407,6 @@ export interface ApiPayloads {
   ackRequest: AckRequest;
   agentList: AgentList;
   localDiscovery: LocalDiscovery;
+  localBootstrapFile: LocalBootstrapFile;
   event: EventRecord;
 }

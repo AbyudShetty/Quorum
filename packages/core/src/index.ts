@@ -30,6 +30,10 @@ export {
 export { type PresenceChange, PresenceBook, type PresenceEntry } from './presence.js';
 export { findSecrets, type SecretFinding } from './secrets.js';
 export {
+  BOOTSTRAP_CODE_TTL_SECONDS,
+  type BootstrapDecision,
+  type BootstrapRecord,
+  decideBootstrap,
   decideRefresh,
   generateToken,
   hashToken,

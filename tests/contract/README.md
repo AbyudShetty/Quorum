@@ -46,3 +46,11 @@ The OpenAPI document lists every status; these are the ones the suite pins down 
 | Same message `id`, identical content                              | 200 with the original `seq` |
 | Body over 96 KiB                                                  | 413                         |
 | Foreign `Host` header in local mode (INV-26)                      | any 4xx                     |
+
+## Not covered yet
+
+Added to the API after the fake server was built, so the suite does not test them yet; the cases come with the real server (Track A), and the fake server gains them through the usual RFC flow (TEAM_PLAN §5.3):
+
+- `POST /v1/auth/local-bootstrap`: works once, refuses expired, reused and wrong codes, answers 404 in remote mode.
+- `PATCH /v1/attachments/{attachment}`: humans only, unknown fields rejected, change recorded in the log.
+- `GET …/inbox` without `after`: starts after the caller's last acknowledged `seq`.

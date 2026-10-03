@@ -28,7 +28,7 @@ Extra "machines" without new hardware: a WSL2 Ubuntu instance on each laptop (Li
 
 | Path                                                                                                                                                                                                                               | Owner                                 | Notes                                                               |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------- |
-| `packages/core/`, `packages/server/`                                                                                                                                                                                               | A                                     | includes local/remote mode, auth, storage, policy engine            |
+| `packages/core/`, `packages/local/`, `packages/server/`                                                                                                                                                                            | A                                     | includes local/remote mode, auth, storage, policy engine            |
 | `tests/adversarial/`, `tests/chaos/`, `tests/integration/` (server side)                                                                                                                                                           | A                                     | organised by invariant ID                                           |
 | `tests/fakes/fake-adapter/`                                                                                                                                                                                                        | A                                     | scripted client A uses to test the server before B's adapter exists |
 | `packages/adapter-mcp/`, `packages/adapter-hooks/`, `packages/cli/`, `packages/web/`                                                                                                                                               | B                                     | Claude Code + Codex adapters, wake mechanisms, CLI, HTMX templates  |
@@ -139,6 +139,7 @@ The exit needs "3+ machines". With two laptops, the third is a WSL2 instance or 
 # .github/CODEOWNERS — auto-requests reviews; the approval rule is in branch protection
 *                              @AbyudShetty @thorOdinson16
 /packages/core/                @AbyudShetty
+/packages/local/               @AbyudShetty
 /packages/server/              @AbyudShetty
 /tests/adversarial/            @AbyudShetty
 /tests/chaos/                  @AbyudShetty

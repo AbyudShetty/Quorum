@@ -8,6 +8,8 @@ export const TOKEN_PREFIXES = {
   access: 'qrm_at_',
   refresh: 'qrm_rt_',
   join: 'qrm_jc_',
+  /** One-time local-mode bootstrap code: proves the caller can read the private data directory. */
+  bootstrap: 'qrm_bc_',
 } as const;
 
 export type TokenKind = keyof typeof TOKEN_PREFIXES;
@@ -29,13 +31,15 @@ export const tokenMatches = (token: string, storedHash: string): boolean => {
   return presented.length === stored.length && timingSafeEqual(presented, stored);
 };
 
-const TOKEN_SHAPE = /^qrm_(at|rt|jc)_[A-Za-z0-9_-]{43}$/;
+const TOKEN_SHAPE = /^qrm_(at|rt|jc|bc)_[A-Za-z0-9_-]{43}$/;
 
 /** The kind of a well-formed token, or undefined. Shape only: says nothing about validity. */
 export const tokenKind = (token: string): TokenKind | undefined => {
   const match = TOKEN_SHAPE.exec(token);
   if (!match) return undefined;
-  return ({ at: 'access', rt: 'refresh', jc: 'join' } as const)[match[1] as 'at' | 'rt' | 'jc'];
+  return ({ at: 'access', rt: 'refresh', jc: 'join', bc: 'bootstrap' } as const)[
+    match[1] as 'at' | 'rt' | 'jc' | 'bc'
+  ];
 };
 
 /** A stored refresh token (only its hash is kept). */
@@ -65,4 +69,39 @@ export const decideRefresh = (record: RefreshRecord | undefined, now: Date): Ref
   if (Date.parse(record.expires_at) <= now.getTime())
     return { outcome: 'reject', reason: 'expired' };
   return { outcome: 'rotate', family: record.family };
+};
+
+/** How long a local bootstrap code stays valid (ARCHITECTURE §6). */
+export const BOOTSTRAP_CODE_TTL_SECONDS = 600;
+
+/** The server's record of the current bootstrap code (only its hash is kept). */
+export interface BootstrapRecord {
+  hash: string;
+  /** RFC 3339. */
+  expires_at: string;
+  used: boolean;
+}
+
+export type BootstrapDecision =
+  | { outcome: 'accept' }
+  | { outcome: 'reject'; reason: 'malformed' | 'unknown' | 'used' | 'expired' };
+
+/**
+ * Whether a presented local bootstrap code may be exchanged for the owner's human tokens. The
+ * caller must mark the record used on "accept" before doing anything else, so the code works once.
+ */
+export const decideBootstrap = (
+  record: BootstrapRecord | undefined,
+  presented: string,
+  now: Date,
+): BootstrapDecision => {
+  if (tokenKind(presented) !== 'bootstrap') return { outcome: 'reject', reason: 'malformed' };
+  if (!record || !tokenMatches(presented, record.hash)) {
+    return { outcome: 'reject', reason: 'unknown' };
+  }
+  if (record.used) return { outcome: 'reject', reason: 'used' };
+  if (Date.parse(record.expires_at) <= now.getTime()) {
+    return { outcome: 'reject', reason: 'expired' };
+  }
+  return { outcome: 'accept' };
 };

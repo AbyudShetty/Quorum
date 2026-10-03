@@ -1,0 +1,21 @@
+{
+  "name": "@quorum/local",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local-mode building blocks shared by the server, adapters and CLI: the private data directory, discovery file, bootstrap code file and start lock. No database.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "quorum-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@quorum/schemas": "0.0.0"
+  }
+}

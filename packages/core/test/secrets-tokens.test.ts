@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BOOTSTRAP_CODE_TTL_SECONDS,
+  type BootstrapRecord,
+  decideBootstrap,
   decideRefresh,
   findSecrets,
   generateToken,
@@ -26,6 +29,7 @@ describe('findSecrets (INV-14)', () => {
     ['Hugging Face token', fake('hf_', 'h'.repeat(34))],
     ['private key', fake('-----BEGIN OPENSSH ', 'PRIVATE KEY-----')],
     ['Quorum token', fake('qrm_', 'rt_', 'q'.repeat(43))],
+    ['Quorum token', fake('qrm_', 'bc_', 'b'.repeat(43))],
   ])('finds a %s and names the field, not the value', (kind, secret) => {
     const findings = findSecrets({ notes: ['fine', `token: ${secret}`] }, '/body');
     expect(findings).toEqual([{ path: '/body/notes/1', kind }]);
@@ -54,6 +58,7 @@ describe('tokens (INV-11)', () => {
     expect(generateToken('access')).toMatch(/^qrm_at_[A-Za-z0-9_-]{43}$/);
     expect(generateToken('refresh')).toMatch(/^qrm_rt_/);
     expect(generateToken('join')).toMatch(/^qrm_jc_/);
+    expect(generateToken('bootstrap')).toMatch(/^qrm_bc_[A-Za-z0-9_-]{43}$/);
     expect(generateToken('access')).not.toBe(generateToken('access'));
   });
 
@@ -75,6 +80,7 @@ describe('tokens (INV-11)', () => {
 
   it('recognises token kinds by shape only', () => {
     expect(tokenKind(generateToken('refresh'))).toBe('refresh');
+    expect(tokenKind(generateToken('bootstrap'))).toBe('bootstrap');
     expect(tokenKind('Bearer something')).toBeUndefined();
     expect(tokenKind(`${generateToken('access')}x`)).toBeUndefined();
   });
@@ -109,5 +115,35 @@ describe('tokens (INV-11)', () => {
     ])('rejects a %s token', (reason, rec) => {
       expect(decideRefresh(rec, now)).toEqual({ outcome: 'reject', reason });
     });
+  });
+});
+
+describe('local bootstrap codes', () => {
+  const now = new Date('2026-10-02T10:00:00Z');
+  const code = generateToken('bootstrap');
+  const record = (over: Partial<BootstrapRecord> = {}): BootstrapRecord => ({
+    hash: hashToken(code),
+    expires_at: '2026-10-02T10:10:00Z',
+    used: false,
+    ...over,
+  });
+
+  it('accepts the current code once it is presented before expiry', () => {
+    expect(decideBootstrap(record(), code, now)).toEqual({ outcome: 'accept' });
+  });
+
+  it.each([
+    ['malformed', record(), 'qrm_bc_short'],
+    ['malformed', record(), generateToken('access')],
+    ['unknown', undefined, code],
+    ['unknown', record(), generateToken('bootstrap')],
+    ['used', record({ used: true }), code],
+    ['expired', record({ expires_at: '2026-10-02T10:00:00Z' }), code],
+  ])('rejects a %s code', (reason, rec, presented) => {
+    expect(decideBootstrap(rec, presented, now)).toEqual({ outcome: 'reject', reason });
+  });
+
+  it('lasts ten minutes', () => {
+    expect(BOOTSTRAP_CODE_TTL_SECONDS).toBe(600);
   });
 });

@@ -168,6 +168,51 @@
         }
       }
     },
+    "/v1/auth/local-bootstrap": {
+      "post": {
+        "operationId": "localBootstrap",
+        "tags": [
+          "auth"
+        ],
+        "summary": "Local mode: exchange the one-time bootstrap code for the owner's human tokens.",
+        "description": "The local server writes a bootstrap code (`qrm_bc_…`, 10-minute expiry, single use) into its private data directory at `<data>/local/bootstrap.json`. Only the owning OS user can read it (INV-25), so presenting it proves the caller is that user. The first exchange creates the owner human.\n\nRemote mode answers `404`: there, humans sign in with join codes (Phase 1b).",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LocalBootstrapRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The owner human and their tokens. The code is now used up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalBootstrapResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
     "/v1/workspaces": {
       "get": {
         "operationId": "listWorkspaces",
@@ -308,6 +353,67 @@
       }
     },
     "/v1/attachments/{attachment}": {
+      "patch": {
+        "operationId": "updateAttachment",
+        "tags": [
+          "setup"
+        ],
+        "summary": "Change wake mode, wake types or lease enforcement of an attachment.",
+        "description": "Humans only. The change applies from the next message and is recorded in the event log. Wake settings can never exceed the workspace's wake budget and loop pause (INV-29).",
+        "security": [
+          {
+            "humanToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "attachment",
+            "in": "path",
+            "required": true,
+            "description": "Attachment ID (`at_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/attachmentId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated attachment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      },
       "delete": {
         "operationId": "deleteAttachment",
         "tags": [
@@ -551,11 +657,10 @@
           {
             "name": "after",
             "in": "query",
-            "description": "Return messages with `seq` greater than this. 0 = from the beginning.",
+            "description": "Return messages with `seq` greater than this. Omitted: start after the caller's last acknowledged `seq` (0 if none), so a restarted client does not replay mail it already acknowledged. `after=0` always starts from the beginning.",
             "schema": {
               "type": "integer",
-              "minimum": 0,
-              "default": 0
+              "minimum": 0
             }
           },
           {
@@ -805,6 +910,7 @@
           "members"
         ],
         "summary": "Agents in the workspace with their presence and current status.",
+        "description": "An agent is `online` while it has sent a heartbeat within the last 90 seconds (MESSAGE_SPEC §5.10). `folder` is the name of the attached folder (e.g. `api`), never a full path.",
         "security": [
           {
             "agentToken": []
@@ -2754,6 +2860,81 @@
           }
         }
       },
+      "LocalBootstrapRequest": {
+        "$id": "urn:quorum:schema:api:local-bootstrap-request:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API local-bootstrap-request",
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^qrm_bc_[A-Za-z0-9_-]{43}$"
+          }
+        }
+      },
+      "LocalBootstrapResponse": {
+        "$id": "urn:quorum:schema:api:local-bootstrap-response:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API local-bootstrap-response",
+        "type": "object",
+        "required": [
+          "human",
+          "credentials"
+        ],
+        "properties": {
+          "human": {
+            "type": "object",
+            "required": [
+              "id",
+              "address"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "urn:quorum:schema:common:1#/$defs/humanId"
+              },
+              "address": {
+                "$ref": "urn:quorum:schema:common:1#/$defs/humanAddress"
+              }
+            }
+          },
+          "credentials": {
+            "type": "object",
+            "required": [
+              "access_token",
+              "refresh_token",
+              "token_type",
+              "expires_in",
+              "refresh_expires_in"
+            ],
+            "properties": {
+              "access_token": {
+                "type": "string",
+                "minLength": 32,
+                "maxLength": 512
+              },
+              "refresh_token": {
+                "type": "string",
+                "minLength": 32,
+                "maxLength": 512
+              },
+              "token_type": {
+                "const": "Bearer"
+              },
+              "expires_in": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "refresh_expires_in": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
       "WorkspaceCreate": {
         "$id": "urn:quorum:schema:api:workspace-create:1",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2884,6 +3065,118 @@
           }
         }
       },
+      "Attachment": {
+        "$id": "urn:quorum:schema:api:attachment:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API attachment",
+        "type": "object",
+        "required": [
+          "id",
+          "root",
+          "vendor",
+          "workspaces",
+          "wake",
+          "lease_enforcement"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/attachmentId"
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)"
+          },
+          "vendor": {
+            "enum": [
+              "claude-code",
+              "codex",
+              "gemini-cli",
+              "opencode",
+              "generic"
+            ]
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "urn:quorum:schema:common:1#/$defs/workspaceId"
+            }
+          },
+          "wake": {
+            "enum": [
+              "off",
+              "direct",
+              "all"
+            ]
+          },
+          "wake_types": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "note",
+                "request",
+                "task_update",
+                "finding",
+                "retraction",
+                "artifact_ready",
+                "lease",
+                "approval_request",
+                "approval_decision",
+                "heartbeat"
+              ]
+            }
+          },
+          "lease_enforcement": {
+            "enum": [
+              "warn",
+              "block"
+            ]
+          }
+        }
+      },
+      "AttachmentUpdate": {
+        "$id": "urn:quorum:schema:api:attachment-update:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API attachment-update",
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": false,
+        "properties": {
+          "wake": {
+            "enum": [
+              "off",
+              "direct",
+              "all"
+            ]
+          },
+          "wake_types": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "note",
+                "request",
+                "task_update",
+                "finding",
+                "retraction",
+                "artifact_ready",
+                "lease",
+                "approval_request",
+                "approval_decision",
+                "heartbeat"
+              ]
+            }
+          },
+          "lease_enforcement": {
+            "enum": [
+              "warn",
+              "block"
+            ]
+          }
+        }
+      },
       "AttachmentCreated": {
         "$id": "urn:quorum:schema:api:attachment-created:1",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2896,54 +3189,7 @@
         ],
         "properties": {
           "attachment": {
-            "type": "object",
-            "required": [
-              "id",
-              "root",
-              "vendor",
-              "workspaces",
-              "wake",
-              "lease_enforcement"
-            ],
-            "properties": {
-              "id": {
-                "$ref": "urn:quorum:schema:common:1#/$defs/attachmentId"
-              },
-              "root": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 4096,
-                "pattern": "^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)"
-              },
-              "vendor": {
-                "enum": [
-                  "claude-code",
-                  "codex",
-                  "gemini-cli",
-                  "opencode",
-                  "generic"
-                ]
-              },
-              "workspaces": {
-                "type": "array",
-                "items": {
-                  "$ref": "urn:quorum:schema:common:1#/$defs/workspaceId"
-                }
-              },
-              "wake": {
-                "enum": [
-                  "off",
-                  "direct",
-                  "all"
-                ]
-              },
-              "lease_enforcement": {
-                "enum": [
-                  "warn",
-                  "block"
-                ]
-              }
-            }
+            "$ref": "urn:quorum:schema:api:attachment:1"
           },
           "agent": {
             "$ref": "urn:quorum:schema:api:agent-ref:1"
@@ -3184,6 +3430,12 @@
                     "opencode",
                     "generic"
                   ]
+                },
+                "folder": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255,
+                  "pattern": "^[^\\\\/\\u0000-\\u001f]+$"
                 },
                 "presence": {
                   "enum": [

@@ -8,6 +8,9 @@
       "path": "../packages/core/tsconfig.build.json"
     },
     {
+      "path": "../packages/local/tsconfig.build.json"
+    },
+    {
       "path": "../packages/server/tsconfig.build.json"
     },
     {

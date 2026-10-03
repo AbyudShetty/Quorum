@@ -17,6 +17,27 @@ const examples: ApiPayloads = {
     expires_in: 3600,
     refresh_expires_in: 2_592_000,
   },
+  localBootstrapRequest: { code: `qrm_bc_${'b'.repeat(43)}` },
+  localBootstrapResponse: {
+    human: { id: `hu_${U1}`, address: 'human:abyud' },
+    credentials: {
+      access_token: TOKEN,
+      refresh_token: TOKEN,
+      token_type: 'Bearer',
+      expires_in: 3600,
+      refresh_expires_in: 2_592_000,
+    },
+  },
+  attachment: {
+    id: `at_${U1}`,
+    root: 'C:\\Users\\abyud\\proj\\api',
+    vendor: 'claude-code',
+    workspaces: [`ws_${U1}`],
+    wake: 'direct',
+    wake_types: ['request'],
+    lease_enforcement: 'warn',
+  },
+  attachmentUpdate: { wake: 'all', wake_types: [] },
   workspaceCreate: { name: 'amazon-ml-2026' },
   workspace: { id: `ws_${U1}`, name: 'amazon-ml-2026', created_at: '2026-10-02T10:00:00Z' },
   workspaceList: { workspaces: [] },
@@ -94,6 +115,7 @@ const examples: ApiPayloads = {
     version: '0.0.0',
     started_at: '2026-10-02T10:00:00Z',
   },
+  localBootstrapFile: { code: `qrm_bc_${'b'.repeat(43)}`, expires_at: '2026-10-02T10:10:00Z' },
   event: {
     ev_id: `ev_${U1}`,
     workspace: `ws_${U1}`,
@@ -165,5 +187,28 @@ describe('API payloads', () => {
 
   it('requires hash-chain fields on exported events (INV-8)', () => {
     expect(issues('event', { ...examples.event, prev_hash: undefined })).toEqual([' required']);
+  });
+
+  it('only accepts a well-formed bootstrap code (not an access or refresh token)', () => {
+    expect(issues('localBootstrapRequest', { code: `qrm_at_${'a'.repeat(43)}` })).toEqual([
+      '/code pattern',
+    ]);
+    expect(issues('localBootstrapRequest', { code: 'qrm_bc_short' })).toEqual(['/code pattern']);
+  });
+
+  it('changes at least one attachment setting and nothing else', () => {
+    expect(issues('attachmentUpdate', {})).toEqual([' minProperties']);
+    expect(issues('attachmentUpdate', { root: 'C:\\other' })).toEqual([' additionalProperties']);
+    expect(issues('attachmentUpdate', { wake: 'always' })).toEqual(['/wake enum']);
+  });
+
+  it('accepts a folder name in the agent list, but never a path (MESSAGE_SPEC §8)', () => {
+    const agent = examples.agentList.agents[0];
+    const withFolder = (folder: string) => ({ agents: [{ ...agent, folder }] });
+    expect(issues('agentList', withFolder('api'))).toEqual([]);
+    expect(issues('agentList', withFolder('C:\\Users\\abyud\\api'))).toEqual([
+      '/agents/0/folder pattern',
+    ]);
+    expect(issues('agentList', withFolder('/home/a/api'))).toEqual(['/agents/0/folder pattern']);
   });
 });

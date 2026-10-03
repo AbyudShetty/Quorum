@@ -4,8 +4,8 @@ import { createPrivateKey, generateKeyPairSync, type KeyObject, sign } from 'nod
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { helloMessage, type IdFactory } from '@quorum/core';
+import { writePrivateFile } from '@quorum/local';
 import type { HelloResponse } from '@quorum/schemas';
-import { writePrivateFile } from './data-dir.js';
 
 export interface ServerInstance {
   instanceId: string;

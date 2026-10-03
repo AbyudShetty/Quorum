@@ -49,6 +49,18 @@ const pageParams = [
   },
 ];
 
+/** The inbox resumes from the caller's last acknowledgement when `after` is omitted. */
+const inboxParams = [
+  {
+    name: 'after',
+    in: 'query',
+    description:
+      "Return messages with `seq` greater than this. Omitted: start after the caller's last acknowledged `seq` (0 if none), so a restarted client does not replay mail it already acknowledged. `after=0` always starts from the beginning.",
+    schema: { type: 'integer', minimum: 0 },
+  },
+  ...pageParams.filter((p) => p.name !== 'after'),
+];
+
 export const openApiDocument = {
   openapi: '3.1.1',
   jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',
@@ -134,6 +146,30 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/auth/local-bootstrap': {
+      post: {
+        operationId: 'localBootstrap',
+        tags: ['auth'],
+        summary: "Local mode: exchange the one-time bootstrap code for the owner's human tokens.",
+        description: [
+          'The local server writes a bootstrap code (`qrm_bc_…`, 10-minute expiry, single use) into its private data directory at `<data>/local/bootstrap.json`. Only the owning OS user can read it (INV-25), so presenting it proves the caller is that user. The first exchange creates the owner human.',
+          '',
+          'Remote mode answers `404`: there, humans sign in with join codes (Phase 1b).',
+        ].join('\n'),
+        security: none,
+        requestBody: { required: true, content: json('LocalBootstrapRequest') },
+        responses: {
+          '200': {
+            description: 'The owner human and their tokens. The code is now used up.',
+            content: json('LocalBootstrapResponse'),
+          },
+          '400': errorRef('BadRequest'),
+          '401': errorRef('Unauthorized'),
+          '404': errorRef('NotFound'),
+          '429': errorRef('TooManyRequests'),
+        },
+      },
+    },
     '/v1/workspaces': {
       get: {
         operationId: 'listWorkspaces',
@@ -181,6 +217,22 @@ export const openApiDocument = {
       },
     },
     '/v1/attachments/{attachment}': {
+      patch: {
+        operationId: 'updateAttachment',
+        tags: ['setup'],
+        summary: 'Change wake mode, wake types or lease enforcement of an attachment.',
+        description:
+          "Humans only. The change applies from the next message and is recorded in the event log. Wake settings can never exceed the workspace's wake budget and loop pause (INV-29).",
+        security: human,
+        parameters: [pathParam('attachment', 'attachmentId', 'Attachment ID (`at_…`).')],
+        requestBody: { required: true, content: json('AttachmentUpdate') },
+        responses: {
+          '200': { description: 'The updated attachment.', content: json('Attachment') },
+          '400': errorRef('BadRequest'),
+          '404': errorRef('NotFound'),
+          ...authErrors,
+        },
+      },
       delete: {
         operationId: 'deleteAttachment',
         tags: ['setup'],
@@ -257,7 +309,7 @@ export const openApiDocument = {
         description:
           'For agents that cannot hold a stream open, e.g. between turns. Delivery is at-least-once; dedupe by `id`.',
         security: agentOrHuman,
-        parameters: [workspaceParam, ...pageParams],
+        parameters: [workspaceParam, ...inboxParams],
         responses: {
           '200': { description: 'A page of messages.', content: json('InboxPage') },
           '404': errorRef('NotFound'),
@@ -331,6 +383,8 @@ export const openApiDocument = {
         operationId: 'listAgents',
         tags: ['members'],
         summary: 'Agents in the workspace with their presence and current status.',
+        description:
+          'An agent is `online` while it has sent a heartbeat within the last 90 seconds (MESSAGE_SPEC §5.10). `folder` is the name of the attached folder (e.g. `api`), never a full path.',
         security: agentOrHuman,
         parameters: [workspaceParam],
         responses: {
@@ -444,10 +498,14 @@ export const openApiDocument = {
       HelloResponse: apiSchemas.helloResponse,
       TokenRefreshRequest: apiSchemas.tokenRefreshRequest,
       TokenPair: apiSchemas.tokenPair,
+      LocalBootstrapRequest: apiSchemas.localBootstrapRequest,
+      LocalBootstrapResponse: apiSchemas.localBootstrapResponse,
       WorkspaceCreate: apiSchemas.workspaceCreate,
       Workspace: apiSchemas.workspace,
       WorkspaceList: apiSchemas.workspaceList,
       AttachmentCreate: apiSchemas.attachmentCreate,
+      Attachment: apiSchemas.attachment,
+      AttachmentUpdate: apiSchemas.attachmentUpdate,
       AttachmentCreated: apiSchemas.attachmentCreated,
       AgentRef: apiSchemas.agentRef,
       SessionCreate: apiSchemas.sessionCreate,

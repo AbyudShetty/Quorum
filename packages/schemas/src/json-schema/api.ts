@@ -78,6 +78,30 @@ export const apiSchemas = {
   }),
   tokenPair: schema('token-pair', tokenPair),
 
+  /**
+   * Local mode only: exchange the one-time bootstrap code for the owner's human tokens. The local
+   * server writes the code (10-minute expiry, single use) into its private data directory, so only
+   * someone who can read that directory (the owning OS user, INV-25) can present it.
+   */
+  localBootstrapRequest: schema('local-bootstrap-request', {
+    type: 'object',
+    required: ['code'],
+    properties: { code: { type: 'string', pattern: '^qrm_bc_[A-Za-z0-9_-]{43}$' } },
+  }),
+  localBootstrapResponse: schema('local-bootstrap-response', {
+    type: 'object',
+    required: ['human', 'credentials'],
+    properties: {
+      human: {
+        type: 'object',
+        required: ['id', 'address'],
+        properties: { id: common('humanId'), address: common('humanAddress') },
+      },
+      /** Shown once; the CLI stores them in the OS keychain under "human" (INV-11, INV-25). */
+      credentials: tokenPair,
+    },
+  }),
+
   workspaceCreate: schema('workspace-create', {
     type: 'object',
     required: ['name'],
@@ -119,22 +143,39 @@ export const apiSchemas = {
       lease_enforcement: { enum: ['warn', 'block'], default: 'warn' },
     },
   }),
+  /** An attachment as the server reports it. */
+  attachment: schema('attachment', {
+    type: 'object',
+    required: ['id', 'root', 'vendor', 'workspaces', 'wake', 'lease_enforcement'],
+    properties: {
+      id: common('attachmentId'),
+      root: absolutePath,
+      vendor: { enum: [...VENDORS] },
+      workspaces: { type: 'array', items: common('workspaceId') },
+      wake: { enum: ['off', 'direct', 'all'] },
+      wake_types: { type: 'array', uniqueItems: true, items: { enum: [...MESSAGE_TYPES] } },
+      lease_enforcement: { enum: ['warn', 'block'] },
+    },
+  }),
+  /**
+   * Change an attachment's per-human settings (ARCHITECTURE §15.2, D-9). Humans only; every change
+   * is recorded in the event log. Send only the fields to change; `wake_types: []` clears the filter.
+   */
+  attachmentUpdate: schema('attachment-update', {
+    type: 'object',
+    minProperties: 1,
+    additionalProperties: false,
+    properties: {
+      wake: { enum: ['off', 'direct', 'all'] },
+      wake_types: { type: 'array', uniqueItems: true, items: { enum: [...MESSAGE_TYPES] } },
+      lease_enforcement: { enum: ['warn', 'block'] },
+    },
+  }),
   attachmentCreated: schema('attachment-created', {
     type: 'object',
     required: ['attachment', 'agent', 'credentials'],
     properties: {
-      attachment: {
-        type: 'object',
-        required: ['id', 'root', 'vendor', 'workspaces', 'wake', 'lease_enforcement'],
-        properties: {
-          id: common('attachmentId'),
-          root: absolutePath,
-          vendor: { enum: [...VENDORS] },
-          workspaces: { type: 'array', items: common('workspaceId') },
-          wake: { enum: ['off', 'direct', 'all'] },
-          lease_enforcement: { enum: ['warn', 'block'] },
-        },
-      },
+      attachment: { $ref: apiId('attachment') },
       agent: { $ref: apiId('agent-ref') },
       /** Shown once; the CLI stores them in the OS keychain (INV-11, INV-25). */
       credentials: tokenPair,
@@ -214,6 +255,16 @@ export const apiSchemas = {
             id: common('agentId'),
             address: common('agentAddress'),
             vendor: { enum: [...VENDORS] },
+            /**
+             * Name of the attached folder (e.g. "api"), never a full path, so message headers can
+             * show it without leaking home directories (MESSAGE_SPEC §8). Present when known.
+             */
+            folder: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 255,
+              pattern: '^[^\\\\/\\u0000-\\u001f]+$',
+            },
             presence: { enum: ['online', 'offline'] },
             status: { enum: ['idle', 'working', 'blocked', 'offline'] },
             current_task: common('taskId'),
@@ -239,6 +290,20 @@ export const apiSchemas = {
       public_key: base64url(32),
       version: { type: 'string', minLength: 1, maxLength: 64 },
       started_at: common('timestamp'),
+    },
+  }),
+
+  /**
+   * Local mode bootstrap code file `<data dir>/local/bootstrap.json` (ARCHITECTURE §6). Like the
+   * discovery file it is part of the contract: the CLI reads it. Unlike it, it holds a secret, which
+   * the private data directory protects (INV-25). The server removes it once used or expired.
+   */
+  localBootstrapFile: schema('local-bootstrap-file', {
+    type: 'object',
+    required: ['code', 'expires_at'],
+    properties: {
+      code: { type: 'string', pattern: '^qrm_bc_[A-Za-z0-9_-]{43}$' },
+      expires_at: common('timestamp'),
     },
   }),
 

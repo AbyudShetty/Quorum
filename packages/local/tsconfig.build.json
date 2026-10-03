@@ -10,12 +10,6 @@
   "references": [
     {
       "path": "../schemas/tsconfig.build.json"
-    },
-    {
-      "path": "../core/tsconfig.build.json"
-    },
-    {
-      "path": "../local/tsconfig.build.json"
     }
   ]
 }

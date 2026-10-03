@@ -78,12 +78,12 @@ describe('OpenAPI /v1 document', () => {
     }
   });
 
-  it('only health, hello and token refresh work without a token (INV-23)', () => {
+  it('only health, hello, token refresh and the local bootstrap exchange work without a token (INV-23)', () => {
     const open = operations
       .filter(({ op }) => op.security.length === 0)
       .map(({ op }) => op.operationId)
       .sort();
-    expect(open).toEqual(['getHealth', 'hello', 'refreshToken']);
+    expect(open).toEqual(['getHealth', 'hello', 'localBootstrap', 'refreshToken']);
   });
 
   it('keeps human-only operations away from agent tokens (INV-1, INV-13, INV-30)', () => {
@@ -97,6 +97,7 @@ describe('OpenAPI /v1 document', () => {
       'deleteAttachment',
       'exportEvents',
       'revokeAgent',
+      'updateAttachment',
     ]);
   });
 
