@@ -37,6 +37,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- `@quorum/cli` and `@quorum/adapter-mcp` (Track B): `quorum login` (bootstrap code swap, only after the identity check), `quorum attach` / `attach --update` / `detach` (uses `POST`, `PATCH`, `DELETE /v1/attachments`; credentials to the keychain, record to the data directory, vendor setup printed), and the inbox now relies on the server's default (after the last ack), so the adapter's own read-position file is removed. 10 new tests.
 - `tests/fakes/fake-server` (Track B) follows the post-freeze `/v1` additions: local bootstrap login, `PATCH /v1/attachments/{id}`, the inbox default (after the last ack), `folder` in the agent list and heartbeat presence (online for 90 s, offline at once on `status: offline`). 12 new tests; the 16 contract tests still pass.
 - `@quorum/adapter-mcp` and `@quorum/cli` (Track B) now use `@quorum/local` for the data directory and discovery file; the adapter's duplicate copy and its "equals the server's" test are gone, and `@quorum/adapter-mcp` no longer depends on `@quorum/server` (so adapters do not pull in SQLite).
 - Tidier repository root (no content changed): `CONTRIBUTING.md` and `SECURITY.md` → `.github/` (GitHub still finds both), `QUORUM_PLAN.md` → `docs/` (byte-identical, still excluded from formatting), `CLAUDE.md` → `.claude/CLAUDE.md` (imports `../AGENTS.md`), Prettier settings → `package.json`, `tsconfig.base.json`/`tsconfig.build.json` → `config/`. All links and paths updated.

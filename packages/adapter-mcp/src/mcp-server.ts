@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createIdFactory, type IdFactory } from '@quorum/core';
 import type { SubmittedEnvelope } from '@quorum/schemas';
 import { z } from 'zod';
-import { type AttachmentInfo, Cursor } from './attachment.js';
+import type { AttachmentInfo } from './attachment.js';
 import { ApiError, type QuorumClient, UnreachableError } from './client.js';
 import { frameMessages, type SenderInfo } from './framing.js';
 import type { Outbox } from './outbox.js';
@@ -26,7 +26,6 @@ export const INSTRUCTIONS = [
 export interface McpDependencies {
   client: QuorumClient;
   outbox: Outbox;
-  cursor: Cursor;
   attachment: AttachmentInfo;
   ids?: IdFactory;
   now?: () => Date;
@@ -53,7 +52,7 @@ const explain = (error: unknown): ToolResult => {
 };
 
 export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
-  const { client, outbox, cursor, attachment } = deps;
+  const { client, outbox, attachment } = deps;
   const ids = deps.ids ?? createIdFactory();
   const now = deps.now ?? (() => new Date());
 
@@ -160,7 +159,7 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
     async (args) => {
       try {
         const workspace = workspaceFor(args.workspace);
-        const page = await client.inbox(workspace, await cursor.get(workspace), args.limit);
+        const page = await client.inbox(workspace, { limit: args.limit });
         if (page.messages.length === 0) return text('No new messages.');
         const agents = await client.agents(workspace).catch(() => []);
         const framed = frameMessages(page.messages, {
@@ -170,8 +169,7 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
           },
         });
         if (args.mark_read) {
-          await client.ack(workspace, page.next_after);
-          await cursor.advance(workspace, page.next_after);
+          await client.ack(workspace, page.next_after); // the server starts the next read here
         }
         const more = page.has_more
           ? '\n\n(More messages are waiting: call quorum_inbox again.)'
@@ -222,5 +220,3 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
 export const serveStdio = async (server: McpServer): Promise<void> => {
   await server.connect(new StdioServerTransport());
 };
-
-export { Cursor };

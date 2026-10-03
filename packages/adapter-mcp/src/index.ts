@@ -1,4 +1,9 @@
-export { type AttachmentInfo, Cursor, loadAttachment, saveAttachment } from './attachment.js';
+export {
+  type AttachmentInfo,
+  loadAttachment,
+  removeAttachment,
+  saveAttachment,
+} from './attachment.js';
 export {
   ApiError,
   type ConnectOptions,

@@ -3,6 +3,10 @@
 //     holds the key we pinned. A failed check throws IdentityError and never falls back.
 //  2. INV-11: refresh tokens rotate; the new pair is stored before the old one is forgotten.
 import {
+  type Attachment,
+  type AttachmentCreate,
+  type AttachmentCreated,
+  type AttachmentUpdate,
   type DeliveredEnvelope,
   type ErrorResponse,
   type HelloResponse,
@@ -270,11 +274,18 @@ export class QuorumClient {
     return { seq: (reply.body as { seq: number }).seq, duplicate: reply.status === 200 };
   }
 
-  async inbox(workspace: string, after = 0, limit = 100): Promise<InboxPage> {
-    const reply = await this.call(
-      'GET',
-      `/v1/workspaces/${workspace}/inbox?after=${String(after)}&limit=${String(limit)}`,
-    );
+  /**
+   * Messages for the caller. Without `after` the server starts after the caller's last
+   * acknowledged seq, so an adapter only has to ack what it has handed to its agent; `after: 0`
+   * starts from the beginning.
+   */
+  async inbox(
+    workspace: string,
+    options: { after?: number; limit?: number } = {},
+  ): Promise<InboxPage> {
+    const query = new URLSearchParams({ limit: String(options.limit ?? 100) });
+    if (options.after !== undefined) query.set('after', String(options.after));
+    const reply = await this.call('GET', `/v1/workspaces/${workspace}/inbox?${query.toString()}`);
     return reply.body as InboxPage;
   }
 
@@ -289,6 +300,48 @@ export class QuorumClient {
     return (
       reply.body as { agents: { id: string; address: string; vendor: string; presence: string }[] }
     ).agents;
+  }
+
+  /**
+   * Local mode: swap the one-time bootstrap code for the owner's human tokens and store them under
+   * this client's credential key. The code goes only to a server that already passed the identity
+   * check (INV-24). Throws ApiError (401 wrong/expired/used code, 404 remote mode).
+   */
+  async bootstrapLogin(code: string): Promise<{ id: string; address: string }> {
+    const response = await this.#raw('POST', '/v1/auth/local-bootstrap', { code });
+    const body: unknown = await response.json().catch(() => undefined);
+    const checked = validateApiPayload('localBootstrapResponse', body);
+    if (!response.ok || !checked.ok) throw this.#toApiError(response.status, body);
+    const { human, credentials } = checked.value;
+    const stored: StoredCredentials = {
+      access_token: credentials.access_token,
+      refresh_token: credentials.refresh_token,
+      access_expires_at: this.#now() + credentials.expires_in * 1000,
+    };
+    await this.#store.save(this.#key, stored);
+    this.#credentials = stored;
+    return human;
+  }
+
+  /** Humans only. Credentials are returned once; the caller stores them (INV-11, INV-25). */
+  async createAttachment(request: AttachmentCreate): Promise<AttachmentCreated> {
+    const reply = await this.call('POST', '/v1/attachments', request);
+    return reply.body as AttachmentCreated;
+  }
+
+  /** Humans only: change wake settings or lease enforcement. */
+  async updateAttachment(id: string, change: AttachmentUpdate): Promise<Attachment> {
+    const reply = await this.call('PATCH', `/v1/attachments/${id}`, change);
+    return reply.body as Attachment;
+  }
+
+  async deleteAttachment(id: string): Promise<void> {
+    await this.call('DELETE', `/v1/attachments/${id}`);
+  }
+
+  async workspaces(): Promise<{ id: string; name: string }[]> {
+    const reply = await this.call('GET', '/v1/workspaces');
+    return (reply.body as { workspaces: { id: string; name: string }[] }).workspaces;
   }
 
   async health(): Promise<{ status: string; version: string; instance_id: string }> {

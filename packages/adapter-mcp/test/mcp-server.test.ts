@@ -1,13 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  type AttachmentInfo,
-  Cursor,
-  createQuorumMcpServer,
-  INSTRUCTIONS,
-  Outbox,
-} from '../src/index.js';
+import { type AttachmentInfo, createQuorumMcpServer, INSTRUCTIONS, Outbox } from '../src/index.js';
 import { connectAs, note, startWorld, type World } from './helpers.js';
 
 let world: World | undefined;
@@ -32,7 +26,6 @@ const start = async (w: World) => {
   const server = createQuorumMcpServer({
     client: await connectAs(w),
     outbox: new Outbox(w.dataDir, 'at_test'),
-    cursor: new Cursor(w.dataDir, 'at_test'),
     attachment,
   });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();

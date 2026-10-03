@@ -130,7 +130,7 @@ export const runAgent = async (config: AgentConfig): Promise<AgentResult> => {
   const receiver = async () => {
     while (Date.now() < receiveUntil) {
       try {
-        const page = await client.inbox(config.workspace, cursor, 100);
+        const page = await client.inbox(config.workspace, { after: cursor, limit: 100 });
         const now = Date.now();
         for (const message of page.messages) {
           if (seen.has(message.id)) {

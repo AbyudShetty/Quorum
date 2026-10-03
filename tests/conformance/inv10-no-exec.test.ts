@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { Cursor, createQuorumMcpServer, Outbox } from '@quorum/adapter-mcp';
+import { createQuorumMcpServer, Outbox } from '@quorum/adapter-mcp';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectAs, startWorld, type World } from '../../packages/adapter-mcp/test/helpers.js';
 
@@ -49,7 +49,6 @@ describe('INV-10: messages that ask for execution stay text', () => {
     const server = createQuorumMcpServer({
       client: await connectAs(world),
       outbox: new Outbox(world.dataDir, 'at_test'),
-      cursor: new Cursor(world.dataDir, 'at_test'),
       attachment: {
         attachment: 'at_test',
         agent: world.agent.address,
