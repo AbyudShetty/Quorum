@@ -16,6 +16,9 @@
     },
     {
       "path": "../adapter-mcp/tsconfig.build.json"
+    },
+    {
+      "path": "../local/tsconfig.build.json"
     }
   ]
 }

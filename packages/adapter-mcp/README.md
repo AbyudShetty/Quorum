@@ -10,7 +10,8 @@ Track: **B** (adapters). The client side of Quorum: what an agent, the CLI and t
 | `frameMessage`, `frameMessages`                    | Untrusted-data framing for everything shown to an agent (INV-9)                                         |
 | `createQuorumMcpServer`, `serveStdio`              | The `quorum_send`, `quorum_inbox`, `quorum_status` MCP tools                                            |
 | `loadAttachment`, `saveAttachment`, `Cursor`       | The per-attachment record and read cursor in the private data directory                                 |
-| `defaultDataDir`, `readLocalDiscovery`             | Where the server publishes its port and key                                                             |
+
+Where the server publishes its port and key (`defaultDataDir`, the discovery file) comes from `@quorum/local`, shared with the server and CLI.
 
 Dependencies: `@modelcontextprotocol/sdk` (official MCP SDK; planned in ARCHITECTURE §11), `@napi-rs/keyring` (OS keychain, D-11), `zod` (the SDK's schema library, a required peer of the SDK).
 

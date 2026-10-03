@@ -14,7 +14,6 @@ export {
   MemoryCredentialStore,
   type StoredCredentials,
 } from './credentials.js';
-export { defaultDataDir, discoveryFile, readLocalDiscovery } from './discovery.js';
 export {
   type FrameOptions,
   frameMessage,

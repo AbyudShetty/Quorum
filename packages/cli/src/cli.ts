@@ -8,13 +8,13 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { createIdFactory, parseJsonl, verifyChain } from '@quorum/core';
+import { defaultDataDir } from '@quorum/local';
 import type { SubmittedEnvelope } from '@quorum/schemas';
 import {
   ApiError,
   type CredentialStore,
   Cursor,
   createQuorumMcpServer,
-  defaultDataDir,
   frameMessages,
   IdentityError,
   loadAttachment,

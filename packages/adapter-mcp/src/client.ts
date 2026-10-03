@@ -12,8 +12,8 @@ import {
   validateApiPayload,
 } from '@quorum/schemas';
 import { newHelloNonce, verifyHello } from '@quorum/core';
+import { defaultDataDir, readDiscovery } from '@quorum/local';
 import type { CredentialStore, StoredCredentials } from './credentials.js';
-import { defaultDataDir, readLocalDiscovery } from './discovery.js';
 
 export class IdentityError extends Error {
   constructor(message: string) {
@@ -75,7 +75,7 @@ export interface ConnectOptions {
 const REFRESH_MARGIN_MS = 60_000;
 
 export const resolveTarget = async (dataDir: string): Promise<Target> => {
-  const found = await readLocalDiscovery(dataDir);
+  const found = await readDiscovery(dataDir);
   if (!found) {
     throw new UnreachableError(
       'No local Quorum server is published. Start it with `quorum serve --local` (adapters normally start it for you).',
