@@ -16,6 +16,8 @@ import {
   type CredentialStore,
   createQuorumMcpServer,
   frameMessages,
+  senderResolver,
+  startHeartbeat,
   IdentityError,
   loadAttachment,
   removeAttachment,
@@ -196,7 +198,8 @@ const inbox = async (args: string[], env: CliEnv): Promise<number> => {
     env.out('No new messages.\n');
     return 0;
   }
-  env.out(`${frameMessages(page.messages)}\n`);
+  const agents = await client.agents(workspace).catch(() => []);
+  env.out(`${frameMessages(page.messages, { sender: senderResolver(agents) })}\n`);
   if (!values.keep) {
     await client.ack(workspace, page.next_after); // the server starts the next read here
   }
@@ -490,11 +493,18 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
   const { values } = parseArgs({ args, options: { attachment: { type: 'string' } }, strict: true });
   const info = await attachmentOf(env, values.attachment);
   const dataDir = dataDirOf(env);
+  const client = await connect(env, info.attachment);
   const server = createQuorumMcpServer({
-    client: await connect(env, info.attachment),
+    client,
     outbox: new Outbox(dataDir, info.attachment),
     attachment: info,
   });
+  // Presence: a heartbeat every 30 s, and `offline` at once when the session ends (stdin closes
+  // when Claude Code or Codex exits).
+  const presence = startHeartbeat({ client, attachment: info });
+  server.server.onclose = () => {
+    void presence.stop();
+  };
   await serveStdio(server);
   return 0;
 };

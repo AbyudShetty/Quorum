@@ -9,7 +9,7 @@ import type { SubmittedEnvelope } from '@quorum/schemas';
 import { z } from 'zod';
 import type { AttachmentInfo } from './attachment.js';
 import { ApiError, type QuorumClient, UnreachableError } from './client.js';
-import { frameMessages, type SenderInfo } from './framing.js';
+import { frameMessages, senderResolver } from './framing.js';
 import type { Outbox } from './outbox.js';
 
 /** Types an agent may send. `approval_decision` is human-only (INV-1); `heartbeat` is automatic. */
@@ -162,12 +162,7 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
         const page = await client.inbox(workspace, { limit: args.limit });
         if (page.messages.length === 0) return text('No new messages.');
         const agents = await client.agents(workspace).catch(() => []);
-        const framed = frameMessages(page.messages, {
-          sender: (address): SenderInfo | undefined => {
-            const known = agents.find((a) => a.address === address);
-            return known ? { vendor: known.vendor } : undefined;
-          },
-        });
+        const framed = frameMessages(page.messages, { sender: senderResolver(agents) });
         if (args.mark_read) {
           await client.ack(workspace, page.next_after); // the server starts the next read here
         }

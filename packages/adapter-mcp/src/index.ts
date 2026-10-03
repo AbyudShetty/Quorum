@@ -5,6 +5,7 @@ export {
   saveAttachment,
 } from './attachment.js';
 export {
+  type AgentEntry,
   ApiError,
   type ConnectOptions,
   IdentityError,
@@ -24,6 +25,7 @@ export {
   frameMessage,
   frameMessages,
   newFrameNonce,
+  senderResolver,
   type SenderInfo,
 } from './framing.js';
 export {
@@ -32,4 +34,11 @@ export {
   type McpDependencies,
   serveStdio,
 } from './mcp-server.js';
+export {
+  HEARTBEAT_INTERVAL_MS,
+  type Heartbeat,
+  type HeartbeatOptions,
+  type PresenceStatus,
+  startHeartbeat,
+} from './heartbeat.js';
 export { type FlushResult, Outbox, type QueuedMessage, type SendFn } from './outbox.js';

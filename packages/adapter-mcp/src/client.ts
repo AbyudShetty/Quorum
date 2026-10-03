@@ -92,6 +92,16 @@ export const resolveTarget = async (dataDir: string): Promise<Target> => {
   };
 };
 
+/** One entry of `GET …/agents`. `folder` is the folder name only, never a path. */
+export interface AgentEntry {
+  id: string;
+  address: string;
+  vendor: string;
+  folder?: string;
+  presence: string;
+  status?: string;
+}
+
 export class QuorumClient {
   readonly #target: Target;
   readonly #key: string;
@@ -293,13 +303,9 @@ export class QuorumClient {
     await this.call('POST', `/v1/workspaces/${workspace}/inbox/ack`, { up_to: upTo });
   }
 
-  async agents(
-    workspace: string,
-  ): Promise<{ id: string; address: string; vendor: string; presence: string }[]> {
+  async agents(workspace: string): Promise<AgentEntry[]> {
     const reply = await this.call('GET', `/v1/workspaces/${workspace}/agents`);
-    return (
-      reply.body as { agents: { id: string; address: string; vendor: string; presence: string }[] }
-    ).agents;
+    return (reply.body as { agents: AgentEntry[] }).agents;
   }
 
   /**

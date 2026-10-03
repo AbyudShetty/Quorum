@@ -35,6 +35,16 @@ const oneLine = (text: string, max = 64): string =>
     .trim()
     .slice(0, max);
 
+/** Look up vendor and folder name for senders from the workspace's agent list. */
+export const senderResolver =
+  (agents: readonly { address: string; vendor: string; folder?: string }[]) =>
+  (address: string): SenderInfo | undefined => {
+    const known = agents.find((a) => a.address === address);
+    return known
+      ? { vendor: known.vendor, ...(known.folder ? { folder: known.folder } : {}) }
+      : undefined;
+  };
+
 /** One message in the frame of MESSAGE_SPEC §8. */
 export const frameMessage = (message: Message, options: FrameOptions = {}): string => {
   const nonce = options.nonce ?? newFrameNonce();

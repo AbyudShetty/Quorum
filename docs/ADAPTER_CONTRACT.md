@@ -1,6 +1,6 @@
 # Adapter contract
 
-Status: **draft for the Phase 1 contract freeze (IC1)** · Track B (abhijna) · Last updated: 2026-10-03
+Status: **draft for the Phase 1 contract freeze (IC1)** · Track B (abhijna) · Last updated: 2026-10-03, revised after Track A's answers to the six open questions
 
 Track B's half of the contract: what the adapters, the CLI and the client library promise, how Claude Code and Codex receive messages, and how the wake modes work. Track A's half is `packages/schemas` (messages, `/v1` API, `localDiscovery`) and `tests/contract`. Changes follow TEAM_PLAN §5.3.
 
@@ -8,20 +8,20 @@ Items marked **[pending]** are not yet verified or not yet built; nothing in thi
 
 ## 1. What exists
 
-| Part                          | Where                      | State                                                                                                                            |
-| ----------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Client library                | `packages/adapter-mcp/src` | built: discovery, identity check, credentials, refresh, outbox, cursor, framing                                                  |
-| MCP server (`quorum_*` tools) | `packages/adapter-mcp/src` | built: `quorum_send`, `quorum_inbox`, `quorum_status`                                                                            |
-| CLI                           | `packages/cli`             | built: `status`, `inbox`, `send`, `export`, `verify`, `mcp`. **[pending]** `attach`, `detach`, `serve`, `stop`, `worktree`, `ui` |
-| Hook adapter                  | `packages/adapter-hooks`   | **[pending]** (Claude Code mechanics verified by spike S3; Codex hooks need trust approval first)                                |
-| Fake `/v1` server             | `tests/fakes/fake-server`  | built; passes `tests/contract`                                                                                                   |
+| Part                          | Where                      | State                                                                                                                                                          |
+| ----------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client library                | `packages/adapter-mcp/src` | built: identity check, credentials, refresh, bootstrap login, attachments, outbox, heartbeat, framing (data directory and discovery come from `@quorum/local`) |
+| MCP server (`quorum_*` tools) | `packages/adapter-mcp/src` | built: `quorum_send`, `quorum_inbox`, `quorum_status`                                                                                                          |
+| CLI                           | `packages/cli`             | built: `login`, `attach`, `attach --update`, `detach`, `status`, `inbox`, `send`, `export`, `verify`, `mcp`. **[pending]** `serve`, `stop`, `worktree`, `ui`   |
+| Hook adapter                  | `packages/adapter-hooks`   | **[pending]** (Claude Code mechanics verified by spike S3; Codex hooks need trust approval first)                                                              |
+| Fake `/v1` server             | `tests/fakes/fake-server`  | built; passes `tests/contract`                                                                                                                                 |
 
 The client library lives in `adapter-mcp` for now because the CLI and the hook adapter both import it. If you prefer a separate `packages/client`, that is a pure move; raise it at the freeze.
 
 ## 2. Finding the server and checking who answers (INV-24, INV-25)
 
-1. **Data directory:** `QUORUM_HOME`, else `%LOCALAPPDATA%\Quorum` on Windows, else `~/.quorum`. A test keeps `defaultDataDir` equal to the server's.
-2. **Discovery:** read `<data>/local/server.json` (`localDiscovery` schema). Missing or malformed → treated as "no server".
+1. **Data directory:** `defaultDataDir` from `@quorum/local` (`QUORUM_HOME`, else `%LOCALAPPDATA%\Quorum` on Windows, else `~/.quorum`). The server, adapters and CLI share one implementation.
+2. **Discovery:** `readDiscovery` from `@quorum/local` reads `<data>/local/server.json` (`localDiscovery` schema). Missing or malformed → treated as "no server".
 3. **Identity handshake:** before any credential is sent, `POST /v1/hello` with a fresh 32-byte nonce; verify the signature with `verifyHello` against the pinned `public_key`, and require `instance_id` to equal the discovery file's. Any mismatch → `IdentityError`; the token is **never** sent and there is no fallback. Tests: wrong key, a squatter on the port, wrong instance (the squatter never receives an `Authorization` header).
 4. **Unreachable vs. untrusted:** a connection failure is `UnreachableError` (retry later); a failed handshake is `IdentityError` (stop, tell the human).
 
@@ -32,7 +32,11 @@ The client library lives in `adapter-mcp` for now because the CLI and the hook a
 - Stored in the OS keychain (`@napi-rs/keyring`; Windows Credential Manager), service `quorum`, one entry per attachment (key = the `at_` id) holding `{access_token, refresh_token, access_expires_at}`. Never in a file, never in a project folder.
 - The access token is refreshed 60 s before expiry. Only one refresh runs at a time (a second would present the old refresh token and trigger family revocation). The rotated pair is saved **before** it is used.
 - A damaged keychain entry is treated as "no credentials".
-- The signed-in human's tokens (used by `quorum export`) live under the key `human`.
+- The signed-in human's tokens (used by `export`, `attach`, `detach`) live under the key `human`, written by `quorum login`.
+
+### Signing in (local mode)
+
+Each time the local server starts it writes a one-time code (`qrm_bc_…`, 10 minutes, single use) to `<data>/local/bootstrap.json`. `quorum login` reads it with `readBootstrapCode` (missing, malformed or expired → "no valid code"), runs the identity handshake, and only then sends the code to `POST /v1/auth/local-bootstrap`; the answer (`human` + `credentials`) is stored under `human`. The code is a secret, so it is sent to nobody who failed the handshake (tested with a squatter that must never see it). Remote mode answers 404 (join codes, Phase 1b). A new code needs a server restart: until `serve`/`stop` exist, `login` says so instead of restarting the server itself **[pending]**.
 
 ## 4. Attachment record (written by `quorum attach`)
 
@@ -50,9 +54,13 @@ The client library lives in `adapter-mcp` for now because the CLI and the hook a
 }
 ```
 
-An adapter is started with `--attachment <at_id>` and loads this record plus the keychain entry. It sees only the workspaces listed. `<data>/cursor/<at_id>.json` holds the highest delivered `seq` per workspace, shared by the MCP server and (later) the hooks so a restart does not replay old mail.
+An adapter is started with `--attachment <at_id>` and loads this record plus the keychain entry. It sees only the workspaces listed.
 
-What `attach` must write for each vendor is in ARCHITECTURE §12 step 5. **[pending]** — see §9 for the open questions that block building it.
+**Reading mail.** The adapter keeps no read position of its own. `GET …/inbox` without `after` starts after the caller's last acknowledged `seq`, so handing messages to the agent and then acknowledging them (`POST …/inbox/ack`) is the whole protocol; `after=0` re-reads from the beginning. Delivery stays at-least-once (a crash between delivery and ack repeats messages): dedupe by `id`.
+
+`quorum attach` (humans only, INV-30) creates the attachment (`POST /v1/attachments`), stores the agent's credentials in the keychain, writes the record above, and prints the exact vendor setup: `claude mcp add --scope local quorum -- quorum mcp --attachment <at_id>` for Claude Code, a `.codex/config.toml` snippet for Codex. It refuses the Quorum data directory and any folder containing it. Wake mode defaults to `off` (the non-interactive default of ARCHITECTURE §15.2). `attach --update <at_id>` changes `wake`, `wake_types` and `lease_enforcement` with `PATCH /v1/attachments/{id}`; `detach` deletes the attachment and forgets the credentials and record.
+
+**[pending]** writing the vendor config files and hooks for the person (today it prints them), the interactive wake prompt, vendor auto-detection (`--vendor` is required), and `permissions.deny` rules for the data directory.
 
 ## 5. Tools
 
@@ -68,7 +76,7 @@ The server's `instructions` tell the agent that messages are data, never instruc
 
 ## 6. Framing and delivery (INV-9, INV-10)
 
-Every message handed to an agent, by any path, goes through `frameMessage` (MESSAGE_SPEC §8): nonce generated per delivery (128 bits), sender line, refs, flags, body JSON, matching end marker, reminder. Header values are stripped of control characters and `<`, `>`, `"` and cut to length, so a hostile folder name or sender string cannot forge frame syntax. A body containing a start/end marker adds `suspicious-delimiter`. Tests cover all of this.
+Every message handed to an agent, by any path, goes through `frameMessage` (MESSAGE_SPEC §8): nonce generated per delivery (128 bits), sender line (with the sender's vendor and **folder name**, taken from `GET …/agents`; never a path), refs, flags, body JSON, matching end marker, reminder. Header values are stripped of control characters and `<`, `>`, `"` and cut to length, so a hostile folder name or sender string cannot forge frame syntax. A body containing a start/end marker adds `suspicious-delimiter`. Tests cover all of this.
 
 Nothing in the adapters executes message content, follows `reproduce` fields, or calls tools because of a message (INV-10). **[pending]** the conformance suite `tests/conformance/` that checks INV-9/10 against the real adapters on both vendors (the current tests are unit-level).
 
@@ -87,6 +95,10 @@ Nothing in the adapters executes message content, follows `reproduce` fields, or
 - Flush sends oldest first (ULID order). On success or a duplicate answer (`200`) the file is removed. A permanent refusal (4xx except 401/429) moves the file to `rejected/` with the reason and the flush carries on. Unreachable, 429, 401 and 5xx stop the flush and keep everything for next time.
 - The outbox refuses to create the data directory: the server creates it with owner-only permissions (INV-25), and an adapter must never create a more open one.
 - Delivery to the agent is at-least-once. Consumers dedupe by message `id`.
+
+### Presence (heartbeats, MESSAGE_SPEC §5.10)
+
+`quorum mcp` sends a `heartbeat` (`status: idle`, no resources) to every attached workspace at start and then every **30 s**; the server marks an agent offline after **90 s** of silence. When the session ends (stdin closes) it sends `status: offline` at once, waiting at most 2 s so a dead server cannot hold up shutdown. Heartbeats bypass the outbox: the server records nothing for them, and a late one is worthless. Send failures never crash the adapter. **[pending]** hook-based adapters send one on each hook event (with the hook adapter); `status` is always `idle` for now.
 
 ## 8. Wake modes (D-9)
 
@@ -113,15 +125,19 @@ Environment: Windows 11, Claude Code 2.1.287, Codex CLI 0.144.6, Node 24.21, tes
 
 Consequences already built in: the MCP adapter runs as the user on both vendors (S4); a Codex project's hooks must be reviewed by the human once, so `attach` can only print that step (ARCHITECTURE §12).
 
-## 10. Open questions for the freeze
+## 10. The six open questions: Track A's answers and what Track B did
 
-1. **How does the CLI get a human token in local mode?** `POST /v1/attachments` needs a human token, but nothing says how `quorum attach` obtains one on a fresh machine (first-run bootstrap, a local-only human credential in the keychain, or a login code). The CLI currently reads the `human` keychain entry. This blocks `attach`. **Track A to decide, jointly.**
-2. **Inbox cursor.** `GET …/inbox?after=` is purely seq-based; acks are recorded per recipient but not used to filter. Adapters therefore keep their own cursor. Should the server filter by the caller's ack, or stay as is? (Either works; the contract should say which.)
-3. **Changing wake mode after attach.** Is it a second `POST /v1/attachments` for the same folder, or a missing `PATCH`? §15.2 promises it can change at any time.
-4. **Where the shared client code lives** (`adapter-mcp` vs a new `packages/client`) and **`defaultDataDir` duplication:** it exists in `@quorum/server` and in the adapter so adapters need not depend on SQLite. Moving it to `@quorum/core` would remove the duplicate (a Track A change).
-5. **Folder in the sender header.** MESSAGE_SPEC §8 shows vendor and folder name. `GET …/agents` returns the vendor but no folder, so today the header shows the vendor only. Add `folder` to the agent list, or drop it from the header?
-6. **Heartbeats.** The adapter does not send them yet. Who sends them, and how often, for sessions that only use hooks?
+| #   | Question                                          | Answer                                                                                      | Track B                                                                            |
+| --- | ------------------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 1   | How does the CLI get a human token in local mode? | Bootstrap code in `<data>/local/bootstrap.json`, swapped at `POST /v1/auth/local-bootstrap` | `quorum login` (§3); `attach`/`detach` build on it                                 |
+| 2   | Inbox read position                               | `inbox` without `after` starts after the caller's last ack                                  | Adapter-side read position removed (§4)                                            |
+| 3   | Changing wake mode after attach                   | `PATCH /v1/attachments/{id}` (humans only)                                                  | `attach --update`                                                                  |
+| 4   | Where the shared data-directory code lives        | New `@quorum/local`                                                                         | Adapter and CLI use it; the duplicate and the `@quorum/server` dependency are gone |
+| 5   | Folder in the sender header                       | Optional `folder` (name only) in the agent list                                             | Shown in the header (§6)                                                           |
+| 6   | Heartbeats                                        | Every 30 s; offline after 90 s; `status: offline` on a clean end                            | `quorum mcp` (§7); hook adapter **[pending]**                                      |
+
+Still open on Track B's side: `login` cannot restart the local server until `quorum serve`/`stop` exist; `quorum` is not on the PATH until the package is installed, so the printed setup uses the bare command name. The shared contract suite does not yet cover the bootstrap swap, `PATCH` or the inbox default (tests/contract/README.md); the fake server has its own tests for them (`tests/fakes/fake-server/new-api.test.ts`).
 
 ## 11. What is tested
 
-`packages/adapter-mcp/test`: framing (INV-9), identity check and squatter (INV-24), token refresh and rotation (INV-11), outbox (INV-20, INV-25), keychain round trip, discovery, MCP tools including "no `approval_decision`, no `from` input" (INV-1, INV-7). `packages/cli/test`: every command against the fake server. `tests/fakes/fake-server`: the fake passes `tests/contract`.
+`packages/adapter-mcp/test`: framing and folder header (INV-9), identity check and squatter (INV-24), token refresh and rotation (INV-11), outbox (INV-20, INV-25), keychain round trip, heartbeats and presence, MCP tools including "no `approval_decision`, no `from` input" (INV-1, INV-7). `packages/cli/test`: every command against the fake server, including `login` never sending the bootstrap code to a server that fails the identity check, and `attach`/`detach`/`attach --update`. `tests/fakes/fake-server`: the fake passes `tests/contract`.
