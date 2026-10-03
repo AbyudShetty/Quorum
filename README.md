@@ -28,15 +28,18 @@ When two people each run an AI coding agent on separate machines, the humans bec
 
 Phase 1 so far:
 
-| Part                                                                                                                              | State                         |
-| --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `packages/schemas`: message formats, `/v1` API (OpenAPI), validators                                                              | ✅                            |
-| `tests/contract`: tests every `/v1` server must pass                                                                              | ✅ (run once a server exists) |
-| `packages/core`: event log and hash chain, message rules, secret scanning, tokens, wake rules                                     | ✅                            |
-| `packages/local`: local-mode files shared with adapters and CLI (private data folder, discovery file, bootstrap code, start lock) | ✅                            |
-| `packages/server`: SQLite storage (crash-tested), identity key, bootstrap code, request guard                                     | ✅                            |
-| Server HTTP endpoints                                                                                                             | after the contract freeze     |
-| Adapters for Claude Code and Codex, CLI, web timeline                                                                             | next (Track B)                |
+| Part                                                                                                                                             | State                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
+| `packages/schemas`: message formats, `/v1` API (OpenAPI), validators                                                                             | ✅                            |
+| `tests/contract`: tests every `/v1` server must pass                                                                                             | ✅ (run once a server exists) |
+| `packages/core`: event log and hash chain, message rules, secret scanning, tokens, wake rules                                                    | ✅                            |
+| `packages/local`: local-mode files shared with adapters and CLI (private data folder, discovery file, bootstrap code, start lock)                | ✅                            |
+| `packages/server`: SQLite storage (crash-tested), identity key, bootstrap code, request guard                                                    | ✅                            |
+| Server HTTP endpoints                                                                                                                            | after the contract freeze     |
+| `packages/adapter-mcp` and `packages/cli`: client library, MCP tools, `login`/`attach`/`send`/`inbox`/`verify`, presence, shared-folder warnings | ✅ against the fake server    |
+| `packages/web`: read-only timeline (strict CSP)                                                                                                  | ✅ against the fake server    |
+| `packages/fleet`, `deploy/fleet`: simulated fleet incl. outage runs (50 containers, none lost)                                                   | ✅ against the fake server    |
+| Hook adapter (new mail while an agent works, wake modes), `serve`/`stop`, `worktree`, `ui`                                                       | next (Track B)                |
 
 ## Repository layout
 
@@ -46,10 +49,18 @@ packages/
   core/        domain logic: no network, database or HTML
   local/       local-mode files shared by server, adapters and CLI
   server/      storage, local mode, and (next) the /v1 HTTP API
+  adapter-mcp/ client library and MCP server for agents (Track B)
+  cli/         the `quorum` command (Track B)
+  web/         read-only web timeline (Track B)
+  fleet/       simulated agents for scale and outage runs (Track B)
 tests/
   contract/    the /v1 contract suite
+  fakes/       in-memory /v1 server for building and testing clients before the real server
+  conformance/ adapter security conformance (INV-9, INV-10)
+  e2e/         opt-in tests with real Claude Code, latency harness
   repo/        repository hygiene checks
-docs/          plan, specs, threat model, decisions, team plan
+docs/          plan, specs, threat model, decisions, team plan, adapter contract
+deploy/        Docker Compose for the simulated fleet
 config/        shared TypeScript configuration
 .github/       CI, contributing guide, security policy
 ```

@@ -37,6 +37,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- README status table and repository layout now list the Track B packages, fake server, conformance and e2e tests and the fleet.
 - Outage testing (Track B): client requests now time out (default 15 s) and report the server as unreachable instead of hanging; the fake server can simulate a dropped or frozen server (`setOutage`); fleet agents send through the real outbox and retry with a flusher; `deploy/fleet/run.mjs --outage N` drops the server mid-run. Verified in Docker: 50 agents, 5 s outage, 1500 of 1500 messages delivered; a server that never returns fails the run with `unsent`/`lost`. 5 new tests.
 - `@quorum/adapter-mcp` and the fake server (Track B): session registration and shared-working-tree warnings (INV-28). The adapter finds the git working tree and common directory by reading `.git` (no `git` process, checked against real git), registers a session at start, and warns the agent in its instructions and `quorum_status` when another agent is in the same folder; the fake now assigns stable repo/worktree ids and reports shared trees. 11 new tests.
 - `@quorum/adapter-mcp` (Track B): presence heartbeats every 30 s with an immediate `offline` on a clean end (`quorum mcp` starts them); the sender header now shows the sender's folder name from the agent list. `docs/ADAPTER_CONTRACT.md` records Track A's answers to the six open questions and what each changed in the adapters and CLI. 7 new tests.
