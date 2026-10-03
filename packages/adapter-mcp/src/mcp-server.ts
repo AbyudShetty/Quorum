@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { AttachmentInfo } from './attachment.js';
 import { ApiError, type QuorumClient, UnreachableError } from './client.js';
 import { frameMessages, senderResolver } from './framing.js';
+import { sharedWorktreeNotice } from './session.js';
 import type { Outbox } from './outbox.js';
 
 /** Types an agent may send. `approval_decision` is human-only (INV-1); `heartbeat` is automatic. */
@@ -27,6 +28,8 @@ export interface McpDependencies {
   client: QuorumClient;
   outbox: Outbox;
   attachment: AttachmentInfo;
+  /** The registered session, if any: tells the agent when it shares its working tree (INV-28). */
+  session?: { sharedWorktreeWith: readonly string[] };
   ids?: IdFactory;
   now?: () => Date;
 }
@@ -56,9 +59,10 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
   const ids = deps.ids ?? createIdFactory();
   const now = deps.now ?? (() => new Date());
 
+  const notice = sharedWorktreeNotice(deps.session?.sharedWorktreeWith ?? []);
   const server = new McpServer(
     { name: 'quorum', version: '0.0.0' },
-    { instructions: INSTRUCTIONS },
+    { instructions: notice ? `${INSTRUCTIONS} ${notice}` : INSTRUCTIONS },
   );
 
   const workspaceFor = (given: string | undefined): string => {
@@ -191,6 +195,7 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
         const lines = [
           `You are ${attachment.agent} (${attachment.vendor}) in ${workspace}.`,
           `Wake mode: ${attachment.wake}. Messages waiting to be sent: ${String(queued)}.`,
+          ...(notice ? [notice] : []),
         ];
         try {
           const agents = await client.agents(workspace);

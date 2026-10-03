@@ -21,6 +21,8 @@ import {
   folderName,
   generateToken,
   hashToken,
+  pathKey,
+  sharedWorktreeWith,
   tokenMatches,
 } from '@quorum/core';
 import { removeBootstrapCode, writeBootstrapCode } from '@quorum/local';
@@ -129,7 +131,18 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
   const PRESENCE_TTL_MS = 90_000;
   let bootstrap: { hash: string; expiresAt: number; used: boolean } | undefined;
   let owner: Account | undefined;
-  const sessions = new Map<string, Account>();
+  /** Live sessions: who, and in which working tree (INV-28). */
+  const sessions = new Map<string, { account: Account; worktreeKey: string }>();
+  /** Stable repository and worktree ids per canonical path, as the real server assigns them. */
+  const repoIds = new Map<string, string>();
+  const worktreeIds = new Map<string, string>();
+  const stableId = (map: Map<string, string>, key: string, kind: 'repository' | 'worktree') => {
+    const known = map.get(key);
+    if (known) return known;
+    const made = ids.id(kind);
+    map.set(key, made);
+    return made;
+  };
 
   const publicAttachment = (a: AttachmentRecord) => ({
     id: a.id,
@@ -532,22 +545,36 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
         );
       }
       const body = checkPayload('sessionCreate', await readBody(req)) as {
+        root: string;
         git?: { common_dir: string; worktree_root: string };
       };
+      const platform = process.platform === 'win32' ? 'win32' : 'posix';
+      // The working tree is the git worktree root, or the attached folder outside git.
+      const worktreeKey = pathKey(body.git?.worktree_root ?? body.root, platform);
       const sessionId = ids.id('session');
-      sessions.set(sessionId, account);
+      const live = [...sessions.values()].map((s) => ({
+        agent: s.account.address,
+        worktreeKey: s.worktreeKey,
+      }));
+      const sharedWith = sharedWorktreeWith({ agent: account.address, worktreeKey }, live);
+      sessions.set(sessionId, { account, worktreeKey });
       json(res, 201, {
         session_id: sessionId,
         agent: { id: account.id, address: account.address },
-        ...(body.git ? { repo: ids.id('repository'), worktree: ids.id('worktree') } : {}),
-        shared_worktree_with: [],
+        ...(body.git
+          ? {
+              repo: stableId(repoIds, pathKey(body.git.common_dir, platform), 'repository'),
+              worktree: stableId(worktreeIds, worktreeKey, 'worktree'),
+            }
+          : {}),
+        shared_worktree_with: sharedWith,
       });
       return;
     }
 
     m = /^\/v1\/sessions\/(sess_[0-9A-HJKMNP-TV-Z]{26})$/.exec(path);
     if (m && method === 'DELETE') {
-      if (sessions.get(m[1] ?? '') !== account) {
+      if (sessions.get(m[1] ?? '')?.account !== account) {
         throw new DomainError(
           'not_found',
           'session.not_found',

@@ -7,6 +7,8 @@ import {
   type AttachmentCreate,
   type AttachmentCreated,
   type AttachmentUpdate,
+  type SessionCreate,
+  type SessionCreated,
   type DeliveredEnvelope,
   type ErrorResponse,
   type HelloResponse,
@@ -343,6 +345,16 @@ export class QuorumClient {
 
   async deleteAttachment(id: string): Promise<void> {
     await this.call('DELETE', `/v1/attachments/${id}`);
+  }
+
+  /** Agents only: register a live vendor session; the answer says who shares the working tree. */
+  async createSession(request: SessionCreate): Promise<SessionCreated> {
+    const reply = await this.call('POST', '/v1/sessions', request);
+    return reply.body as SessionCreated;
+  }
+
+  async deleteSession(id: string): Promise<void> {
+    await this.call('DELETE', `/v1/sessions/${id}`);
   }
 
   async workspaces(): Promise<{ id: string; name: string }[]> {

@@ -18,6 +18,7 @@ import {
   frameMessages,
   senderResolver,
   startHeartbeat,
+  startSession,
   IdentityError,
   loadAttachment,
   removeAttachment,
@@ -494,16 +495,21 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
   const info = await attachmentOf(env, values.attachment);
   const dataDir = dataDirOf(env);
   const client = await connect(env, info.attachment);
+  // Tell the server which working tree this session is in, so it can warn when another agent is
+  // in the same one (INV-28). Best effort: an unreachable server must not stop the agent.
+  const session = await startSession({ client, root: info.root });
   const server = createQuorumMcpServer({
     client,
     outbox: new Outbox(dataDir, info.attachment),
     attachment: info,
+    ...(session ? { session } : {}),
   });
   // Presence: a heartbeat every 30 s, and `offline` at once when the session ends (stdin closes
   // when Claude Code or Codex exits).
   const presence = startHeartbeat({ client, attachment: info });
   server.server.onclose = () => {
     void presence.stop();
+    void session?.end();
   };
   await serveStdio(server);
   return 0;

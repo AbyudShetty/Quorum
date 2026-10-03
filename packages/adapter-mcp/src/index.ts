@@ -20,6 +20,7 @@ export {
   MemoryCredentialStore,
   type StoredCredentials,
 } from './credentials.js';
+export { findGit, type GitInfo } from './git.js';
 export {
   type FrameOptions,
   frameMessage,
@@ -41,4 +42,10 @@ export {
   type PresenceStatus,
   startHeartbeat,
 } from './heartbeat.js';
+export {
+  type Session,
+  sharedWorktreeNotice,
+  startSession,
+  type StartSessionOptions,
+} from './session.js';
 export { type FlushResult, Outbox, type QueuedMessage, type SendFn } from './outbox.js';
