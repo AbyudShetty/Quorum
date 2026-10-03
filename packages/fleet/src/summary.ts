@@ -12,6 +12,8 @@ export interface FleetSummary {
   /** Received by an agent it was not addressed to (must be 0). */
   misdelivered: number;
   duplicates: number;
+  /** Still queued in agents' outboxes when the run ended. */
+  unsent: number;
   latencyMs: { p50: number; p95: number; p99: number; max: number };
   errors: Record<string, number>;
 }
@@ -42,6 +44,7 @@ export const summarize = (results: readonly AgentResult[]): FleetSummary => {
   const latencies: number[] = [];
   const errors: Record<string, number> = {};
   let duplicates = 0;
+  let unsent = 0;
   for (const r of results) {
     for (const m of r.received) {
       received += 1;
@@ -50,6 +53,7 @@ export const summarize = (results: readonly AgentResult[]): FleetSummary => {
       if (Number.isFinite(m.latencyMs)) latencies.push(m.latencyMs);
     }
     duplicates += r.duplicates;
+    unsent += r.unsent ?? 0;
     for (const [code, n] of Object.entries(r.errors)) errors[code] = (errors[code] ?? 0) + n;
   }
   latencies.sort((a, b) => a - b);
@@ -61,6 +65,7 @@ export const summarize = (results: readonly AgentResult[]): FleetSummary => {
     lost,
     misdelivered,
     duplicates,
+    unsent,
     latencyMs: {
       p50: percentile(latencies, 50),
       p95: percentile(latencies, 95),
@@ -76,11 +81,17 @@ const ms = (value: number): string => (Number.isFinite(value) ? `${value.toFixed
 export const formatSummary = (s: FleetSummary): string =>
   [
     `agents ${String(s.agents)}   sent ${String(s.sent)}   received ${String(s.received)}`,
-    `lost ${String(s.lost)}   misdelivered ${String(s.misdelivered)}   duplicates ${String(s.duplicates)}`,
+    `lost ${String(s.lost)}   misdelivered ${String(s.misdelivered)}   duplicates ${String(s.duplicates)}   unsent ${String(s.unsent)}`,
     `latency p50 ${ms(s.latencyMs.p50)}   p95 ${ms(s.latencyMs.p95)}   p99 ${ms(s.latencyMs.p99)}   max ${ms(s.latencyMs.max)}`,
     `errors ${Object.keys(s.errors).length === 0 ? 'none' : JSON.stringify(s.errors)}`,
   ].join('\n');
 
-/** The run passes when nothing was lost or misdelivered and no request failed. */
-export const passed = (s: FleetSummary): boolean =>
-  s.lost === 0 && s.misdelivered === 0 && Object.keys(s.errors).length === 0;
+/**
+ * The run passes when nothing was lost, misdelivered or left unsent and no request failed. In an
+ * outage run, "server unreachable" is expected while the server is down and does not fail it.
+ */
+export const passed = (s: FleetSummary, options: { allowUnreachable?: boolean } = {}): boolean => {
+  const tolerated = options.allowUnreachable ? ['unreachable'] : [];
+  const unexpected = Object.keys(s.errors).filter((code) => !tolerated.includes(code));
+  return s.lost === 0 && s.misdelivered === 0 && s.unsent === 0 && unexpected.length === 0;
+};

@@ -75,6 +75,11 @@ export interface ConnectOptions {
   store: CredentialStore;
   fetch?: typeof fetch;
   now?: () => number;
+  /**
+   * Give up on a request after this long and report the server as unreachable. A hung local server
+   * must not hang the agent's tool call for ever. Default 15 s.
+   */
+  requestTimeoutMs?: number;
 }
 
 /** Refresh this long before the access token expires. */
@@ -110,6 +115,7 @@ export class QuorumClient {
   readonly #store: CredentialStore;
   readonly #fetch: typeof fetch;
   readonly #now: () => number;
+  readonly #timeoutMs: number;
   #credentials: StoredCredentials | undefined;
   #refreshing: Promise<StoredCredentials> | undefined;
 
@@ -119,7 +125,9 @@ export class QuorumClient {
     store: CredentialStore,
     fetchImpl: typeof fetch,
     now: () => number,
+    timeoutMs: number,
   ) {
+    this.#timeoutMs = timeoutMs;
     this.#target = target;
     this.#key = key;
     this.#store = store;
@@ -136,6 +144,7 @@ export class QuorumClient {
       options.store,
       options.fetch ?? fetch,
       options.now ?? Date.now,
+      options.requestTimeoutMs ?? 15_000,
     );
     await client.#handshake();
     client.#credentials = await options.store.load(options.credentialKey);
@@ -176,6 +185,7 @@ export class QuorumClient {
       return await this.#fetch(`${this.#target.baseUrl}${path}`, {
         method,
         headers,
+        signal: AbortSignal.timeout(this.#timeoutMs),
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch (error) {

@@ -4,8 +4,8 @@
 //   node tests/fakes/fake-server/dist/serve.js
 // Environment: FLEET_AGENTS (default 50), FLEET_PORT (8787), FLEET_HOST (0.0.0.0),
 // FLEET_PUBLIC_URL (http://server:8787), FLEET_MANIFEST (/shared/fleet.json).
-import { mkdir, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { startFakeServer } from './fake-server.js';
 
 const count = Number(process.env.FLEET_AGENTS ?? 50);
@@ -40,6 +40,34 @@ await rename(`${manifestPath}.tmp`, manifestPath);
 console.log(
   `fake /v1 server on ${host}:${String(port)} with ${String(count)} agents; manifest ${manifestPath}`,
 );
+
+// Optional chaos: once every agent is at the start barrier, drop all connections for a while
+// (FLEET_OUTAGE_AT_S seconds after the start, for FLEET_OUTAGE_S seconds). State is kept, like a
+// server that was unreachable rather than lost.
+const outageFor = Number(process.env.FLEET_OUTAGE_S ?? 0);
+if (outageFor > 0) {
+  const outageAt = Number(process.env.FLEET_OUTAGE_AT_S ?? 3);
+  const readyDir = join(dirname(manifestPath), 'ready');
+  const watcher = setInterval(() => {
+    void readdir(readyDir)
+      .catch(() => [] as string[])
+      .then((files) => {
+        if (files.filter((f) => f.startsWith('ready-')).length < count) return;
+        clearInterval(watcher);
+        setTimeout(() => {
+          server.setOutage('down');
+          console.log(`outage: server down for ${String(outageFor)} s`);
+        }, outageAt * 1000);
+        setTimeout(
+          () => {
+            server.setOutage('off');
+            console.log('outage: server back');
+          },
+          (outageAt + outageFor) * 1000,
+        );
+      });
+  }, 100);
+}
 
 const stop = () => {
   void server.close().then(() => process.exit(0));

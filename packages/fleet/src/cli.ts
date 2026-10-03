@@ -161,7 +161,7 @@ export const runFleetCli = async (
         );
         return 1;
       }
-      const ok = passed(summary);
+      const ok = passed(summary, { allowUnreachable: Number(env.FLEET_OUTAGE_S) > 0 });
       log(ok ? 'PASS' : 'FAIL');
       return ok || env.FLEET_FAIL_ON_LOSS === '0' ? 0 : 1;
     }
@@ -171,7 +171,7 @@ export const runFleetCli = async (
       const results = await runLocalFleet(manifest, runOptions(env));
       const summary = summarize(results);
       log(formatSummary(summary));
-      return passed(summary) ? 0 : 1;
+      return passed(summary, { allowUnreachable: Number(env.FLEET_OUTAGE_S) > 0 }) ? 0 : 1;
     }
 
     default:

@@ -20,6 +20,7 @@ PowerShell: set the same names with `$env:NAME = "value"` and run the two `node`
 
 ```sh
 node deploy/fleet/run.mjs --agents 50 --duration 10      # builds, runs, prints the report, tears down
+node deploy/fleet/run.mjs --agents 50 --duration 15 --outage 5 --outage-at 4   # drop the server for 5 s mid-run
 ```
 
 The exit code is the verdict (0 pass, 1 fail, 2 could not run). `--keep` leaves the containers and volume for inspection (`docker compose -f deploy/fleet/docker-compose.yml down -v` removes them). The script is plain Node, so it behaves the same in PowerShell, cmd and bash.
@@ -32,31 +33,45 @@ Without the barrier, a 50-agent run in Docker showed 90 of 1000 messages "lost" 
 
 ## Settings (environment)
 
-| Variable           | Default | Meaning                                                  |
-| ------------------ | ------- | -------------------------------------------------------- |
-| `FLEET_AGENTS`     | 20      | Number of agents (2 to 500)                              |
-| `FLEET_DURATION_S` | 30      | How long each agent sends                                |
-| `FLEET_RATE`       | 2       | Messages per second per agent, to random peers           |
-| `FLEET_DRAIN_S`    | 3       | Extra receiving time so late messages count              |
-| `FLEET_POLL_MS`    | 100     | Inbox poll interval (latency is bounded by this)         |
-| `FLEET_SEED`       | 1       | Peer-choice seed; the same seed repeats the same traffic |
+| Variable              | Default               | Meaning                                                              |
+| --------------------- | --------------------- | -------------------------------------------------------------------- |
+| `FLEET_AGENTS`        | 20                    | Number of agents (2 to 500)                                          |
+| `FLEET_DURATION_S`    | 30                    | How long each agent sends                                            |
+| `FLEET_RATE`          | 2                     | Messages per second per agent, to random peers                       |
+| `FLEET_DRAIN_S`       | 3                     | Extra receiving time so late messages count                          |
+| `FLEET_POLL_MS`       | 100                   | Inbox poll interval (latency is bounded by this)                     |
+| `FLEET_SEED`          | 1                     | Peer-choice seed; the same seed repeats the same traffic             |
+| `FLEET_OUTAGE_S`      | 0                     | Chaos: seconds the server drops every connection (its state is kept) |
+| `FLEET_OUTAGE_AT_S`   | 3                     | Seconds after the start barrier before the outage begins             |
+| `FLEET_BARRIER_S`     | 120                   | How long an agent waits at the start barrier before failing          |
+| `FLEET_REPORT_WAIT_S` | duration + drain + 60 | How long `report` waits for missing results                          |
 
 ## What a run checks
 
 - **lost:** the server accepted it (`201`) but the addressed agent never saw it within the drain window.
 - **misdelivered:** an agent saw a direct message addressed to someone else (inbox isolation).
-- **errors:** every non-success reply or network failure, by code.
+- **unsent:** still in an agent's outbox when the run ended.
+- **errors:** every non-success reply or network failure, by code. In an outage run `unreachable` is expected and tolerated; any other error still fails the run.
 - **latency:** sender clock to receiver clock (same host, so skew is negligible), p50/p95/p99/max. With polling, expect roughly half the poll interval on average.
+
+## Outage runs (chaos)
+
+Agents send like the real adapters do: each message is written to the outbox first and a separate flusher delivers it, so a dead server delays mail instead of losing it (INV-20). With `--outage`, the server container drops every connection for a while once all agents are running, then comes back with its state intact. The run passes only if every message still arrives. A control test (server never returns) must fail with `unsent` and `lost`, so the detector is proven too.
+
+Latency in these runs includes the outbox flush interval (up to 100 ms), so p50 is about 100 ms instead of the earlier ~50 ms.
 
 ## Results so far (fake server, one machine, 2026-10-03)
 
-| Run                                       | Sent | Lost | Misdelivered | p50   | p95    | max    |
-| ----------------------------------------- | ---- | ---- | ------------ | ----- | ------ | ------ |
-| 6 agents as separate host processes       | 72   | 0    | 0            | 48 ms | 64 ms  | 65 ms  |
-| 50 agents in one host process, 8 s        | 800  | 0    | 0            | 54 ms | 112 ms | 121 ms |
-| 20 containers, 8 s (before the barrier)   | 320  | 0    | 0            | 57 ms | 514 ms | 2.5 s  |
-| 50 containers, 10 s (before the barrier)  | 1000 | 90   | 0            | 66 ms | 3.6 s  | 10 s   |
-| **50 containers, 10 s, with the barrier** | 999  | 0    | 0            | 54 ms | 100 ms | 399 ms |
+| Run                                      | Sent | Lost | Misdelivered | p50    | p95    | max    |
+| ---------------------------------------- | ---- | ---- | ------------ | ------ | ------ | ------ |
+| 6 agents as separate host processes      | 72   | 0    | 0            | 48 ms  | 64 ms  | 65 ms  |
+| 50 agents in one host process, 8 s       | 800  | 0    | 0            | 54 ms  | 112 ms | 121 ms |
+| 20 containers, 8 s (before the barrier)  | 320  | 0    | 0            | 57 ms  | 514 ms | 2.5 s  |
+| 50 containers, 10 s (before the barrier) | 1000 | 90   | 0            | 66 ms  | 3.6 s  | 10 s   |
+| 50 containers, 10 s, with the barrier    | 999  | 0    | 0            | 54 ms  | 100 ms | 399 ms |
+| 50 containers, 10 s, outbox sending      | 999  | 0    | 0            | 108 ms | 212 ms | 656 ms |
+| 20 containers, 4 s outage mid-run        | 560  | 0    | 0            | 124 ms | 3.4 s  | 4.1 s  |
+| **50 containers, 5 s outage mid-run**    | 1500 | 0    | 0            | 145 ms | 4.6 s  | 5.5 s  |
 
 Docker Desktop VM: 16 CPUs, 16 GB. These measure the harness and client path against the **fake** server, not the real one. Latency is mostly the 100 ms poll interval.
 

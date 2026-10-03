@@ -25,6 +25,7 @@ Everything in `openapi.v1.json` except artifacts: health, hello, refresh (rotati
 ## Known differences from the real server
 
 - Heartbeats return a placeholder `seq` and are not recorded in the log; they only update presence.
+- `setOutage('down' | 'hang' | 'off')` simulates an unreachable or frozen server while keeping its state (the fleet's outage runs use it; a real restart would also lose the fake's in-memory log, which is why it is not a restart).
 - The bootstrap code file is written to a plain directory: the fake does not lock it down (INV-25 is the real server's job). Pass `dataDir` to get a code; `issueBootstrap()` simulates a restart.
 - `new-api.test.ts` covers the bootstrap, PATCH, inbox default, folder and heartbeat behaviour that `tests/contract` does not cover yet.
 - Sessions do not detect shared worktrees (`shared_worktree_with` is always empty).

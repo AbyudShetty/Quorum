@@ -1,10 +1,14 @@
 // One simulated agent: sends direct notes to random peers at a steady rate and polls its inbox,
 // recording what it sent and when everything it received arrived. It uses the same client library
 // as the real adapters (identity check, token refresh), so a fleet run exercises that path too.
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createIdFactory } from '@quorum/core';
 import {
   ApiError,
   MemoryCredentialStore,
+  Outbox,
   QuorumClient,
   type Target,
   UnreachableError,
@@ -26,6 +30,8 @@ export interface AgentConfig {
   /** How long it keeps receiving after it stops sending, so late messages are counted. */
   drainMs?: number;
   pollIntervalMs?: number;
+  /** How often queued messages are retried. Default 100 ms. */
+  flushIntervalMs?: number;
   /** Seed for peer choice, so a run can be repeated. */
   seed?: number;
   /**
@@ -42,6 +48,8 @@ export interface AgentResult {
   received: { id: string; from: string; latencyMs: number }[];
   duplicates: number;
   errors: Record<string, number>;
+  /** Still in the outbox when the run ended (never delivered). */
+  unsent?: number;
 }
 
 /** Small deterministic PRNG (mulberry32): the harness must be repeatable. */
@@ -89,6 +97,7 @@ export const runAgent = async (config: AgentConfig): Promise<AgentResult> => {
   };
 
   await config.barrier?.();
+  const outbox = new Outbox(await mkdtemp(join(tmpdir(), 'quorum-fleet-')), 'fleet');
 
   const ids = createIdFactory();
   const random = prng(config.seed ?? 1);
@@ -117,13 +126,31 @@ export const runAgent = async (config: AgentConfig): Promise<AgentResult> => {
         created_at: new Date(at).toISOString(),
         body: { text: 'fleet', sent_at: at, n: result.sent.length },
       } as unknown as SubmittedEnvelope;
+      // Like a real adapter: write to the outbox first. Delivery is the flusher's job, so a server
+      // outage delays messages instead of losing them (INV-20). "Sent" here means "queued".
       try {
-        await client.send(config.workspace, envelope);
+        await outbox.enqueue({ workspace: config.workspace, envelope });
         result.sent.push({ id: envelope.id, to, at });
       } catch (error) {
         fail(error);
       }
       next += gap;
+    }
+  };
+
+  const flusher = async () => {
+    while (Date.now() < receiveUntil) {
+      try {
+        if ((await outbox.size()) > 0) {
+          const flushed = await outbox.flush((ws, e) => client.send(ws, e));
+          for (const refused of flushed.rejected) {
+            result.errors[refused.code] = (result.errors[refused.code] ?? 0) + 1;
+          }
+        }
+      } catch (error) {
+        fail(error);
+      }
+      await sleep(config.flushIntervalMs ?? 100);
     }
   };
 
@@ -157,6 +184,7 @@ export const runAgent = async (config: AgentConfig): Promise<AgentResult> => {
     }
   };
 
-  await Promise.all([sender(), receiver()]);
+  await Promise.all([sender(), flusher(), receiver()]);
+  result.unsent = await outbox.size();
   return result;
 };

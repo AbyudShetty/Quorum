@@ -158,6 +158,51 @@ describe('fleet against the fake server', () => {
     expect(targets(second)).toEqual(targets(first));
   }, 30_000);
 
+  it('an outage mid-run loses nothing: the outbox holds messages until the server is back (INV-20)', async () => {
+    const manifest = await provision(8);
+    const fake = server as FakeServer;
+    const run = runLocalFleet(manifest, {
+      ratePerSecond: 5,
+      durationMs: 4000,
+      drainMs: 3000,
+      pollIntervalMs: 50,
+      seed: 5,
+    });
+    setTimeout(() => {
+      fake.setOutage('down');
+    }, 1000);
+    setTimeout(() => {
+      fake.setOutage('off');
+    }, 2500);
+    const summary = summarize(await run);
+    console.log(`fleet outage n=8
+${formatSummary(summary)}`);
+    expect(summary.errors.unreachable ?? 0).toBeGreaterThan(0); // the outage really happened
+    expect(summary).toMatchObject({ lost: 0, unsent: 0, misdelivered: 0 });
+    expect(summary.received).toBe(summary.sent);
+    expect(summary.latencyMs.max).toBeGreaterThan(1000); // some mail waited out the outage
+    expect(passed(summary, { allowUnreachable: true })).toBe(true);
+    expect(passed(summary)).toBe(false); // without the allowance, the errors are reported
+  }, 30_000);
+
+  it('a server that never comes back is reported as unsent and lost, not hidden', async () => {
+    const manifest = await provision(3);
+    const fake = server as FakeServer;
+    const run = runLocalFleet(manifest, {
+      ratePerSecond: 5,
+      durationMs: 1500,
+      drainMs: 500,
+      pollIntervalMs: 50,
+      seed: 6,
+    });
+    setTimeout(() => {
+      fake.setOutage('down');
+    }, 300);
+    const summary = summarize(await run);
+    expect(summary.unsent).toBeGreaterThan(0);
+    expect(passed(summary, { allowUnreachable: true })).toBe(false);
+  }, 30_000);
+
   it('container mode: replicas claim distinct indexes, then the report passes', async () => {
     const manifest = await provision(3);
     const dir = await mkdtemp(join(tmpdir(), 'quorum-fleet-'));

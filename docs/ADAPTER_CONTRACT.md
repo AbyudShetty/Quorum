@@ -93,6 +93,8 @@ Nothing in the adapters executes message content, follows `reproduce` fields, or
 
 - `quorum_send` and `quorum send` write `<data>/outbox/<attachment>/<msg id>.json` **before** any network call. One file per message, so two processes never rewrite each other's data.
 - Flush sends oldest first (ULID order). On success or a duplicate answer (`200`) the file is removed. A permanent refusal (4xx except 401/429) moves the file to `rejected/` with the reason and the flush carries on. Unreachable, 429, 401 and 5xx stop the flush and keep everything for next time.
+- Every request has a timeout (default 15 s, `requestTimeoutMs`): a server that accepts connections but never answers becomes `UnreachableError` like a dead one, so a frozen local server cannot hang the agent's tool call, and the outbox keeps the message.
+- Verified under failure: a fleet of 50 agents through a 5 s server outage delivered 1500 of 1500 messages, and a server that never returned was reported as unsent/lost (`deploy/fleet`, fake server).
 - The outbox refuses to create the data directory: the server creates it with owner-only permissions (INV-25), and an adapter must never create a more open one.
 - Delivery to the agent is at-least-once. Consumers dedupe by message `id`.
 

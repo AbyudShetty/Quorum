@@ -10,6 +10,9 @@ x-fleet-env: &fleet-env
   FLEET_DRAIN_S: ${FLEET_DRAIN_S:-3}
   FLEET_RATE: ${FLEET_RATE:-2}
   FLEET_POLL_MS: ${FLEET_POLL_MS:-100}
+  # Chaos: drop the server for FLEET_OUTAGE_S seconds, FLEET_OUTAGE_AT_S seconds after the start.
+  FLEET_OUTAGE_S: ${FLEET_OUTAGE_S:-0}
+  FLEET_OUTAGE_AT_S: ${FLEET_OUTAGE_AT_S:-3}
 
 services:
   prepare:

@@ -95,6 +95,11 @@ export interface FakeServer {
     folder?: string,
   ): { address: string; token: string; refreshToken: string };
   join(address: string, workspace: string): void;
+  /**
+   * Simulate an outage: `down` drops every connection at once (like a stopped server), `hang`
+   * accepts requests and never answers (like a frozen one), `off` is normal service. State is kept.
+   */
+  setOutage(mode: 'off' | 'down' | 'hang'): void;
   /** Write a fresh bootstrap code, as a restarted local server does. Needs `dataDir`. */
   issueBootstrap(): Promise<void>;
   close(): Promise<void>;
@@ -725,7 +730,13 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
     throw new DomainError('not_found', 'route.not_found', 'No such route.', 'See openapi.v1.json.');
   };
 
+  let outage: 'off' | 'down' | 'hang' = 'off';
   const server: Server = createServer((req, res) => {
+    if (outage === 'down') {
+      req.socket.destroy();
+      return;
+    }
+    if (outage === 'hang') return; // never answered; closed when the server stops
     const port = (server.address() as AddressInfo).port;
     route(req, res, port).catch((error: unknown) => {
       if (error instanceof DomainError) {
@@ -780,6 +791,9 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
       accounts.get(address)?.workspaces.add(workspace);
     },
     issueBootstrap: () => issueBootstrap(),
+    setOutage(mode) {
+      outage = mode;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         for (const sub of subscribers) sub.res.end();

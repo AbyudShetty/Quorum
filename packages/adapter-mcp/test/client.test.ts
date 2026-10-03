@@ -132,3 +132,25 @@ describe('QuorumClient tokens (INV-11)', () => {
     });
   });
 });
+
+describe('QuorumClient outages', () => {
+  it('reports a dropped server as unreachable and works again when it returns', async () => {
+    world = await startWorld();
+    const client = await connectAs(world);
+    world.server.setOutage('down');
+    await expect(client.inbox(world.workspace)).rejects.toBeInstanceOf(UnreachableError);
+    world.server.setOutage('off');
+    expect((await client.inbox(world.workspace)).messages).toEqual([]);
+  });
+
+  it('gives up on a server that accepts requests but never answers', async () => {
+    world = await startWorld();
+    const client = await connectAs(world, { requestTimeoutMs: 300 });
+    world.server.setOutage('hang');
+    const began = Date.now();
+    await expect(client.inbox(world.workspace)).rejects.toBeInstanceOf(UnreachableError);
+    expect(Date.now() - began).toBeLessThan(3000);
+    world.server.setOutage('off');
+    await client.inbox(world.workspace); // and recovers
+  });
+});

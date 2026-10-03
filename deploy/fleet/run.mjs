@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Runs one fleet in Docker Compose and exits with the verdict (0 = pass).
-//   node deploy/fleet/run.mjs [--agents 20] [--duration 30] [--rate 2] [--keep]
+//   node deploy/fleet/run.mjs [--agents 20] [--duration 30] [--rate 2] [--outage 4 --outage-at 4] [--keep]
+// --outage drops the server for that many seconds (the outbox must deliver everything afterwards).
 // Cross-platform on purpose: no shell syntax, so it behaves the same in PowerShell, cmd and bash.
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -12,6 +13,8 @@ const { values } = parseArgs({
     agents: { type: 'string', default: '20' },
     duration: { type: 'string', default: '30' },
     rate: { type: 'string', default: '2' },
+    outage: { type: 'string', default: '0' },
+    'outage-at': { type: 'string', default: '3' },
     keep: { type: 'boolean', default: false },
   },
   strict: true,
@@ -23,6 +26,8 @@ const env = {
   FLEET_AGENTS: values.agents,
   FLEET_DURATION_S: values.duration,
   FLEET_RATE: values.rate,
+  FLEET_OUTAGE_S: values.outage,
+  FLEET_OUTAGE_AT_S: values['outage-at'],
 };
 
 const docker = (args, options = {}) =>
