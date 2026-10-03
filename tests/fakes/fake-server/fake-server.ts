@@ -2,8 +2,10 @@
 // server exists. It must pass tests/contract (see contract.test.ts) so it cannot drift from the
 // real one. It is a test double: no persistence, no rate limits, no policy engine.
 import { generateKeyPairSync, sign } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 import {
   acceptMessage,
   ackEvent,
@@ -16,9 +18,12 @@ import {
   MessageLog,
   type Principal,
   type StoredMessage,
+  folderName,
   generateToken,
   hashToken,
+  tokenMatches,
 } from '@quorum/core';
+import { removeBootstrapCode, writeBootstrapCode } from '@quorum/local';
 import { type DeliveredEnvelope, validateApiPayload, type ApiPayloadKind } from '@quorum/schemas';
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
@@ -36,6 +41,8 @@ const STATUS: Record<DomainError['kind'], number> = {
 interface Account extends Principal {
   id: string;
   vendor?: string;
+  /** Folder name of the attached root (never a path). */
+  folder?: string;
   revoked: boolean;
   workspaces: Set<string>;
 }
@@ -60,6 +67,13 @@ export interface FakeServerOptions {
   host?: string;
   /** Port to bind. Default: any free port. */
   port?: number;
+  /**
+   * Local-mode data directory. When given (and in local mode) the server writes a bootstrap code
+   * to `<dataDir>/local/bootstrap.json`, like the real local server does on start.
+   */
+  dataDir?: string;
+  /** Clock for presence (ms since epoch). Default Date.now. */
+  clock?: () => number;
 }
 
 export interface FakeServer {
@@ -76,8 +90,11 @@ export interface FakeServer {
     address: string,
     workspaces: string[],
     vendor?: string,
+    folder?: string,
   ): { address: string; token: string; refreshToken: string };
   join(address: string, workspace: string): void;
+  /** Write a fresh bootstrap code, as a restarted local server does. Needs `dataDir`. */
+  issueBootstrap(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -95,8 +112,34 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
   const accessTokens = new Map<string, Account>(); // sha256(token) → account
   const refreshTokens = new Map<string, { account: Account; used: boolean }>();
   const subscribers = new Set<Subscriber>();
-  const attachments = new Map<string, { account: Account }>();
+  interface AttachmentRecord {
+    account: Account;
+    id: string;
+    root: string;
+    vendor: string;
+    workspaces: string[];
+    wake: string;
+    wake_types?: string[];
+    lease_enforcement: string;
+  }
+  const attachments = new Map<string, AttachmentRecord>();
+  const clock = options.clock ?? Date.now;
+  /** Last heartbeat per agent: online for 90 s after it, or until it says offline. */
+  const heartbeats = new Map<string, { at: number; status: string }>();
+  const PRESENCE_TTL_MS = 90_000;
+  let bootstrap: { hash: string; expiresAt: number; used: boolean } | undefined;
+  let owner: Account | undefined;
   const sessions = new Map<string, Account>();
+
+  const publicAttachment = (a: AttachmentRecord) => ({
+    id: a.id,
+    root: a.root,
+    vendor: a.vendor,
+    workspaces: a.workspaces,
+    wake: a.wake,
+    ...(a.wake_types ? { wake_types: a.wake_types } : {}),
+    lease_enforcement: a.lease_enforcement,
+  });
 
   const issue = (account: Account) => {
     const access = generateToken('access');
@@ -334,6 +377,40 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
       return;
     }
 
+    if (method === 'POST' && path === '/v1/auth/local-bootstrap') {
+      if (!localMode) {
+        throw new DomainError(
+          'not_found',
+          'auth.bootstrap_unavailable',
+          'Local bootstrap is only available in local mode.',
+          'Sign in with a join code.',
+        );
+      }
+      const body = checkPayload('localBootstrapRequest', await readBody(req)) as { code: string };
+      const record = bootstrap;
+      if (
+        !record ||
+        record.used ||
+        clock() >= record.expiresAt ||
+        !tokenMatches(body.code, record.hash)
+      ) {
+        throw new DomainError(
+          'unauthorized',
+          'auth.bootstrap_invalid',
+          'This bootstrap code is wrong, expired or already used.',
+          'Restart the local server to get a new code, then run `quorum login` again.',
+        );
+      }
+      record.used = true;
+      if (options.dataDir) await removeBootstrapCode(options.dataDir);
+      owner ??= accounts.get('human:owner') ?? newAccount('human', 'human:owner');
+      json(res, 200, {
+        human: { id: owner.id, address: owner.address },
+        credentials: issue(owner),
+      });
+      return;
+    }
+
     // Everything below needs a token.
     const account = authenticate(req);
 
@@ -372,6 +449,7 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
         workspaces: string[];
         agent_name?: string;
         wake?: string;
+        wake_types?: string[];
         lease_enforcement?: string;
       };
       for (const id of body.workspaces) member(account, id);
@@ -380,18 +458,23 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
       for (let n = 2; taken.has(`agent:${name}@${account.address.slice(6)}`); n++)
         name = `${name}-${String(n)}`;
       const agent = newAccount('agent', `agent:${name}@${account.address.slice(6)}`, body.vendor);
+      const folder = folderName(body.root);
+      if (folder) agent.folder = folder;
       for (const id of body.workspaces) agent.workspaces.add(id);
       const attachmentId = ids.id('attachment');
-      attachments.set(attachmentId, { account: agent });
+      const record: AttachmentRecord = {
+        account: agent,
+        id: attachmentId,
+        root: body.root,
+        vendor: body.vendor,
+        workspaces: body.workspaces,
+        wake: body.wake ?? 'off',
+        ...(body.wake_types ? { wake_types: body.wake_types } : {}),
+        lease_enforcement: body.lease_enforcement ?? 'warn',
+      };
+      attachments.set(attachmentId, record);
       json(res, 201, {
-        attachment: {
-          id: attachmentId,
-          root: body.root,
-          vendor: body.vendor,
-          workspaces: body.workspaces,
-          wake: body.wake ?? 'off',
-          lease_enforcement: body.lease_enforcement ?? 'warn',
-        },
+        attachment: publicAttachment(record),
         agent: { id: agent.id, address: agent.address },
         credentials: issue(agent),
       });
@@ -399,6 +482,30 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
     }
 
     let m = /^\/v1\/attachments\/(at_[0-9A-HJKMNP-TV-Z]{26})$/.exec(path);
+    if (m && method === 'PATCH') {
+      requireHuman(account);
+      const attachment = attachments.get(m[1] ?? '');
+      if (!attachment) {
+        throw new DomainError(
+          'not_found',
+          'attachment.not_found',
+          'No such attachment.',
+          'Check the id.',
+        );
+      }
+      const change = checkPayload('attachmentUpdate', await readBody(req)) as {
+        wake?: string;
+        wake_types?: string[];
+        lease_enforcement?: string;
+      };
+      if (change.wake !== undefined) attachment.wake = change.wake;
+      if (change.wake_types !== undefined) attachment.wake_types = change.wake_types;
+      if (change.lease_enforcement !== undefined) {
+        attachment.lease_enforcement = change.lease_enforcement;
+      }
+      json(res, 200, publicAttachment(attachment));
+      return;
+    }
     if (m && method === 'DELETE') {
       requireHuman(account);
       const attachment = attachments.get(m[1] ?? '');
@@ -491,6 +598,7 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
         return;
       }
       if (outcome.outcome === 'presence') {
+        heartbeats.set(account.address, { at: clock(), status: outcome.envelope.body.status });
         json(res, 201, {
           id: outcome.envelope.id,
           seq: (await store.head(ws.id))?.seq ?? 1,
@@ -515,8 +623,10 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
     }
 
     if (method === 'GET' && rest === 'inbox') {
+      // Without `after` the inbox starts after the caller's last acknowledged seq.
+      const afterParam = url.searchParams.get('after');
       const page = ws.log.inbox(account.address, {
-        after: Number(url.searchParams.get('after') ?? 0),
+        after: afterParam === null ? ws.log.ackedUpTo(account.address) : Number(afterParam),
         limit: Number(url.searchParams.get('limit') ?? 100),
       });
       json(res, 200, page);
@@ -557,12 +667,21 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
     if (method === 'GET' && rest === 'agents') {
       const agents = [...accounts.values()]
         .filter((a) => a.kind === 'agent' && a.workspaces.has(ws.id) && !a.revoked)
-        .map((a) => ({
-          id: a.id,
-          address: a.address,
-          vendor: a.vendor ?? 'generic',
-          presence: [...subscribers].some((s) => s.account === a) ? 'online' : 'offline',
-        }));
+        .map((a) => {
+          const beat = heartbeats.get(a.address);
+          const beatLive =
+            beat !== undefined && beat.status !== 'offline' && clock() - beat.at < PRESENCE_TTL_MS;
+          const online = beatLive || [...subscribers].some((s) => s.account === a);
+          return {
+            id: a.id,
+            address: a.address,
+            vendor: a.vendor ?? 'generic',
+            ...(a.folder ? { folder: a.folder } : {}),
+            presence: online ? 'online' : 'offline',
+            ...(beat ? { status: beatLive ? beat.status : 'offline' } : {}),
+            ...(beat ? { last_seen: new Date(beat.at).toISOString() } : {}),
+          };
+        });
       json(res, 200, { agents });
       return;
     }
@@ -600,6 +719,20 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
   );
   const port = (server.address() as AddressInfo).port;
 
+  const issueBootstrap = async (): Promise<void> => {
+    if (!options.dataDir || !localMode) return;
+    const code = generateToken('bootstrap');
+    const expiresAt = clock() + 600_000;
+    bootstrap = { hash: hashToken(code), expiresAt, used: false };
+    // The real server creates its private data directory first; a test double only needs it to exist.
+    await mkdir(join(options.dataDir, 'local'), { recursive: true });
+    await writeBootstrapCode(options.dataDir, {
+      code,
+      expires_at: new Date(expiresAt).toISOString(),
+    });
+  };
+  await issueBootstrap();
+
   return {
     baseUrl: `http://localhost:${String(port)}`,
     instanceId,
@@ -609,8 +742,9 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
       return { address: account.address, token: issue(account).access_token };
     },
     createWorkspace: (name) => makeWorkspace(name).id,
-    addAgent(address, workspaceIds, vendor) {
+    addAgent(address, workspaceIds, vendor, folder) {
       const account = newAccount('agent', address, vendor);
+      if (folder) account.folder = folder;
       for (const id of workspaceIds) account.workspaces.add(id);
       const tokens = issue(account);
       return { address, token: tokens.access_token, refreshToken: tokens.refresh_token };
@@ -618,6 +752,7 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
     join(address, workspace) {
       accounts.get(address)?.workspaces.add(workspace);
     },
+    issueBootstrap: () => issueBootstrap(),
     close: () =>
       new Promise<void>((resolve) => {
         for (const sub of subscribers) sub.res.end();

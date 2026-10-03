@@ -20,11 +20,13 @@ await server.close();
 
 ## Covered endpoints
 
-Everything in `openapi.v1.json` except artifacts: health, hello, refresh (rotating, family revoked on reuse), workspaces, attachments, sessions, messages, inbox, ack, SSE stream with `Last-Event-ID` resume, threads, agents, revoke and export. Local-mode Host and Origin checks (INV-26) are on by default.
+Everything in `openapi.v1.json` except artifacts: health, hello, refresh (rotating, family revoked on reuse), the local bootstrap login (`POST /v1/auth/local-bootstrap`, single use, 10 minutes, 404 in remote mode), workspaces, attachments including `PATCH`, sessions, messages, inbox (starts after the caller's last ack when `after` is omitted), ack, SSE stream with `Last-Event-ID` resume, threads, agents (with `folder`, heartbeat presence: online for 90 s, offline at once on `status: offline`), revoke and export. Local-mode Host and Origin checks (INV-26) are on by default.
 
 ## Known differences from the real server
 
-- Heartbeats return a placeholder `seq` and are not recorded (the real server updates presence).
+- Heartbeats return a placeholder `seq` and are not recorded in the log; they only update presence.
+- The bootstrap code file is written to a plain directory: the fake does not lock it down (INV-25 is the real server's job). Pass `dataDir` to get a code; `issueBootstrap()` simulates a restart.
+- `new-api.test.ts` covers the bootstrap, PATCH, inbox default, folder and heartbeat behaviour that `tests/contract` does not cover yet.
 - Sessions do not detect shared worktrees (`shared_worktree_with` is always empty).
 - Agent names from `attach` are derived simply, not by the core naming rules.
 - No token expiry, rate limits (429) or token scopes (INV-12).
