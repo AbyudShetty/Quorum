@@ -144,3 +144,60 @@ describe('sender header shows the folder name (MESSAGE_SPEC §8)', () => {
     expect(text).not.toMatch(/[A-Za-z]:[\\/]/);
   });
 });
+
+describe('heartbeat ordering', () => {
+  const start = async (w: World, intervalMs = 60_000) =>
+    startHeartbeat({
+      client: await connectAs(w),
+      attachment: attachmentOf(w),
+      intervalMs,
+    });
+
+  it('offline is always the last word, even when stopped right after starting', async () => {
+    world = await startWorld();
+    for (let i = 0; i < 20; i++) {
+      const heartbeat = await start(world);
+      await heartbeat.stop(); // the first "idle" beat may still be in flight
+      expect(await presenceOf(world, world.agent.address)).toMatchObject({
+        presence: 'offline',
+        status: 'offline',
+      });
+    }
+  });
+
+  it('a status change right after starting is not overtaken by the first beat', async () => {
+    world = await startWorld();
+    for (let i = 0; i < 20; i++) {
+      const heartbeat = await start(world);
+      await heartbeat.beat('working');
+      expect(await presenceOf(world, world.agent.address)).toMatchObject({ status: 'working' });
+      await heartbeat.stop();
+    }
+  });
+
+  it('ignores beats after stop (a late hook event must not bring the agent back online)', async () => {
+    world = await startWorld();
+    const heartbeat = await start(world);
+    await heartbeat.stop();
+    await heartbeat.beat('working');
+    expect(await presenceOf(world, world.agent.address)).toMatchObject({ status: 'offline' });
+  });
+
+  it('does not pile beats up behind a slow server', async () => {
+    let calls = 0;
+    const heartbeat = startHeartbeat({
+      client: {
+        send: async () => {
+          calls += 1;
+          await sleep(150);
+          return { seq: 1, duplicate: false };
+        },
+      },
+      attachment: { agent: 'agent:a@lab', workspaces: ['ws_1'] },
+      intervalMs: 10,
+    });
+    await sleep(120);
+    expect(calls).toBeLessThanOrEqual(1); // the first beat is still in flight; no more were queued
+    await heartbeat.stop();
+  });
+});

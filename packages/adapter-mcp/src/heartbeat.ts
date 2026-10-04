@@ -2,6 +2,9 @@
 // the server marks the agent offline after 90 s of silence. A clean exit sends `offline` at once.
 // Heartbeats are ephemeral (the server records nothing in the log), so they bypass the outbox: a
 // heartbeat that could not be sent is stale by the time the server is back.
+//
+// Beats are sent strictly one after another. Otherwise a slow "idle" beat could arrive after the
+// "offline" of a clean exit and leave the agent looking online for another 90 s.
 import { createIdFactory, type IdFactory } from '@quorum/core';
 import type { SubmittedEnvelope } from '@quorum/schemas';
 import type { AttachmentInfo } from './attachment.js';
@@ -24,7 +27,7 @@ export interface HeartbeatOptions {
 }
 
 export interface Heartbeat {
-  /** Send one now (e.g. on a hook event, or when the status changes). */
+  /** Send one now (e.g. on a hook event, or when the status changes). Ignored after `stop`. */
   beat(status?: PresenceStatus): Promise<void>;
   /** Stop the timer and tell the server the session ended. Safe to call more than once. */
   stop(): Promise<void>;
@@ -35,8 +38,13 @@ export const startHeartbeat = (options: HeartbeatOptions): Heartbeat => {
   const now = options.now ?? (() => new Date());
   const onError = options.onError ?? (() => undefined);
   let stopped: Promise<void> | undefined;
+  let closing = false;
+  /** Beats queued or in flight. */
+  let pending = 0;
+  /** Every beat waits for the one before it. `deliver` never throws, so the chain never breaks. */
+  let tail: Promise<void> = Promise.resolve();
 
-  const beat = async (status: PresenceStatus = 'idle'): Promise<void> => {
+  const deliver = async (status: PresenceStatus): Promise<void> => {
     await Promise.all(
       options.attachment.workspaces.map(async (workspace) => {
         const envelope = {
@@ -59,18 +67,32 @@ export const startHeartbeat = (options: HeartbeatOptions): Heartbeat => {
     );
   };
 
+  const enqueue = (status: PresenceStatus): Promise<void> => {
+    pending += 1;
+    const run = tail.then(() => deliver(status)).finally(() => (pending -= 1));
+    tail = run;
+    return run;
+  };
+
+  const beat = (status: PresenceStatus = 'idle'): Promise<void> =>
+    closing ? Promise.resolve() : enqueue(status);
+
   void beat();
-  const timer = setInterval(() => void beat(), options.intervalMs ?? HEARTBEAT_INTERVAL_MS);
+  const timer = setInterval(() => {
+    // A beat that is still in flight (slow server) is enough: do not pile more up behind it.
+    if (pending === 0) void beat();
+  }, options.intervalMs ?? HEARTBEAT_INTERVAL_MS);
   timer.unref(); // presence must never keep a finished process alive
 
   return {
     beat,
     stop: () => {
       stopped ??= (async () => {
+        closing = true;
         clearInterval(timer);
         let giveUp: NodeJS.Timeout | undefined;
         await Promise.race([
-          beat('offline'),
+          enqueue('offline'), // queued after any beat in flight, so it is always the last word
           new Promise<void>((resolve) => {
             giveUp = setTimeout(resolve, GOODBYE_TIMEOUT_MS);
             giveUp.unref();
