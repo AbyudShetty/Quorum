@@ -39,6 +39,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- `quorum attach` skipped `.git/info/exclude` when the folder was spelled with a Windows 8.3 short name or a symlink (Windows CI runners use `C:\Users\RUNNER~1`); file paths are now canonicalised before comparing with the repository root.
 - `quorum attach` (Track B) now refuses the Quorum data directory however its path is spelled (INV-25). It compared the canonical folder against the data folder as written, so a symlink, a junction or a Windows 8.3 short name (GitHub's `C:\Users\RUNNER~1\...` temp folder) let it attach the data directory. Both sides are now canonicalised; a data folder that does not exist yet falls back to its absolute path. Found by CI on Windows. Regression tests for a junction and an 8.3 short name, and the whole suite passes with `TEMP` set to a short path.
 - Presence heartbeats (Track B) are now sent strictly in order. Before, a slow "idle" beat could arrive after the `offline` sent on a clean exit and leave the agent looking online for up to 90 s; it also made a heartbeat test fail about one run in three. Timer beats are skipped while one is in flight, and beats after stop are ignored. 4 new tests, run repeatedly.
 - The fake server's contract test failed when the repository path contains a space (the target path was double-encoded); it now uses `fileURLToPath`.

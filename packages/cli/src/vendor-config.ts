@@ -7,7 +7,7 @@
 //  - Merge, never clobber: other settings and hooks are kept; only entries for this attachment are
 //    added or removed. A file that cannot be parsed is left alone and reported.
 //  - Nothing is executed (INV-10): when `.mcp.json` cannot be written, `claude mcp add` is printed.
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findGit } from '@quorum/adapter-mcp';
@@ -248,7 +248,10 @@ const excludeFromGit = async (root: string, files: string[]): Promise<ConfigChan
   const exclude = join(git.common_dir, 'info', 'exclude');
   const current = await readFile(exclude, 'utf8').catch(() => '');
   const lines = new Set(current.split(/\r?\n/).map((l) => l.trim()));
-  const wanted = files
+  // findGit returns canonical paths, so compare canonical file paths too: an 8.3 short name
+  // (C:\Users\RUNNER~1) or a symlink would otherwise look like a path outside the repository.
+  const canonical = await Promise.all(files.map((f) => realpath(f).catch(() => f)));
+  const wanted = canonical
     .map((f) => `/${relative(git.worktree_root, f).split(sep).join('/')}`)
     .filter((pattern) => !pattern.startsWith('/..') && !lines.has(pattern));
   if (wanted.length === 0) return undefined;
