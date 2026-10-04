@@ -28,18 +28,18 @@ When two people each run an AI coding agent on separate machines, the humans bec
 
 Phase 1 so far:
 
-| Part                                                                                                                                             | State                         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| `packages/schemas`: message formats, `/v1` API (OpenAPI), validators                                                                             | ✅                            |
-| `tests/contract`: tests every `/v1` server must pass                                                                                             | ✅ (run once a server exists) |
-| `packages/core`: event log and hash chain, message rules, secret scanning, tokens, wake rules                                                    | ✅                            |
-| `packages/local`: local-mode files shared with adapters and CLI (private data folder, discovery file, bootstrap code, start lock)                | ✅                            |
-| `packages/server`: SQLite storage (crash-tested), identity key, bootstrap code, request guard                                                    | ✅                            |
-| Server HTTP endpoints                                                                                                                            | after the contract freeze     |
-| `packages/adapter-mcp` and `packages/cli`: client library, MCP tools, `login`/`attach`/`send`/`inbox`/`verify`, presence, shared-folder warnings | ✅ against the fake server    |
-| `packages/web`: read-only timeline (strict CSP)                                                                                                  | ✅ against the fake server    |
-| `packages/fleet`, `deploy/fleet`: simulated fleet incl. outage runs (50 containers, none lost)                                                   | ✅ against the fake server    |
-| Hook adapter (new mail while an agent works, wake modes), `serve`/`stop`, `worktree`, `ui`                                                       | next (Track B)                |
+| Part                                                                                                                                                        | State                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `packages/schemas`: message formats, `/v1` API (OpenAPI), validators                                                                                        | ✅                               |
+| `tests/contract`: tests every `/v1` server must pass                                                                                                        | ✅ real and fake server pass it  |
+| `packages/core`: event log and hash chain, message rules, secret scanning, tokens, wake rules                                                               | ✅                               |
+| `packages/local`: local-mode files shared with adapters and CLI (private data folder, discovery file, bootstrap code, start lock)                           | ✅                               |
+| `packages/server`: the `/v1` API on SQLite (crash-tested), local mode (`serve --local`, auto-start, idle shutdown), tokens, presence, shared-folder notices | ✅                               |
+| `packages/adapter-mcp` and `packages/cli`: client library, MCP tools, `login`/`attach`/`send`/`inbox`/`verify`, presence, shared-folder warnings            | ✅ against the real server (IC2) |
+| `packages/web`: read-only timeline (strict CSP)                                                                                                             | ✅ against the fake server       |
+| `packages/fleet`, `deploy/fleet`: simulated fleet incl. outage runs (50 containers, none lost)                                                              | ✅ against the fake server       |
+| `serve`/`stop`/`workspace` commands and auto-start                                                                                                          | ✅                               |
+| Hook adapter (new mail while an agent works, wake modes), `worktree`, `ui`                                                                                  | next                             |
 
 ## Repository layout
 
@@ -48,7 +48,7 @@ packages/
   schemas/     message formats, API contract (openapi.v1.json), validators
   core/        domain logic: no network, database or HTML
   local/       local-mode files shared by server, adapters and CLI
-  server/      storage, local mode, and (next) the /v1 HTTP API
+  server/      the /v1 HTTP API on SQLite, and local mode
   adapter-mcp/ client library and MCP server for agents (Track B)
   cli/         the `quorum` command (Track B)
   web/         read-only web timeline (Track B)

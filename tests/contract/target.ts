@@ -20,6 +20,16 @@ export interface ContractTarget {
   agentA: ContractPrincipal;
   agentB: ContractPrincipal;
   human: ContractPrincipal;
+  /**
+   * Optional hooks for the cases added after the first freeze. A target without one skips the cases
+   * that need it.
+   */
+  /** Create a folder the human can attach (it must exist on the server's machine in local mode). */
+  makeFolder?(name: string): Promise<string>;
+  /** Local mode: where `local/bootstrap.json` lives, and how to issue a new code (a restart). */
+  bootstrap?: { dataDir: string; reissue(): Promise<void> };
+  /** Move the server's clock forward (expiry and presence cases). */
+  advanceClock?(ms: number): void;
   /** Stop the server and clean up. */
   close(): Promise<void>;
 }

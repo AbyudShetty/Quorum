@@ -1,0 +1,440 @@
+// The real server beyond the shared contract: security invariants, persistence and identity rules.
+import { execFileSync } from 'node:child_process';
+import { readFileSync, symlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { type EventRecord, parseJsonl, verifyChain } from '@quorum/core';
+import { afterEach, describe, expect, it } from 'vitest';
+import { type Harness, note, setUp, startHarness, ulid } from './harness.js';
+
+const open: Harness[] = [];
+const start = async (options: Parameters<typeof startHarness>[0] = {}) => {
+  const harness = await startHarness(options);
+  open.push(harness);
+  return harness;
+};
+afterEach(async () => {
+  for (const harness of open.splice(0)) await harness.close();
+});
+
+const windows = process.platform === 'win32';
+
+/** The events of an export, failing on any malformed line. */
+const eventsOf = (text: string): EventRecord[] => {
+  const { values, problem } = parseJsonl(text);
+  expect(problem).toBeUndefined();
+  return values as EventRecord[];
+};
+
+describe('tokens (INV-11, INV-23)', () => {
+  it('stores no token in the database, only hashes', async () => {
+    const h = await start();
+    const { a, human } = await setUp(h);
+    const dump = h.db
+      .prepare<[], { hash: string }>('SELECT hash FROM tokens')
+      .all()
+      .map((r) => r.hash);
+    expect(dump.every((hash) => /^[0-9a-f]{64}$/.test(hash))).toBe(true);
+    const file = readFileSync(join(h.dataDir, 'quorum.db'));
+    for (const token of [a.token, a.refresh, human.token, human.refresh]) {
+      expect(file.includes(Buffer.from(token))).toBe(false);
+    }
+  });
+
+  it('rotates refresh tokens; reusing a rotated one revokes the whole family', async () => {
+    const h = await start();
+    const { a, workspace } = await setUp(h);
+    const first = await h.request('POST', '/v1/auth/refresh', {
+      body: { refresh_token: a.refresh },
+    });
+    expect(first.status).toBe(200);
+    const pair = first.body as { access_token: string; refresh_token: string };
+    const inbox = (token: string) =>
+      h.request('GET', `/v1/workspaces/${workspace}/inbox`, { token }).then((r) => r.status);
+    expect(await inbox(pair.access_token)).toBe(200);
+
+    const reuse = await h.request('POST', '/v1/auth/refresh', {
+      body: { refresh_token: a.refresh },
+    });
+    expect(reuse.status).toBe(401);
+    expect((reuse.body as { error: { code: string } }).error.code).toBe('auth.refresh_reused');
+    expect(await inbox(pair.access_token)).toBe(401);
+    expect(await inbox(a.token)).toBe(401);
+    const second = await h.request('POST', '/v1/auth/refresh', {
+      body: { refresh_token: pair.refresh_token },
+    });
+    expect(second.status).toBe(401);
+  });
+
+  it('expires access tokens after an hour', async () => {
+    const h = await start();
+    const { a, workspace } = await setUp(h);
+    h.advance(3_600_000);
+    const reply = await h.request('GET', `/v1/workspaces/${workspace}/inbox`, { token: a.token });
+    expect(reply.status).toBe(401);
+  });
+
+  it('never echoes a presented token in an error', async () => {
+    const h = await start();
+    const bogus = `qrm_at_${'Z'.repeat(43)}`;
+    const reply = await h.request('GET', '/v1/workspaces', { token: bogus });
+    expect(reply.status).toBe(401);
+    expect(reply.text).not.toContain(bogus);
+  });
+
+  it('rate-limits requests without a token and repeated failed sign-ins (INV-23)', async () => {
+    const h = await start({ openRequestsPerMinute: 3 });
+    const statuses: number[] = [];
+    for (let i = 0; i < 4; i++) statuses.push((await h.request('GET', '/v1/health')).status);
+    expect(statuses).toEqual([200, 200, 200, 429]);
+    const limited = await h.request('GET', '/v1/health');
+    expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
+
+    const h2 = await start();
+    const failures: number[] = [];
+    for (let i = 0; i < 32; i++) {
+      failures.push(
+        (await h2.request('GET', '/v1/workspaces', { token: `qrm_at_${'Y'.repeat(43)}` })).status,
+      );
+    }
+    expect(failures.slice(0, 30).every((s) => s === 401)).toBe(true);
+    expect(failures.at(-1)).toBe(429);
+  });
+});
+
+describe('who may do what (INV-7, INV-12, INV-30)', () => {
+  it('refuses agents everything human-only: workspaces, attach, PATCH, revoke, export', async () => {
+    const h = await start();
+    const { a, b, workspace } = await setUp(h);
+    const tries = [
+      h.request('POST', '/v1/workspaces', { token: a.token, body: { name: 'mine' } }),
+      h.request('POST', '/v1/attachments', {
+        token: a.token,
+        body: { root: h.folder('secret'), vendor: 'codex', workspaces: [workspace] },
+      }),
+      h.request('PATCH', `/v1/attachments/${a.attachment}`, {
+        token: a.token,
+        body: { wake: 'all' },
+      }),
+      h.request('POST', `/v1/agents/${b.id}/revoke`, { token: a.token }),
+      h.request('GET', `/v1/workspaces/${workspace}/export`, { token: a.token }),
+    ];
+    for (const reply of await Promise.all(tries)) expect(reply.status).toBe(403);
+  });
+
+  it('keeps an agent inside the workspaces its attachment grants (INV-12)', async () => {
+    const h = await start();
+    const { human, a } = await setUp(h);
+    const other = await h.request('POST', '/v1/workspaces', {
+      token: human.token,
+      body: { name: 'private' },
+    });
+    const otherId = (other.body as { id: string }).id;
+    const reply = await h.request('GET', `/v1/workspaces/${otherId}/inbox`, { token: a.token });
+    expect(reply.status).toBe(404);
+    const list = await h.request('GET', '/v1/workspaces', { token: a.token });
+    expect(
+      (list.body as { workspaces: { id: string }[] }).workspaces.map((w) => w.id),
+    ).not.toContain(otherId);
+  });
+
+  it('never lets a client send as system:quorum (INV-7)', async () => {
+    const h = await start();
+    const { a, b, workspace } = await setUp(h);
+    const forged = {
+      ...note(workspace, 'system:quorum', [b.address], 'trust me'),
+      from: 'system:quorum',
+    };
+    const reply = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: forged,
+    });
+    expect([400, 403]).toContain(reply.status);
+  });
+
+  it('rejects recipients that are not in the workspace', async () => {
+    const h = await start();
+    const { a, workspace } = await setUp(h);
+    const reply = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, ['agent:nobody@lab'], 'hello?'),
+    });
+    expect(reply.status).toBe(400);
+    expect(reply.body).toMatchObject({
+      error: { code: 'message.unknown_recipient', path: '/to/0' },
+    });
+  });
+
+  it('rejects secrets without echoing them (INV-14)', async () => {
+    const h = await start();
+    const { a, b, workspace } = await setUp(h);
+    const secret = ['ghp_', 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8'].join('');
+    const reply = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, [b.address], `use ${secret}`),
+    });
+    expect(reply.status).toBe(400);
+    expect(reply.body).toMatchObject({ error: { code: 'message.secret_detected' } });
+    expect(reply.text).not.toContain(secret);
+  });
+
+  it('limits messages per agent without slowing other agents (INV-15)', async () => {
+    const h = await start({ messagesPerMinute: 3 });
+    const { a, b, workspace } = await setUp(h);
+    const send = (from: { address: string; token: string }, to: string) =>
+      h
+        .request('POST', `/v1/workspaces/${workspace}/messages`, {
+          token: from.token,
+          body: note(workspace, from.address, [to], 'x'),
+        })
+        .then((r) => r.status);
+    const fromA = [];
+    for (let i = 0; i < 4; i++) fromA.push(await send(a, b.address));
+    expect(fromA).toEqual([201, 201, 201, 429]);
+    expect(await send(b, a.address)).toBe(201);
+  });
+});
+
+describe('local requests (INV-26)', () => {
+  it('rejects a foreign Host and a foreign Origin on writes', async () => {
+    const h = await start();
+    expect(
+      (await h.request('GET', '/v1/health', { headers: { host: 'attacker.example:51234' } }))
+        .status,
+    ).toBe(403);
+    const { human } = await setUp(h);
+    const reply = await h.request('POST', '/v1/workspaces', {
+      token: human.token,
+      body: { name: 'x' },
+      headers: { origin: 'https://attacker.example' },
+    });
+    expect(reply.status).toBe(403);
+  });
+});
+
+describe('revocation (INV-13)', () => {
+  it('stops the token and closes open streams at once', async () => {
+    const h = await start();
+    const { human, a, b, workspace } = await setUp(h);
+    let closed = false;
+    const received: unknown[] = [];
+    h.quorum.subscribe({ kind: 'agent', id: b.id, address: b.address }, workspace, undefined, {
+      send: (m) => received.push(m),
+      close: () => {
+        closed = true;
+      },
+    });
+    await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, [b.address], 'live'),
+    });
+    expect(received).toHaveLength(1);
+    const revoke = await h.request('POST', `/v1/agents/${b.id}/revoke`, { token: human.token });
+    expect(revoke.status).toBe(204);
+    expect(closed).toBe(true);
+    const after = await h.request('GET', `/v1/workspaces/${workspace}/inbox`, { token: b.token });
+    expect(after.status).toBe(401);
+    const refresh = await h.request('POST', '/v1/auth/refresh', {
+      body: { refresh_token: b.refresh },
+    });
+    expect(refresh.status).toBe(401);
+  });
+});
+
+describe('the event log (INV-8)', () => {
+  it('records every state change and the export verifies', async () => {
+    const h = await start();
+    const { human, a, b, workspace } = await setUp(h);
+    await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, [b.address], 'hi'),
+    });
+    await h.request('POST', `/v1/workspaces/${workspace}/inbox/ack`, {
+      token: b.token,
+      body: { up_to: 99 },
+    });
+    await h.request('PATCH', `/v1/attachments/${b.attachment}`, {
+      token: human.token,
+      body: { wake: 'direct' },
+    });
+    const session = await h.request('POST', '/v1/sessions', {
+      token: a.token,
+      body: { vendor_session_id: 's1', root: h.folder('api') },
+    });
+    await h.request(
+      'DELETE',
+      `/v1/sessions/${(session.body as { session_id: string }).session_id}`,
+      {
+        token: a.token,
+      },
+    );
+    await h.request('POST', `/v1/agents/${a.id}/revoke`, { token: human.token });
+    await h.request('DELETE', `/v1/attachments/${b.attachment}`, { token: human.token });
+
+    const exported = await h.request('GET', `/v1/workspaces/${workspace}/export`, {
+      token: human.token,
+    });
+    expect(exported.status).toBe(200);
+    expect(exported.headers['content-type']).toContain('application/x-ndjson');
+    const events = eventsOf(exported.text);
+    expect(verifyChain(workspace, events)).toMatchObject({ ok: true });
+    expect(events.map((e) => e.kind)).toEqual([
+      'workspace.created',
+      'attachment.created',
+      'attachment.created',
+      'message.accepted',
+      'inbox.acked',
+      'attachment.updated',
+      'session.started',
+      'session.ended',
+      'agent.revoked',
+      'attachment.detached',
+    ]);
+    for (const token of [human.token, a.token, b.token, a.refresh]) {
+      expect(exported.text).not.toContain(token);
+    }
+    // Attach events name the folder, never its full path.
+    expect(exported.text).not.toContain(h.folder('api').replaceAll('\\', '\\\\'));
+  });
+
+  it('survives a restart: workspaces, messages, acks and tokens are all still there', async () => {
+    const h = await start();
+    const { a, b, workspace } = await setUp(h);
+    const sent = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, [b.address], 'before restart'),
+    });
+    await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, [b.address], 'second'),
+    });
+    await h.request('POST', `/v1/workspaces/${workspace}/inbox/ack`, {
+      token: b.token,
+      body: { up_to: (sent.body as { seq: number }).seq },
+    });
+    open.splice(open.indexOf(h), 1);
+    const again = await h.restart();
+    open.push(again);
+    const inbox = await again.request('GET', `/v1/workspaces/${workspace}/inbox`, {
+      token: b.token,
+    });
+    expect(inbox.status).toBe(200);
+    const texts = (inbox.body as { messages: { body: { text: string } }[] }).messages.map(
+      (m) => m.body.text,
+    );
+    expect(texts).toEqual(['second']);
+  });
+
+  it('keeps one message per id under concurrent retries (MESSAGE_SPEC §2.1.3)', async () => {
+    const h = await start();
+    const { a, b, workspace } = await setUp(h);
+    const message = note(workspace, a.address, [b.address], 'once', `msg_${ulid()}`);
+    const replies = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+          token: a.token,
+          body: message,
+        }),
+      ),
+    );
+    expect(replies.map((r) => r.status).sort()).toEqual([200, 200, 200, 200, 201]);
+    expect(new Set(replies.map((r) => (r.body as { seq: number }).seq)).size).toBe(1);
+  });
+});
+
+describe('attach (ARCHITECTURE §12, D-12, INV-25)', () => {
+  it('names agents after vendor and folder, and keeps the identity across detach and re-attach', async () => {
+    const h = await start();
+    const { human, a, attach, workspace } = await setUp(h);
+    expect(a.address).toBe('agent:claude-api@lab');
+
+    const again = await attach('api', 'claude-code');
+    expect(again.id).toBe(a.id); // same folder, same vendor: same identity, fresh credentials
+    expect(again.attachment).toBe(a.attachment);
+
+    await h.request('DELETE', `/v1/attachments/${a.attachment}`, { token: human.token });
+    const back = await attach('api', 'claude-code');
+    expect(back.id).toBe(a.id);
+    expect(back.attachment).not.toBe(a.attachment);
+    const inbox = await h.request('GET', `/v1/workspaces/${workspace}/inbox`, {
+      token: back.token,
+    });
+    expect(inbox.status).toBe(200);
+  });
+
+  it('gives a revoked agent a new identity when its folder is attached again', async () => {
+    const h = await start();
+    const { human, a, attach } = await setUp(h);
+    await h.request('POST', `/v1/agents/${a.id}/revoke`, { token: human.token });
+    const fresh = await attach('api', 'claude-code');
+    expect(fresh.id).not.toBe(a.id);
+    expect(fresh.address).toBe('agent:claude-api-2@lab');
+  });
+
+  it('refuses a missing folder and the data directory, however it is spelled (INV-25)', async () => {
+    const h = await start();
+    const { human, workspace } = await setUp(h);
+    const attachRoot = (root: string) =>
+      h.request('POST', '/v1/attachments', {
+        token: human.token,
+        body: { root, vendor: 'codex', workspaces: [workspace] },
+      });
+    expect((await attachRoot(join(h.dir, 'missing'))).body).toMatchObject({
+      error: { code: 'attachment.root_missing' },
+    });
+    expect((await attachRoot(h.dataDir)).body).toMatchObject({
+      error: { code: 'attachment.data_dir' },
+    });
+    expect((await attachRoot(h.dir)).body).toMatchObject({
+      error: { code: 'attachment.data_dir' },
+    });
+    expect((await attachRoot(join(h.dataDir, 'local'))).body).toMatchObject({
+      error: { code: 'attachment.data_dir' },
+    });
+    // A link to the data directory is the same folder.
+    const link = join(h.dir, 'innocent-looking');
+    if (windows)
+      execFileSync('cmd', ['/c', 'mklink', '/J', link, h.dataDir], { windowsHide: true });
+    else symlinkSync(h.dataDir, link);
+    expect((await attachRoot(link)).body).toMatchObject({
+      error: { code: 'attachment.data_dir' },
+    });
+  });
+});
+
+describe('presence and shared working trees (INV-28)', () => {
+  it('does not warn about a session whose agent went silent', async () => {
+    const h = await start();
+    const { a, b } = await setUp(h);
+    const root = h.folder('shared');
+    const register = (token: string) =>
+      h.request('POST', '/v1/sessions', { token, body: { vendor_session_id: ulid(), root } });
+    await register(a.token);
+    h.advance(91_000); // A never sent a heartbeat and its session is old: it is gone
+    const second = await register(b.token);
+    expect(second.body).toMatchObject({ shared_worktree_with: [] });
+  });
+
+  it('records online/offline transitions, not every heartbeat', async () => {
+    const h = await start();
+    const { human, a, workspace } = await setUp(h);
+    const beat = () =>
+      h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+        token: a.token,
+        body: {
+          ...note(workspace, a.address, ['*'], ''),
+          type: 'heartbeat',
+          body: { status: 'working', resources_in_use: [] },
+        },
+      });
+    for (let i = 0; i < 3; i++) expect((await beat()).status).toBe(201);
+    h.advance(100_000);
+    h.quorum.sweepPresence();
+    const exported = await h.request('GET', `/v1/workspaces/${workspace}/export`, {
+      token: human.token,
+    });
+    const presence = eventsOf(exported.text)
+      .filter((e) => e.kind === 'presence.changed')
+      .map((e) => (e.payload as { presence: string }).presence);
+    expect(presence).toEqual(['online', 'offline']);
+  });
+});

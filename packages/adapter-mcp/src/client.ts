@@ -372,6 +372,12 @@ export class QuorumClient {
     return (reply.body as { workspaces: { id: string; name: string }[] }).workspaces;
   }
 
+  /** Humans only: create a workspace; the creator becomes its first member. */
+  async createWorkspace(name: string): Promise<{ id: string; name: string; created_at: string }> {
+    const reply = await this.call('POST', '/v1/workspaces', { name });
+    return reply.body as { id: string; name: string; created_at: string };
+  }
+
   async health(): Promise<{ status: string; version: string; instance_id: string }> {
     const response = await this.#raw('GET', '/v1/health');
     return (await response.json()) as { status: string; version: string; instance_id: string };

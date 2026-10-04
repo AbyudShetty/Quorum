@@ -19,6 +19,9 @@
     },
     {
       "path": "../local/tsconfig.build.json"
+    },
+    {
+      "path": "../server/tsconfig.build.json"
     }
   ]
 }

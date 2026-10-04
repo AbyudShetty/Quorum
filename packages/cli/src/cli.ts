@@ -1,6 +1,6 @@
-// The `quorum` command line (Track B). Phase 1 commands that work against any /v1 server:
-// status, inbox, send, export, verify and mcp. `attach`, `detach`, `serve`, `stop`, `worktree`
-// and `ui` follow once the server endpoints and the human login flow exist (see README).
+// The `quorum` command line (Track B). Phase 1: serve, stop, login, workspace, attach, detach,
+// status, inbox, send, export, verify and mcp. `worktree` and `ui` follow (see README).
+// Commands that talk to the local server start it when it is not running (ARCHITECTURE §8.2).
 //
 // Everything is a function of (argv, env) so tests can run it against the fake server without
 // spawning processes. Output that contains other participants' messages is always framed as
@@ -9,7 +9,14 @@ import { readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createIdFactory, parseJsonl, verifyChain } from '@quorum/core';
-import { defaultDataDir, readBootstrapCode } from '@quorum/local';
+import {
+  defaultDataDir,
+  isProcessAlive,
+  readBootstrapCode,
+  readDiscovery,
+  removeBootstrapCode,
+  removeDiscovery,
+} from '@quorum/local';
 import { MESSAGE_TYPES, type SubmittedEnvelope, VENDORS } from '@quorum/schemas';
 import {
   ApiError,
@@ -28,6 +35,7 @@ import {
   serveStdio,
   UnreachableError,
 } from '@quorum/adapter-mcp';
+import { liveServer, ServerStartError } from './local-server.js';
 
 export interface CliEnv {
   out: (text: string) => void;
@@ -37,6 +45,13 @@ export interface CliEnv {
   /** Folder `attach` uses when none is given. Default: the process's working directory. */
   cwd?: string;
   fetch?: typeof fetch;
+  /**
+   * Make sure the local server runs, starting it if needed (auto-start). Left out in tests, which
+   * bring their own server.
+   */
+  startServer?: (dataDir: string) => Promise<void>;
+  /** Stop a verified local server process (default: SIGTERM). Tests replace it. */
+  killServer?: (pid: number) => void;
 }
 
 /** Keychain entry for the signed-in human (used by `export`). */
@@ -46,7 +61,11 @@ const HELP = `quorum: coordinate AI coding agents (Phase 1, work in progress)
 
 Usage: quorum <command> [options]
 
+  serve --local [--idle-minutes <n>]         Run the local server in this terminal (commands also
+                                             start it in the background when needed)
+  stop                                       Stop the local server
   login                                      Sign in as the owner on this machine (local server)
+  workspace create <name> | workspace list   Create or list your workspaces
   attach [dir] --vendor <v> [--workspace <ws>] [--wake off|direct|all] [--name <n>] [--new-identity]
                                              Connect a folder to a workspace as an agent
   attach --update <at_id> [--wake ...] [--wake-types a,b] [--lease-enforcement warn|block]
@@ -62,7 +81,7 @@ Usage: quorum <command> [options]
   mcp    --attachment <at_id>                Run the MCP server for an agent (used by Claude Code / Codex)
   help
 
-Not yet available: serve, stop, worktree, ui.
+Not yet available: worktree, ui.
 `;
 
 class UsageError extends Error {}
@@ -84,6 +103,12 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
       case '-h':
         env.out(HELP);
         return command === undefined ? 1 : 0;
+      case 'serve':
+        return await serve(rest, env);
+      case 'stop':
+        return await stop(rest, env);
+      case 'workspace':
+        return await workspace(rest, env);
       case 'login':
         return await login(rest, env);
       case 'attach':
@@ -118,7 +143,7 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
       env.err(`IDENTITY CHECK FAILED: ${error.message}\n`);
       return 2;
     }
-    if (error instanceof UnreachableError) {
+    if (error instanceof UnreachableError || error instanceof ServerStartError) {
       env.err(`${error.message}\n`);
       return 3;
     }
@@ -132,13 +157,19 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
 
 const dataDirOf = (env: CliEnv): string => env.dataDir ?? defaultDataDir();
 
-const connect = (env: CliEnv, credentialKey: string): Promise<QuorumClient> =>
-  QuorumClient.connect({
+const connect = async (
+  env: CliEnv,
+  credentialKey: string,
+  options: { autoStart?: boolean } = {},
+): Promise<QuorumClient> => {
+  if (options.autoStart ?? true) await env.startServer?.(dataDirOf(env));
+  return QuorumClient.connect({
     dataDir: dataDirOf(env),
     credentialKey,
     store: env.store,
     ...(env.fetch ? { fetch: env.fetch } : {}),
   });
+};
 
 const attachmentOf = async (env: CliEnv, id: string | undefined) => {
   const attachment = need(id, 'Pass --attachment <at_id>.');
@@ -167,7 +198,10 @@ const workspaceOf = (workspaces: string[], given: string | undefined): string =>
 
 const status = async (args: string[], env: CliEnv): Promise<number> => {
   const { values } = parseArgs({ args, options: { attachment: { type: 'string' } }, strict: true });
-  const client = await connect(env, values.attachment ?? HUMAN_CREDENTIAL_KEY);
+  // Status reports; it never starts a server.
+  const client = await connect(env, values.attachment ?? HUMAN_CREDENTIAL_KEY, {
+    autoStart: false,
+  });
   const health = await client.health();
   env.out(
     `Local server: running, version ${health.version}, instance ${health.instance_id}\n` +
@@ -292,6 +326,117 @@ const verify = async (args: string[], env: CliEnv): Promise<number> => {
   return 1;
 };
 
+/** `quorum serve --local`: run the local server in the foreground until Ctrl+C or `quorum stop`. */
+const serve = async (args: string[], env: CliEnv): Promise<number> => {
+  const { values } = parseArgs({
+    args,
+    options: { local: { type: 'boolean', default: false }, 'idle-minutes': { type: 'string' } },
+    strict: true,
+  });
+  if (!values.local) {
+    throw new UsageError(
+      'Only local mode exists so far: run `quorum serve --local`. Remote mode (join codes over Tailscale or Cloudflare Tunnel) comes in Phase 1b.',
+    );
+  }
+  const idleRaw = values['idle-minutes'];
+  const idle = idleRaw === undefined ? undefined : Number(idleRaw);
+  if (idle !== undefined && !(Number.isInteger(idle) && idle >= 0 && idle <= 1440)) {
+    throw new UsageError('--idle-minutes must be a whole number from 0 (never) to 1440.');
+  }
+  // Loaded only here, so `quorum mcp` and the other commands never load the database driver.
+  const { AlreadyRunningError, startLocalServer } = await import('@quorum/server');
+  let server: Awaited<ReturnType<typeof startLocalServer>>;
+  try {
+    server = await startLocalServer({
+      dataDir: dataDirOf(env),
+      ...(idle === undefined ? {} : { idleShutdownMs: idle * 60_000 }),
+    });
+  } catch (error) {
+    if (error instanceof AlreadyRunningError) {
+      env.out(`${error.message}\n`);
+      return 0;
+    }
+    // e.g. a data folder that cannot be made private: the message carries the exact fix (INV-25).
+    env.err(`The local server did not start: ${(error as Error).message}\n`);
+    return 1;
+  }
+  env.out(
+    `Quorum local server on ${server.baseUrl} (instance ${server.instanceId}).\n` +
+      `Data: ${server.dataDir}\nStop it with Ctrl+C or \`quorum stop\`.\n`,
+  );
+  const shutdown = () => void server.close();
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  await server.closed;
+  process.off('SIGINT', shutdown);
+  process.off('SIGTERM', shutdown);
+  env.out('Stopped.\n');
+  return 0;
+};
+
+/** Remove the files a server that was killed could not remove itself, if they are still its own. */
+const removeStaleFiles = async (dataDir: string, instanceId: string): Promise<void> => {
+  if ((await readDiscovery(dataDir))?.instance_id !== instanceId) return;
+  await removeBootstrapCode(dataDir);
+  await removeDiscovery(dataDir);
+};
+
+/**
+ * `quorum stop`. Only a process that just proved, by the identity handshake, that it is our server
+ * is signalled: after a crash the pid in the discovery file may belong to an unrelated program.
+ */
+const stop = async (args: string[], env: CliEnv): Promise<number> => {
+  parseArgs({ args, options: {}, strict: true });
+  const dataDir = dataDirOf(env);
+  const found = await readDiscovery(dataDir);
+  if (!found) {
+    env.out('No local Quorum server is running.\n');
+    return 0;
+  }
+  try {
+    await connect(env, HUMAN_CREDENTIAL_KEY, { autoStart: false });
+  } catch (error) {
+    if (!(error instanceof UnreachableError)) throw error; // identity failure: signal nothing
+    await removeStaleFiles(dataDir, found.instance_id);
+    env.out('The local server was not running; removed the files it left behind.\n');
+    return 0;
+  }
+  (env.killServer ?? ((pid) => process.kill(pid, 'SIGTERM')))(found.pid);
+  // Done when the process is gone or the server no longer answers (it closed cleanly).
+  for (let waited = 0; waited < 10_000; waited += 100) {
+    if (!isProcessAlive(found.pid) || !(await liveServer(dataDir))) break;
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  // On Windows the signal ends the process at once, before it can tidy up.
+  await removeStaleFiles(dataDir, found.instance_id);
+  env.out(`Stopped the local server (pid ${String(found.pid)}).\n`);
+  return 0;
+};
+
+/** `quorum workspace create <name>` / `quorum workspace list` (humans). */
+const workspace = async (args: string[], env: CliEnv): Promise<number> => {
+  const { positionals } = parseArgs({ args, options: {}, allowPositionals: true, strict: true });
+  const [action, name] = positionals;
+  const client = await humanClient(env);
+  if (action === 'create') {
+    const created = await client.createWorkspace(
+      need(name, 'Pass a name: quorum workspace create <name> (lowercase letters, digits, -).'),
+    );
+    env.out(`Created workspace ${created.name} (${created.id}).\n`);
+    return 0;
+  }
+  if (action === 'list') {
+    const mine = await client.workspaces();
+    env.out(
+      mine.length === 0
+        ? 'No workspaces yet. Create one: quorum workspace create <name>\n'
+        : `${mine.map((w) => `${w.id}  ${w.name}`).join('\n')}\n`,
+    );
+    return 0;
+  }
+  throw new UsageError('Use `quorum workspace create <name>` or `quorum workspace list`.');
+};
+
 /** The signed-in human's client; tells the person what to do if they have not signed in. */
 const humanClient = async (env: CliEnv): Promise<QuorumClient> => {
   const client = await connect(env, HUMAN_CREDENTIAL_KEY);
@@ -316,6 +461,8 @@ const oneOf = <T extends string>(
 const login = async (args: string[], env: CliEnv): Promise<number> => {
   parseArgs({ args, options: {}, strict: true });
   const dataDir = dataDirOf(env);
+  // A server started now writes a fresh code; one already running keeps its current code.
+  await env.startServer?.(dataDir);
   const file = await readBootstrapCode(dataDir);
   if (!file) {
     throw new NeedsActionError(
@@ -420,7 +567,7 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
     if (mine.length !== 1 || !mine[0]) {
       throw new UsageError(
         mine.length === 0
-          ? 'You have no workspace yet.'
+          ? 'You have no workspace yet. Create one: quorum workspace create <name>'
           : `Pass --workspace <ws_id>; yours are: ${mine.map((w) => `${w.id} (${w.name})`).join(', ')}.`,
       );
     }

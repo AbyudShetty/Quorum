@@ -3,10 +3,12 @@
 import {
   ChainConflictError,
   type ChainHead,
+  chainEvent,
   type EventRecord,
   type EventStore,
   genesisHash,
   hashEvent,
+  type NewEvent,
 } from '@quorum/core';
 import type { Db } from './database.js';
 
@@ -70,6 +72,10 @@ export class SqliteEventStore implements EventStore {
     });
   }
 
+  headSync(workspace: string): ChainHead | undefined {
+    return this.#head.get(workspace);
+  }
+
   head(workspace: string): Promise<ChainHead | undefined> {
     return Promise.resolve(this.#head.get(workspace));
   }
@@ -83,6 +89,22 @@ export class SqliteEventStore implements EventStore {
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  /**
+   * Chain new events onto the current head and append them, synchronously. Inside a caller's
+   * transaction this joins it (as a savepoint), so registry changes and their events commit
+   * together or not at all.
+   */
+  appendNewSync(workspace: string, inputs: readonly NewEvent[]): EventRecord[] {
+    let head: ChainHead | undefined = this.#head.get(workspace);
+    const events = inputs.map((input) => {
+      const event = chainEvent(workspace, head, input);
+      head = { seq: event.seq, hash: event.hash };
+      return event;
+    });
+    this.#appendAll(workspace, events);
+    return events;
   }
 
   read(

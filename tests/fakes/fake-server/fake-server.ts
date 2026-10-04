@@ -23,6 +23,7 @@ import {
   hashToken,
   pathKey,
   sharedWorktreeWith,
+  systemNotice,
   tokenMatches,
 } from '@quorum/core';
 import { removeBootstrapCode, writeBootstrapCode } from '@quorum/local';
@@ -38,6 +39,7 @@ const STATUS: Record<DomainError['kind'], number> = {
   not_found: 404,
   conflict: 409,
   too_large: 413,
+  rate_limited: 429,
 };
 
 interface Account extends Principal {
@@ -563,6 +565,31 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
       }));
       const sharedWith = sharedWorktreeWith({ agent: account.address, worktreeKey }, live);
       sessions.set(sessionId, { account, worktreeKey });
+      // INV-28: every agent in the working tree gets a shared_worktree notice, like the real server.
+      if (sharedWith.length > 0) {
+        const everyone = [account.address, ...sharedWith];
+        for (const address of everyone) {
+          const target = accounts.get(address);
+          const wsId = target ? [...target.workspaces][0] : undefined;
+          const targetWs = wsId === undefined ? undefined : workspaces.get(wsId);
+          if (!targetWs) continue;
+          const others = everyone.filter((a) => a !== address);
+          const { event } = systemNotice({
+            workspace: targetWs.id,
+            to: [address],
+            kind: 'shared_worktree',
+            text: `${others.join(', ')} working in the same folder as ${address}.`,
+            details: { agents: everyone },
+            now: now(),
+            ids,
+          });
+          const [appended] = await appendNew(store, targetWs.id, [event]);
+          if (!appended) continue;
+          targetWs.log.apply(appended);
+          const stored = targetWs.log.byId((event.payload.envelope as { id: string }).id);
+          if (stored) deliverLive(targetWs.id, stored);
+        }
+      }
       json(res, 201, {
         session_id: sessionId,
         agent: { id: account.id, address: account.address },

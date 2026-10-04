@@ -172,6 +172,47 @@ export const acceptMessage = (log: MessageLog, request: AcceptRequest): AcceptOu
   };
 };
 
+/** The only sender a client can never be (INV-7): server notices (MESSAGE_SPEC §4). */
+export const SYSTEM_ADDRESS = 'system:quorum';
+
+/**
+ * A server notice: a `note` from `system:quorum` with a machine-readable `kind`
+ * (e.g. `shared_worktree`), recorded like any other message. Clients trust `kind` only when the
+ * sender is `system:quorum`; agents can put any text in their own notes.
+ */
+export const systemNotice = (request: {
+  workspace: string;
+  to: readonly string[];
+  kind: string;
+  text: string;
+  details?: Record<string, unknown>;
+  now: string;
+  ids: IdFactory;
+}): { event: NewEvent; envelope: SubmittedEnvelope } => {
+  const envelope = {
+    spec: 'quorum/1',
+    id: request.ids.id('message'),
+    workspace: request.workspace,
+    from: SYSTEM_ADDRESS,
+    to: [...request.to],
+    type: 'note',
+    type_version: 1,
+    thread: request.ids.id('thread'),
+    created_at: request.now,
+    body: { ...request.details, text: request.text, kind: request.kind },
+  } as unknown as SubmittedEnvelope;
+  return {
+    envelope,
+    event: {
+      ev_id: request.ids.id('event'),
+      ts: request.now,
+      actor: SYSTEM_ADDRESS,
+      kind: MESSAGE_EVENTS.accepted,
+      payload: { envelope, content_hash: contentHash(envelope) },
+    },
+  };
+};
+
 /** An acknowledgement as an event: who has read up to which seq. */
 export const ackEvent = (
   principal: Principal,

@@ -7,7 +7,8 @@ export type DomainErrorKind =
   | 'forbidden' // 403
   | 'not_found' // 404
   | 'conflict' // 409
-  | 'too_large'; // 413
+  | 'too_large' // 413
+  | 'rate_limited'; // 429 (with Retry-After)
 
 export class DomainError extends Error {
   constructor(

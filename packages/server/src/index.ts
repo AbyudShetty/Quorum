@@ -25,3 +25,21 @@ export { loadOrCreateInstance, type ServerInstance } from './local/instance.js';
 export { checkLocalRequest, localHosts, type RequestFacts } from './local/request-guard.js';
 export { type Db, openDatabase, SCHEMA_VERSION } from './storage/database.js';
 export { SqliteEventStore } from './storage/sqlite-event-store.js';
+export { type AppOptions, buildApp, MAX_REQUEST_BYTES } from './http/app.js';
+export {
+  addressName,
+  AlreadyRunningError,
+  type LocalServer,
+  type LocalServerOptions,
+  SERVER_VERSION,
+  startLocalServer,
+} from './local/serve.js';
+export {
+  type Caller,
+  HEARTBEAT_INTERVAL_MS,
+  Quorum,
+  type QuorumOptions,
+  SYSTEM_CHAIN,
+} from './service/quorum.js';
+export { Registry } from './storage/registry.js';
+export { localServerCommand, spawnLocalServer } from './local/spawn.js';

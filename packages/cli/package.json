@@ -2,7 +2,7 @@
   "name": "@quorum/cli",
   "version": "0.0.0",
   "private": true,
-  "description": "The quorum command line: status, inbox, send, verify, export and the MCP server entry point.",
+  "description": "The quorum command line: serve, login, workspaces, attach, status, inbox, send, verify, export and the MCP server entry point.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
@@ -23,6 +23,7 @@
     "@quorum/adapter-mcp": "0.0.0",
     "@quorum/core": "0.0.0",
     "@quorum/local": "0.0.0",
-    "@quorum/schemas": "0.0.0"
+    "@quorum/schemas": "0.0.0",
+    "@quorum/server": "0.0.0"
   }
 }

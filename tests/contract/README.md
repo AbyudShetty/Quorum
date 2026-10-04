@@ -47,10 +47,14 @@ The OpenAPI document lists every status; these are the ones the suite pins down 
 | Body over 96 KiB                                                  | 413                         |
 | Foreign `Host` header in local mode (INV-26)                      | any 4xx                     |
 
-## Not covered yet
+## Optional hooks
 
-Added to the API after the fake server was built, so the suite does not test them yet; the cases come with the real server (Track A), and the fake server gains them through the usual RFC flow (TEAM_PLAN §5.3):
+Cases added after the first freeze (bootstrap sign-in, attachment PATCH and DELETE, the inbox default, folder and presence, sessions and shared-working-tree notices) need a little help from the target. `ContractTarget` has optional hooks; a target without one skips the cases that need it:
 
-- `POST /v1/auth/local-bootstrap`: works once, refuses expired, reused and wrong codes, answers 404 in remote mode.
-- `PATCH /v1/attachments/{attachment}`: humans only, unknown fields rejected, change recorded in the log.
-- `GET …/inbox` without `after`: starts after the caller's last acknowledged `seq`.
+| Hook                                | Used for                                                                            |
+| ----------------------------------- | ----------------------------------------------------------------------------------- |
+| `makeFolder(name)`                  | a folder the human can attach (it must exist on the server's machine in local mode) |
+| `bootstrap: { dataDir, reissue() }` | reading `local/bootstrap.json` and issuing a fresh code, as a restart does          |
+| `advanceClock(ms)`                  | code expiry and the 90 s presence timeout                                           |
+
+Both the real server (`packages/server/test/contract.test.ts`) and the fake server (`tests/fakes/fake-server/contract.test.ts`) run the whole suite on every `npm test`.

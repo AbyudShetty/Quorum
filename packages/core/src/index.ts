@@ -26,6 +26,8 @@ export {
   type Page,
   type Principal,
   type StoredMessage,
+  SYSTEM_ADDRESS,
+  systemNotice,
 } from './messages.js';
 export { type PresenceChange, PresenceBook, type PresenceEntry } from './presence.js';
 export { findSecrets, type SecretFinding } from './secrets.js';

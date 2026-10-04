@@ -4,6 +4,7 @@
 import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readBootstrapCode } from '@quorum/local';
 import {
   type ApiPayloadKind,
   type SubmittedEnvelope,
@@ -216,6 +217,212 @@ describe.skipIf(!targetModule)('/v1 contract', () => {
       );
       expect(event?.event).toBe('message');
       expect(event?.data).toMatchObject({ seq, body: { text: 'streamed' } });
+    });
+  });
+
+  // --- Added after the first freeze (contract answers to the adapter contract's questions) ---
+
+  describe('local sign-in with the bootstrap code (ARCHITECTURE §6)', () => {
+    const exchange = (code: string) =>
+      call(t.baseUrl, 'POST', '/v1/auth/local-bootstrap', { body: { code } });
+
+    it('swaps a fresh code once for the owner human tokens, then removes it', async (context) => {
+      if (!t.bootstrap) return context.skip();
+      await t.bootstrap.reissue();
+      const file = await readBootstrapCode(t.bootstrap.dataDir);
+      expectPayload('localBootstrapFile', file);
+      const reply = await exchange(file?.code ?? '');
+      expect(reply.status).toBe(200);
+      expectPayload('localBootstrapResponse', reply.body);
+      const token = (reply.body as { credentials: { access_token: string } }).credentials
+        .access_token;
+      expect((await call(t.baseUrl, 'GET', '/v1/workspaces', { token })).status).toBe(200);
+      expect(await readBootstrapCode(t.bootstrap.dataDir)).toBeUndefined();
+      const again = await exchange(file?.code ?? '');
+      expect(again.status).toBe(401);
+      expectError(again.body);
+    });
+
+    it('refuses a wrong, malformed, replaced or expired code', async (context) => {
+      if (!t.bootstrap) return context.skip();
+      await t.bootstrap.reissue();
+      const replaced = (await readBootstrapCode(t.bootstrap.dataDir))?.code ?? '';
+      await t.bootstrap.reissue();
+      const current = (await readBootstrapCode(t.bootstrap.dataDir))?.code ?? '';
+      expect((await exchange(replaced)).status).toBe(401);
+      expect((await exchange(`qrm_bc_${'A'.repeat(43)}`)).status).toBe(401);
+      expect((await exchange('nope')).status).toBe(400);
+      if (t.advanceClock) {
+        t.advanceClock(11 * 60_000);
+        expect((await exchange(current)).status).toBe(401);
+      }
+    });
+  });
+
+  describe('attachments, inbox default, presence and sessions', () => {
+    const attach = async (folder: string, vendor: string) => {
+      const root = (await t.makeFolder?.(folder)) ?? '';
+      const reply = await call(t.baseUrl, 'POST', '/v1/attachments', {
+        token: t.human.token,
+        body: { root, vendor, workspaces: [t.workspace] },
+      });
+      expect(reply.status).toBe(201);
+      expectPayload('attachmentCreated', reply.body);
+      const created = reply.body as {
+        attachment: { id: string };
+        agent: { address: string };
+        credentials: { access_token: string };
+      };
+      return {
+        root,
+        id: created.attachment.id,
+        address: created.agent.address,
+        token: created.credentials.access_token,
+      };
+    };
+
+    const message = (from: string, token: string, type: string, to: string[], body: unknown) =>
+      call(t.baseUrl, 'POST', `${ws()}/messages`, {
+        token,
+        body: {
+          spec: 'quorum/1',
+          id: `msg_${ulid()}`,
+          workspace: t.workspace,
+          from,
+          to,
+          type,
+          type_version: 1,
+          created_at: new Date().toISOString(),
+          body,
+        },
+      });
+
+    it('PATCH changes wake settings, for humans only (INV-30)', async (context) => {
+      if (!t.makeFolder) return context.skip();
+      const a = await attach('patch', 'codex');
+      const path = `/v1/attachments/${a.id}`;
+      const reply = await call(t.baseUrl, 'PATCH', path, {
+        token: t.human.token,
+        body: { wake: 'direct', wake_types: ['request'], lease_enforcement: 'block' },
+      });
+      expect(reply.status).toBe(200);
+      expectPayload('attachment', reply.body);
+      expect(reply.body).toMatchObject({
+        id: a.id,
+        wake: 'direct',
+        wake_types: ['request'],
+        lease_enforcement: 'block',
+      });
+      const patch = (token: string, body: unknown, target = path) =>
+        call(t.baseUrl, 'PATCH', target, { token, body }).then((r) => r.status);
+      expect(await patch(t.human.token, {})).toBe(400);
+      expect(await patch(t.human.token, { root: a.root })).toBe(400);
+      expect(await patch(a.token, { wake: 'all' })).toBe(403);
+      expect(
+        await patch(t.human.token, { wake: 'all' }, `/v1/attachments/at_${'0'.repeat(26)}`),
+      ).toBe(404);
+    });
+
+    it('DELETE detaches: the agent token stops working at once (INV-13)', async (context) => {
+      if (!t.makeFolder) return context.skip();
+      const a = await attach('detach', 'codex');
+      const reply = await call(t.baseUrl, 'DELETE', `/v1/attachments/${a.id}`, {
+        token: t.human.token,
+      });
+      expect(reply.status).toBe(204);
+      expect((await call(t.baseUrl, 'GET', `${ws()}/inbox`, { token: a.token })).status).toBe(401);
+    });
+
+    it('inbox without `after` resumes after the last ack; after=0 starts at the beginning', async (context) => {
+      if (!t.makeFolder) return context.skip();
+      const a = await attach('inbox-a', 'claude-code');
+      const b = await attach('inbox-b', 'codex');
+      const first = await message(a.address, a.token, 'note', [b.address], { text: 'one' });
+      await message(a.address, a.token, 'note', [b.address], { text: 'two' });
+      const texts = async (query = '') => {
+        const reply = await call(t.baseUrl, 'GET', `${ws()}/inbox${query}`, { token: b.token });
+        return (reply.body as { messages: { body: { text: string } }[] }).messages.map(
+          (m) => m.body.text,
+        );
+      };
+      expect(await texts()).toEqual(['one', 'two']);
+      const ack = await call(t.baseUrl, 'POST', `${ws()}/inbox/ack`, {
+        token: b.token,
+        body: { up_to: (first.body as { seq: number }).seq },
+      });
+      expect(ack.status).toBe(204);
+      expect(await texts()).toEqual(['two']);
+      expect(await texts('?after=0')).toEqual(['one', 'two']);
+    });
+
+    it('lists the folder name (never a path) and presence from heartbeats (MESSAGE_SPEC §5.10)', async (context) => {
+      if (!t.makeFolder || !t.advanceClock) return context.skip();
+      const a = await attach('presence-app', 'codex');
+      const find = async () => {
+        const reply = await call(t.baseUrl, 'GET', `${ws()}/agents`, { token: t.human.token });
+        expectPayload('agentList', reply.body);
+        return (reply.body as { agents: { address: string }[] }).agents.find(
+          (x) => x.address === a.address,
+        );
+      };
+      const before = await find();
+      expect(before).toMatchObject({ folder: 'folder-presence-app', presence: 'offline' });
+      expect(JSON.stringify(before)).not.toContain(a.root);
+      const beat = (status: string) =>
+        message(a.address, a.token, 'heartbeat', ['*'], { status, resources_in_use: [] });
+      expect((await beat('working')).status).toBe(201);
+      expect(await find()).toMatchObject({ presence: 'online', status: 'working' });
+      t.advanceClock(89_000);
+      expect(await find()).toMatchObject({ presence: 'online' });
+      t.advanceClock(2_000);
+      expect(await find()).toMatchObject({ presence: 'offline', status: 'offline' });
+      await beat('idle');
+      expect(await find()).toMatchObject({ presence: 'online', status: 'idle' });
+      await beat('offline');
+      expect(await find()).toMatchObject({ presence: 'offline', status: 'offline' });
+    });
+
+    it('warns both agents in a shared working tree (INV-28), and sessions end once', async (context) => {
+      if (!t.makeFolder) return context.skip();
+      const a = await attach('shared', 'claude-code');
+      const b = await attach('shared', 'codex');
+      const register = (agent: { token: string; root: string }) =>
+        call(t.baseUrl, 'POST', '/v1/sessions', {
+          token: agent.token,
+          body: { vendor_session_id: `s-${ulid()}`, root: agent.root },
+        });
+      const first = await register(a);
+      expect(first.status).toBe(201);
+      expectPayload('sessionCreated', first.body);
+      expect(first.body).toMatchObject({ shared_worktree_with: [] });
+      const second = await register(b);
+      expect(second.status).toBe(201);
+      expect(second.body).toMatchObject({ shared_worktree_with: [a.address] });
+
+      for (const agent of [a, b]) {
+        const inbox = await call(t.baseUrl, 'GET', `${ws()}/inbox?after=0`, { token: agent.token });
+        const notices = (
+          inbox.body as { messages: { from: string; body: { kind?: string } }[] }
+        ).messages.filter((m) => m.from === 'system:quorum' && m.body.kind === 'shared_worktree');
+        expect(notices.length, agent.address).toBeGreaterThan(0);
+        for (const notice of notices) {
+          const checked = validateDeliveredEnvelope(notice);
+          expect(checked.ok ? [] : checked.issues).toEqual([]);
+        }
+      }
+
+      const sessionPath = `/v1/sessions/${(first.body as { session_id: string }).session_id}`;
+      expect((await call(t.baseUrl, 'DELETE', sessionPath, { token: a.token })).status).toBe(204);
+      expect((await call(t.baseUrl, 'DELETE', sessionPath, { token: a.token })).status).toBe(404);
+    });
+
+    it('only agents register sessions', async () => {
+      const reply = await call(t.baseUrl, 'POST', '/v1/sessions', {
+        token: t.human.token,
+        body: { vendor_session_id: 'x', root: '/tmp/x' },
+      });
+      expect(reply.status).toBe(403);
+      expectError(reply.body);
     });
   });
 });
