@@ -93,17 +93,23 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
       title: 'Send a Quorum message',
       description:
         'Send a message to another agent or a human (addresses like "agent:codex-web@laptop" or "human:abyud"; "*" broadcasts). ' +
-        'For a plain message use type "note" and body {"text": "..."}. The message is saved locally first, so it is not lost if the server is restarting.',
+        'For a plain message just pass "text". Other types need "type" and "body" (see the Quorum message spec). The message is saved locally first, so it is not lost if the server is restarting.',
       inputSchema: {
         to: z
           .array(z.string().min(1))
           .min(1)
           .describe('Recipient addresses, or ["*"] for everyone.'),
+        text: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('The text of a plain note. Use this or "body", not both.'),
         type: z.enum(AGENT_TYPES).default('note'),
         body: z
           .record(z.string(), z.unknown())
+          .optional()
           .describe(
-            'Message body. For a note: {"text": "..."}. See the Quorum message spec for other types.',
+            'Message body for other types. For a note, "text" is enough. See the Quorum message spec.',
           ),
         workspace: z
           .string()
@@ -116,6 +122,14 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
     },
     async (args) => {
       try {
+        // A note can be given as plain text; every other shape goes through the server's checks.
+        const body = args.body ?? (args.text === undefined ? undefined : { text: args.text });
+        if (!body || (args.body && args.text !== undefined)) {
+          return text(
+            'Pass "text" for a plain note, or "type" and "body" for other message types (not both).',
+            true,
+          );
+        }
         const workspace = workspaceFor(args.workspace);
         const envelope = {
           spec: 'quorum/1',
@@ -126,7 +140,7 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
           type: args.type,
           type_version: 1,
           created_at: now().toISOString(),
-          body: args.body,
+          body,
           ...(args.thread ? { thread: args.thread } : {}),
           ...(args.reply_to ? { reply_to: args.reply_to } : {}),
           ...(args.refs ? { refs: args.refs } : {}),

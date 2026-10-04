@@ -7,7 +7,8 @@ import tseslint from 'typescript-eslint';
 
 export default defineConfig(
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**'],
+    // testing/ holds throwaway folders for live vendor runs (gitignored).
+    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', 'testing/**'],
   },
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,

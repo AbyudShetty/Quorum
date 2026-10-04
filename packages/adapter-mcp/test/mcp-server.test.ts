@@ -83,6 +83,22 @@ describe('quorum MCP server', () => {
     });
   });
 
+  it('quorum_send takes plain text for a note, and asks for text or body when given neither', async () => {
+    world = await startWorld();
+    const client = await start(world);
+    const sent = await call(client, 'quorum_send', { to: [world.peer.address], text: 'hi' });
+    expect(sent).toMatchObject({ isError: false });
+    const missing = await call(client, 'quorum_send', { to: [world.peer.address] });
+    expect(missing.isError).toBe(true);
+    expect(missing.text).toContain('Pass "text"');
+    const both = await call(client, 'quorum_send', {
+      to: [world.peer.address],
+      text: 'a',
+      body: { text: 'b' },
+    });
+    expect(both.isError).toBe(true);
+  });
+
   it('quorum_send reports a refusal with the fix and does not retry it forever', async () => {
     world = await startWorld();
     const client = await start(world);

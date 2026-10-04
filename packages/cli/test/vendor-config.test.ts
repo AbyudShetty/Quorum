@@ -28,7 +28,10 @@ const absolute: QuorumCommand = {
   bin: 'C:\\work\\SIDE PROJ\\Quorum\\packages\\cli\\bin\\quorum.js',
   onPath: false,
 };
-const byName: QuorumCommand = { ...absolute, onPath: true };
+// On the PATH, on Linux/macOS: the bare name works everywhere.
+const byName: QuorumCommand = { ...absolute, onPath: true, platform: 'linux' };
+// On the PATH, on Windows: `quorum` is an npm .cmd/.ps1 shim that only a shell can start.
+const byNameWindows: QuorumCommand = { ...absolute, onPath: true, platform: 'win32' };
 interface HookEntry {
   type: string;
   command: string;
@@ -58,7 +61,7 @@ describe('Claude Code: .claude/settings.local.json', () => {
       }),
     );
     const first = await writeVendorConfig('claude-code', root, ID, absolute);
-    expect(first.changes.map((c) => c.action)).toEqual(['updated', 'updated']);
+    expect(first.changes.map((c) => c.action)).toEqual(['created', 'updated', 'updated']);
     await writeVendorConfig('claude-code', root, ID, absolute); // again: no duplicates
 
     const settings = await json(file);
@@ -78,13 +81,52 @@ describe('Claude Code: .claude/settings.local.json', () => {
       args: [absolute.bin, 'hook', 'claude-code', 'stop', '--attachment', ID],
       timeout: 30,
     });
-    expect(first.steps[0]).toContain(
-      `claude mcp add --scope local quorum -- "${absolute.node}" "${absolute.bin}" mcp --attachment ${ID}`,
-    );
-    expect(await readFile(join(root, '.git', 'info', 'exclude'), 'utf8')).toContain(
-      '/.claude/settings.local.json',
-    );
+    // The MCP server is in .mcp.json and pre-approved, so there is nothing to type.
+    expect(await json(join(root, '.mcp.json'))).toEqual({
+      mcpServers: {
+        quorum: {
+          type: 'stdio',
+          command: absolute.node,
+          args: [absolute.bin, 'mcp', '--attachment', ID],
+        },
+      },
+    });
+    expect((settings as Record<string, unknown>).enabledMcpjsonServers).toEqual(['quorum']);
+    expect(first.steps[0]).toMatch(/Start `claude`/);
+    const exclude = await readFile(join(root, '.git', 'info', 'exclude'), 'utf8');
+    expect(exclude).toContain('/.claude/settings.local.json');
+    expect(exclude).toContain('/.mcp.json');
     expect(JSON.stringify(settings)).not.toMatch(/qrm_/); // never a token (INV-25)
+  });
+
+  it('leaves an existing (team) .mcp.json alone and prints a command that survives PowerShell', async () => {
+    const root = await project();
+    await writeFile(
+      join(root, '.mcp.json'),
+      JSON.stringify({ mcpServers: { db: { command: 'db' } } }),
+    );
+    const result = await writeVendorConfig('claude-code', root, ID, byName);
+    expect(result.changes[0]).toMatchObject({ action: 'skipped' });
+    expect(await json(join(root, '.mcp.json'))).toEqual({ mcpServers: { db: { command: 'db' } } });
+    const settings = await json(join(root, '.claude', 'settings.local.json'));
+    expect((settings as Record<string, unknown>).enabledMcpjsonServers).toBeUndefined();
+    expect(result.steps[0]).toContain(
+      `claude mcp add --scope local quorum -- quorum mcp --attachment ${ID}`,
+    );
+    // PowerShell (and the claude.ps1 shim) eats a bare `--`: go through cmd on Windows.
+    if (process.platform === 'win32') expect(result.steps[0]).toContain('cmd /c "claude mcp add');
+  });
+
+  it('detach removes the .mcp.json it created and the approval', async () => {
+    const root = await project();
+    await writeVendorConfig('claude-code', root, ID, byName);
+    const removed = await removeVendorConfig('claude-code', root, ID);
+    expect(removed.map((c) => c.action)).toEqual(['removed', 'removed']);
+    await expect(readFile(join(root, '.mcp.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    const settings = await json(join(root, '.claude', 'settings.local.json'));
+    expect(settings).toEqual({});
   });
 
   it('removes only this attachment, leaving the rest', async () => {
@@ -109,7 +151,7 @@ describe('Claude Code: .claude/settings.local.json', () => {
     await mkdir(join(root, '.claude'));
     await writeFile(join(root, '.claude', 'settings.local.json'), '{ broken');
     const result = await writeVendorConfig('claude-code', root, ID, byName);
-    expect(result.changes[0]).toMatchObject({ action: 'skipped' });
+    expect(result.changes[1]).toMatchObject({ action: 'skipped' });
     expect(await readFile(join(root, '.claude', 'settings.local.json'), 'utf8')).toBe('{ broken');
   });
 });
@@ -162,6 +204,30 @@ describe('Codex: .codex/config.toml and .codex/hooks.json', () => {
     expect(toml).not.toContain('quorum');
     expect(toml).toContain('[mcp_servers.docs]');
     expect((await json(join(root, '.codex', 'hooks.json'))).hooks).toBeUndefined();
+  });
+});
+
+describe('Windows: npm shims need a shell', () => {
+  it('launches Node directly wherever a vendor starts us without a shell', async () => {
+    const root = await project();
+    await writeVendorConfig('claude-code', root, ID, byNameWindows);
+    const mcp = await json(join(root, '.mcp.json'));
+    expect(JSON.stringify(mcp)).toContain(JSON.stringify(absolute.node));
+    expect(
+      firstHook(await json(join(root, '.claude', 'settings.local.json')), 'Stop'),
+    ).toMatchObject({
+      command: absolute.node,
+      args: [absolute.bin, 'hook', 'claude-code', 'stop', '--attachment', ID],
+    });
+    const codex = await project();
+    await writeVendorConfig('codex', codex, ID, byNameWindows);
+    expect(await readFile(join(codex, '.codex', 'config.toml'), 'utf8')).toContain(
+      `command = '${absolute.node}'`,
+    );
+    // Codex hooks run in a shell, which resolves the shim: the short form is fine there.
+    expect(firstHook(await json(join(codex, '.codex', 'hooks.json')), 'Stop')?.command).toBe(
+      `quorum hook codex stop --attachment ${ID}`,
+    );
   });
 });
 

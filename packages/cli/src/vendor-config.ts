@@ -1,23 +1,38 @@
 // Vendor configuration that `quorum attach` writes into the attached folder (ARCHITECTURE §12 step 5)
-// and `quorum detach` removes: Claude Code hooks in `.claude/settings.local.json`; Codex MCP server
-// and hooks in `.codex/config.toml` and `.codex/hooks.json`. Rules:
+// and `quorum detach` removes: Claude Code MCP server in `.mcp.json` and hooks (plus the server's
+// approval) in `.claude/settings.local.json`; Codex MCP server and hooks in `.codex/config.toml`
+// and `.codex/hooks.json`. Rules:
 //  - Never secrets: tokens stay in the keychain (INV-25). Only commands that name the attachment.
 //  - Never into version control: every file is listed in `.git/info/exclude`, never `.gitignore`.
 //  - Merge, never clobber: other settings and hooks are kept; only entries for this attachment are
 //    added or removed. A file that cannot be parsed is left alone and reported.
-//  - Nothing is executed (INV-10): `claude mcp add` is printed for the person to run.
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+//  - Nothing is executed (INV-10): when `.mcp.json` cannot be written, `claude mcp add` is printed.
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findGit } from '@quorum/adapter-mcp';
 import { HOOK_EVENT_NAMES, type HookEvent, HOOK_EVENTS } from '@quorum/adapter-hooks';
 
-/** How vendors start `quorum`: by name when it is on the PATH, else Node plus this CLI's entry. */
+/**
+ * How vendors start `quorum`. Two forms:
+ *  - exec (no shell; Claude Code MCP servers and hooks, Codex MCP servers): the bare name only on
+ *    POSIX. On Windows `quorum` is an npm shim (`.cmd`/`.ps1`) that cannot start without a shell,
+ *    so it is always Node (a real program) plus this CLI's absolute path.
+ *  - shell (Codex hooks): the bare name whenever it is on the PATH, which every shell resolves.
+ */
 export interface QuorumCommand {
   node: string;
   bin: string;
   onPath: boolean;
+  /** Default: this machine's. */
+  platform?: NodeJS.Platform;
 }
+
+/** Program and arguments for an exec-form (no shell) launch. */
+const execForm = (command: QuorumCommand, args: string[]): { command: string; args: string[] } =>
+  command.onPath && (command.platform ?? process.platform) !== 'win32'
+    ? { command: 'quorum', args }
+    : { command: command.node, args: [command.bin, ...args] };
 
 const exists = (path: string): Promise<boolean> =>
   access(path).then(
@@ -110,10 +125,15 @@ const writeJsonFile = async (file: string, value: unknown): Promise<void> => {
 };
 
 /** Merge this attachment's hooks into a vendor hooks file. */
+/** Claude Code's list of pre-approved `.mcp.json` servers (a settings key). */
+const APPROVED_KEY = 'enabledMcpjsonServers';
+const MCP_NAME = 'quorum';
+
 const mergeHooks = async (
   file: string,
   attachment: string,
   entry: (event: HookEvent) => Record<string, unknown>,
+  approveMcp = false,
 ): Promise<ConfigChange> => {
   const existed = await exists(file);
   const settings = await readJsonFile(file);
@@ -126,16 +146,71 @@ const mergeHooks = async (
     const name = HOOK_EVENT_NAMES[event];
     (hooks[name] ??= []).push({ hooks: [entry(event)] });
   }
+  if (approveMcp) {
+    const approved = Array.isArray(settings[APPROVED_KEY])
+      ? (settings[APPROVED_KEY] as unknown[])
+      : [];
+    if (!approved.includes(MCP_NAME)) settings[APPROVED_KEY] = [...approved, MCP_NAME];
+  }
   await writeJsonFile(file, settings);
   return { file, action: existed ? 'updated' : 'created' };
 };
 
-const removeHooks = async (file: string, attachment: string): Promise<ConfigChange | undefined> => {
+const removeHooks = async (
+  file: string,
+  attachment: string,
+  unapproveMcp = false,
+): Promise<ConfigChange | undefined> => {
   if (!(await exists(file))) return undefined;
   const settings = await readJsonFile(file);
   if (!settings) return { file, action: 'skipped', note: 'not valid JSON; left unchanged' };
-  if (!stripHooks(settings, attachment)) return undefined;
+  let changed = stripHooks(settings, attachment);
+  const approved = settings[APPROVED_KEY];
+  if (unapproveMcp && Array.isArray(approved) && approved.includes(MCP_NAME)) {
+    const rest = approved.filter((name) => name !== MCP_NAME);
+    if (rest.length > 0) settings[APPROVED_KEY] = rest;
+    else Reflect.deleteProperty(settings, APPROVED_KEY);
+    changed = true;
+  }
+  if (!changed) return undefined;
   await writeJsonFile(file, settings);
+  return { file, action: 'removed' };
+};
+
+type McpFile = { mcpServers?: Record<string, unknown> } & Record<string, unknown>;
+
+/**
+ * Write the `quorum` server into the project's `.mcp.json`. Only into a file we created or one
+ * that already holds our entry: an existing `.mcp.json` is usually the team's, tracked in git, and
+ * is left alone (the caller then prints the `claude mcp add` command instead).
+ */
+const writeMcpJson = async (
+  file: string,
+  server: Record<string, unknown>,
+): Promise<ConfigChange> => {
+  const existed = await exists(file);
+  const current = (await readJsonFile(file)) as McpFile | undefined;
+  const ours = JSON.stringify(current?.mcpServers?.[MCP_NAME] ?? null).includes('--attachment');
+  if (existed && (!current || !ours)) {
+    return { file, action: 'skipped', note: 'existing file (maybe shared in git); left unchanged' };
+  }
+  const next: McpFile = { ...(current ?? {}) };
+  next.mcpServers = { ...(next.mcpServers ?? {}), [MCP_NAME]: server };
+  await writeJsonFile(file, next);
+  return { file, action: existed ? 'updated' : 'created' };
+};
+
+const removeMcpJson = async (
+  file: string,
+  attachment: string,
+): Promise<ConfigChange | undefined> => {
+  const current = (await readJsonFile(file)) as McpFile | undefined;
+  const entry = current?.mcpServers?.[MCP_NAME];
+  if (!current?.mcpServers || !JSON.stringify(entry ?? null).includes(attachment)) return undefined;
+  Reflect.deleteProperty(current.mcpServers, MCP_NAME);
+  const empty = Object.keys(current.mcpServers).length === 0 && Object.keys(current).length === 1;
+  if (empty) await rm(file, { force: true });
+  else await writeJsonFile(file, current);
   return { file, action: 'removed' };
 };
 
@@ -197,25 +272,44 @@ export const writeVendorConfig = async (
 
   if (vendor === 'claude-code') {
     const settings = join(root, '.claude', 'settings.local.json');
-    const change = await mergeHooks(settings, attachment, (event) => ({
-      type: 'command',
-      // Exec form (command + args): no shell, so paths with spaces need no quoting.
-      command: command.onPath ? 'quorum' : command.node,
-      args: command.onPath
-        ? hookArgs('claude-code', event)
-        : [command.bin, ...hookArgs('claude-code', event)],
-      timeout: TIMEOUT_S[event] ?? 30,
-    }));
-    const changes = [change];
-    if (change.action !== 'skipped') {
-      const excluded = await excludeFromGit(root, [settings]);
-      if (excluded) changes.push(excluded);
+    const mcpFile = join(root, '.mcp.json');
+    // The MCP server goes into the project's .mcp.json (no shell command to get wrong); the person
+    // ran `quorum attach`, so it is pre-approved in the untracked settings.local.json.
+    const mcpChange = await writeMcpJson(mcpFile, {
+      type: 'stdio',
+      ...execForm(command, mcpArgs),
+    });
+    const mcpWritten = mcpChange.action !== 'skipped';
+    const change = await mergeHooks(
+      settings,
+      attachment,
+      (event) => ({
+        type: 'command',
+        // Exec form (command + args): no shell, so paths with spaces need no quoting.
+        ...execForm(command, hookArgs('claude-code', event)),
+        timeout: TIMEOUT_S[event] ?? 30,
+      }),
+      mcpWritten,
+    );
+    const changes = [mcpChange, change];
+    const written = [mcpWritten ? [mcpFile] : [], change.action === 'skipped' ? [] : [settings]];
+    const excluded = await excludeFromGit(root, written.flat());
+    if (excluded) changes.push(excluded);
+    if (mcpWritten) {
+      return {
+        changes,
+        steps: [`Start \`claude\` in ${root}: the quorum tools and hooks are ready.`],
+      };
     }
     const run = command.onPath ? ['quorum'] : [command.node, command.bin];
+    const register = `claude mcp add --scope local quorum -- ${[...run, ...mcpArgs].map(quote).join(' ')}`;
     return {
       changes,
       steps: [
-        `Register the MCP server (once, in ${root}):\n  claude mcp add --scope local quorum -- ${[...run, ...mcpArgs].map(quote).join(' ')}`,
+        // PowerShell (and its claude.ps1 shim) eats a bare `--`; cmd passes it through.
+        process.platform === 'win32'
+          ? `Register the MCP server (once, in ${root}):\n  cmd /c "${register.replaceAll('"', '\\"')}"`
+          : `Register the MCP server (once, in ${root}):\n  ${register}`,
       ],
     };
   }
@@ -239,10 +333,11 @@ export const writeVendorConfig = async (
     const existed = await exists(configFile);
     const text = existed ? await readFile(configFile, 'utf8') : '';
     const { before, after } = splitQuorumTable(text);
+    const codexMcp = execForm(command, mcpArgs);
     const table = [
       MCP_HEADER,
-      `command = ${tomlString(command.onPath ? 'quorum' : command.node)}`,
-      `args = [${(command.onPath ? mcpArgs : [command.bin, ...mcpArgs]).map(tomlString).join(', ')}]`,
+      `command = ${tomlString(codexMcp.command)}`,
+      `args = [${codexMcp.args.map(tomlString).join(', ')}]`,
     ];
     await mkdir(dirname(configFile), { recursive: true });
     await writeFile(configFile, joinToml([before, [''], table, [''], after]));
@@ -278,7 +373,13 @@ export const removeVendorConfig = async (
 ): Promise<ConfigChange[]> => {
   const changes: ConfigChange[] = [];
   if (vendor === 'claude-code') {
-    const change = await removeHooks(join(root, '.claude', 'settings.local.json'), attachment);
+    const mcp = await removeMcpJson(join(root, '.mcp.json'), attachment);
+    if (mcp) changes.push(mcp);
+    const change = await removeHooks(
+      join(root, '.claude', 'settings.local.json'),
+      attachment,
+      mcp !== undefined,
+    );
     if (change) changes.push(change);
   }
   if (vendor === 'codex') {

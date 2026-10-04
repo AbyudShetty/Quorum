@@ -23,4 +23,6 @@ Exit codes: 0 ok, 1 refused, verification failed or something to do first (sign 
 
 Auto-start: every command that talks to the server except `status` and `stop` starts it when no live server is published, then runs the identity check as usual. The CLI itself never starts processes (INV-10): it asks `@quorum/server`, whose `spawnLocalServer` has a fixed command line.
 
-Not built yet: `worktree`, `ui`, registering the Claude Code MCP server for you (`attach` prints the `claude mcp add` command: the CLI runs no programs), the interactive wake-mode prompt (non-interactive default `off`), and vendor auto-detection (`--vendor` is required). `login` cannot restart a server whose code was already used; it tells you to (`quorum stop`, then `quorum login`).
+Claude Code's MCP server goes into `.mcp.json` (pre-approved in `.claude/settings.local.json`); if the folder already has a `.mcp.json` of its own, `attach` leaves it alone and prints `claude mcp add …` (on Windows inside `cmd /c "…"`, since PowerShell drops a bare `--`).
+
+Not built yet: `worktree`, `ui`, the interactive wake-mode prompt (non-interactive default `off`), and vendor auto-detection (`--vendor` is required). `login` cannot restart a server whose code was already used; it tells you to (`quorum stop`, then `quorum login`).

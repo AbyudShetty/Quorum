@@ -152,7 +152,7 @@ describe('quorum attach / detach', () => {
   it('uses the only workspace when none is given, and asks when there are several', async () => {
     const { env, s, text, errText } = await signedIn();
     expect(await main(['attach', '--vendor', 'claude-code'], env)).toBe(0);
-    expect(text()).toContain('claude mcp add --scope local quorum');
+    expect(text()).toContain('.mcp.json');
     const other = s.createWorkspace('second');
     s.join('human:owner', other);
     expect(await main(['attach', '--vendor', 'generic'], env)).toBe(64);

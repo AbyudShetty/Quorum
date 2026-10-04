@@ -699,10 +699,18 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
   // Presence: a heartbeat every 30 s, and `offline` at once when the session ends (stdin closes
   // when Claude Code or Codex exits).
   const presence = startHeartbeat({ client, attachment: info });
+  let closing: Promise<void> | undefined;
+  const goodbye = () =>
+    (closing ??= Promise.all([presence.stop(), session?.end()]).then(() => undefined));
   server.server.onclose = () => {
-    void presence.stop();
-    void session?.end();
+    void goodbye();
   };
+  // When Claude Code or Codex exits normally our stdin closes: say offline and end the session
+  // before leaving. (A hard kill skips this; the server then stops counting the session as live
+  // after 90 s without heartbeats.)
+  process.stdin.once('end', () => {
+    void goodbye().finally(() => process.exit(0));
+  });
   await serveStdio(server);
   return 0;
 };

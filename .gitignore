@@ -22,5 +22,8 @@ Thumbs.db
 # Personal Claude Code settings (per developer, never shared)
 .claude/settings.local.json
 
+# Local manual testing (throwaway folders for live Claude Code / Codex runs)
+/testing/
+
 # Repomix
 repomix-output.md
