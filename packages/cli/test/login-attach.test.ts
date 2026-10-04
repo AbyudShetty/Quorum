@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadAttachment, MemoryCredentialStore } from '@quorum/adapter-mcp';
@@ -155,6 +156,35 @@ describe('quorum attach / detach', () => {
     expect(errText()).toContain('Quorum data directory');
     await mkdir(join(dataDir, 'nested'));
     expect(await main(['attach', '--vendor', 'codex', join(dataDir, 'nested')], env)).toBe(64);
+  });
+
+  it('refuses the data directory however its path is spelled: symlink or junction (INV-25)', async () => {
+    const w = await signedIn();
+    const alias = join(await mkdtemp(join(tmpdir(), 'quorum-alias-')), 'data');
+    await symlink(w.dataDir, alias, 'junction'); // 'junction' needs no privileges on Windows
+    const viaAlias: CliEnv = { ...w.env, dataDir: alias };
+    // The CLI knows the data folder by the alias; the person attaches the real folder (and back).
+    expect(await main(['attach', '--vendor', 'codex', w.dataDir], viaAlias)).toBe(64);
+    expect(await main(['attach', '--vendor', 'codex', join(w.dataDir, 'local')], viaAlias)).toBe(
+      64,
+    );
+    expect(await main(['attach', '--vendor', 'codex', alias], w.env)).toBe(64);
+    expect(w.errText()).toContain('Quorum data directory');
+  });
+
+  it('refuses the data directory when it is spelled as a Windows 8.3 short name (INV-25)', async (context) => {
+    if (process.platform !== 'win32') context.skip();
+    const w = await signedIn();
+    // GitHub's Windows runners use C:\Users\RUNNER~1\... for the temp folder.
+    const shortName = spawnSync(
+      'cmd.exe',
+      ['/d', '/s', '/c', `for %I in ("${w.dataDir}") do @echo %~sI`],
+      { encoding: 'utf8', windowsVerbatimArguments: true },
+    ).stdout.trim();
+    if (!shortName || shortName.toLowerCase() === w.dataDir.toLowerCase()) context.skip(); // no 8.3 names here
+    const viaShortName: CliEnv = { ...w.env, dataDir: shortName };
+    expect(await main(['attach', '--vendor', 'codex', w.dataDir], viaShortName)).toBe(64);
+    expect(w.errText()).toContain('Quorum data directory');
   });
 
   it('changes wake settings with --update, and the local record follows', async () => {

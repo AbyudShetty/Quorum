@@ -403,7 +403,11 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
       throw new UsageError(`The folder ${positionals[0] ?? '.'} does not exist.`);
     },
   );
-  if (isInside(root, dataDir) || isInside(dataDir, root)) {
+  // Compare canonical paths on both sides: the data folder may be spelled as a symlink, a junction
+  // or a Windows 8.3 short name (RUNNER~1), and `root` was already canonicalised (INV-25). A data
+  // folder that does not exist yet falls back to its absolute path.
+  const canonicalDataDir = await realpath(dataDir).catch(() => resolve(dataDir));
+  if (isInside(root, canonicalDataDir) || isInside(canonicalDataDir, root)) {
     throw new UsageError(
       'Refusing to attach the Quorum data directory (or a folder containing it).',
     );
