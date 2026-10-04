@@ -438,3 +438,69 @@ describe('presence and shared working trees (INV-28)', () => {
     expect(presence).toEqual(['online', 'offline']);
   });
 });
+
+describe('wake decisions (INV-29)', () => {
+  const wakeDirect = async (h: Harness) => {
+    const setup = await setUp(h);
+    await h.request('PATCH', `/v1/attachments/${setup.b.attachment}`, {
+      token: setup.human.token,
+      body: { wake: 'direct' },
+    });
+    return setup;
+  };
+  const ask = (h: Harness, workspace: string, token: string) =>
+    h
+      .request('POST', `/v1/workspaces/${workspace}/wake`, { token, body: {} })
+      .then((r) => r.body as { wake: boolean; reason?: string; seq?: number });
+
+  it('keeps the hourly budget across a restart (grants are in the log)', async () => {
+    const h = await start({ wakesPerHour: 2 });
+    const { a, b, workspace } = await wakeDirect(h);
+    for (let i = 0; i < 2; i++) {
+      await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+        token: a.token,
+        body: note(workspace, a.address, [b.address], `wake ${String(i)}`),
+      });
+      const granted = await ask(h, workspace, b.token);
+      expect(granted, `round ${String(i)}`).toMatchObject({ wake: true });
+      await h.request('POST', `/v1/workspaces/${workspace}/inbox/ack`, {
+        token: b.token,
+        body: { up_to: granted.seq },
+      });
+    }
+    await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, [b.address], 'one too many'),
+    });
+    expect(await ask(h, workspace, b.token)).toEqual({ wake: false, reason: 'budget_exhausted' });
+
+    open.splice(open.indexOf(h), 1);
+    const again = await h.restart();
+    open.push(again);
+    expect(await ask(again, workspace, b.token)).toEqual({
+      wake: false,
+      reason: 'budget_exhausted',
+    });
+    again.advance(3_600_001); // an hour later the budget is free again (the access token too)
+    const fresh = await again.request('POST', '/v1/auth/refresh', {
+      body: { refresh_token: b.refresh },
+    });
+    const token = (fresh.body as { access_token: string }).access_token;
+    expect(await ask(again, workspace, token)).toMatchObject({ wake: true });
+  });
+
+  it('pauses wakes in a thread of agents talking only to each other, until a human writes', async () => {
+    const h = await start({ agentOnlyMessagesBeforePause: 2 });
+    const { human, a, b, workspace } = await wakeDirect(h);
+    const thread = `th_${ulid()}`;
+    const say = (from: { address: string; token: string }, to: string, text: string) =>
+      h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+        token: from.token,
+        body: { ...note(workspace, from.address, [to], text), thread },
+      });
+    for (const text of ['one', 'two', 'three']) await say(a, b.address, text);
+    expect(await ask(h, workspace, b.token)).toEqual({ wake: false, reason: 'thread_paused' });
+    await say(human, b.address, 'carry on');
+    expect((await ask(h, workspace, b.token)).wake).toBe(true);
+  });
+});

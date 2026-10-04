@@ -134,6 +134,23 @@ describe('IC2: CLI and adapter against the real local server', () => {
     await second?.end();
   });
 
+  it('runs vendor hooks: mail next to a tool result, as JSON the vendor reads', async () => {
+    await run('send', '--attachment', attachmentA, '--to', agentB, '--text', 'Hook delivery.');
+    env.stdin = () =>
+      Promise.resolve(JSON.stringify({ session_id: 's-1', hook_event_name: 'PostToolUse' }));
+    const result = await run('hook', 'codex', 'post-tool', '--attachment', attachmentB);
+    expect(result.code).toBe(0);
+    const output = JSON.parse(result.out) as {
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
+    };
+    expect(output.hookSpecificOutput.hookEventName).toBe('PostToolUse');
+    expect(output.hookSpecificOutput.additionalContext).toContain('Hook delivery.');
+    expect((await run('hook', 'codex', 'post-tool', '--attachment', attachmentB)).out).toBe('');
+    env.stdin = () => Promise.resolve('not json');
+    expect((await run('hook', 'codex', 'post-tool', '--attachment', attachmentB)).code).toBe(0);
+    expect((await run('hook', 'emacs', 'post-tool', '--attachment', attachmentB)).code).toBe(64);
+  });
+
   it('exports a log that verifies', async () => {
     const workspace = /(ws_[0-9A-Z]{26})/.exec((await run('workspace', 'list')).out)?.[1] ?? '';
     const exported = await run('export', '--workspace', workspace);

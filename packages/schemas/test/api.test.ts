@@ -95,6 +95,8 @@ const examples: ApiPayloads = {
     has_more: false,
   },
   ackRequest: { up_to: 42 },
+  wakeRequest: { after: 41 },
+  wakeDecision: { wake: true, message: `msg_${U1}`, seq: 42 },
   agentList: {
     agents: [
       {

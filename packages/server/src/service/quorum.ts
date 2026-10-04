@@ -16,6 +16,7 @@ import {
   agentName,
   decideRefresh,
   DomainError,
+  type EventRecord,
   folderName,
   generateToken,
   hashToken,
@@ -24,6 +25,8 @@ import {
   type NewEvent,
   pathKey,
   PresenceBook,
+  type WakeDecision as CoreWakeDecision,
+  WakeGovernor,
   type Principal,
   type StoredMessage,
   sharedWorktreeWith,
@@ -41,10 +44,12 @@ import {
   type MessageAccepted,
   type MessageType,
   type SessionCreated,
+  type SubmittedEnvelope,
   type TokenPair,
   validateApiPayload,
   type Vendor,
   type Workspace,
+  type WakeDecision,
   type WorkspaceList,
 } from '@quorum/schemas';
 import type { Db } from '../storage/database.js';
@@ -87,6 +92,9 @@ export interface QuorumOptions {
   clock?: () => Date;
   /** Messages per agent per minute (POLICY_SPEC `messages_per_minute`). */
   messagesPerMinute?: number;
+  /** Wake limits (POLICY_SPEC `limits`; INV-29). Defaults: 20 per hour, pause after 12. */
+  wakesPerHour?: number;
+  agentOnlyMessagesBeforePause?: number;
 }
 
 const notFound = (code: string, message: string, fix: string) =>
@@ -115,6 +123,7 @@ export class Quorum {
   readonly #clock: () => Date;
   readonly #logs = new Map<string, MessageLog>();
   readonly #presence = new PresenceBook(HEARTBEAT_INTERVAL_MS);
+  readonly #wake: WakeGovernor;
   readonly #messageLimit: RateLimiter;
   readonly #heartbeatLimit: RateLimiter;
   readonly notifier = new Notifier();
@@ -129,6 +138,22 @@ export class Quorum {
     const nowMs = () => this.#clock().getTime();
     this.#messageLimit = new RateLimiter(options.messagesPerMinute ?? 60, 60_000, nowMs);
     this.#heartbeatLimit = new RateLimiter(12, 60_000, nowMs);
+    this.#wake = new WakeGovernor({
+      wakesPerHour: options.wakesPerHour ?? 20,
+      agentOnlyMessagesBeforePause: options.agentOnlyMessagesBeforePause ?? 12,
+    });
+  }
+
+  /**
+   * Feed an event to the wake governor: thread runs from messages, and, when replaying the log at
+   * start, the budget from granted wakes (live grants were already counted by `decide`).
+   */
+  #observe(event: EventRecord, replay: boolean): void {
+    if (event.kind === 'message.accepted') {
+      this.#wake.observe((event.payload as { envelope: SubmittedEnvelope }).envelope);
+    } else if (replay && event.kind === 'wake.granted') {
+      this.#wake.recordWake((event.payload as { agent: string }).agent, Date.parse(event.ts));
+    }
   }
 
   /** Open the service and rebuild the message projections from the log. */
@@ -138,7 +163,10 @@ export class Quorum {
       const log = new MessageLog();
       for (let after = 0; ;) {
         const events = await options.store.read(workspace, { after, limit: 5000 });
-        for (const event of events) log.apply(event);
+        for (const event of events) {
+          log.apply(event);
+          quorum.#observe(event, true);
+        }
         const last = events.at(-1);
         if (!last) break;
         after = last.seq;
@@ -179,6 +207,7 @@ export class Quorum {
       const log = this.#logs.get(event.workspace);
       if (!log) continue;
       log.apply(event);
+      this.#observe(event, false);
       if (event.kind === 'message.accepted') {
         const id = (event.payload as { envelope: { id: string } }).envelope.id;
         const stored = log.byId(id);
@@ -1001,6 +1030,73 @@ export class Quorum {
         sink.close();
       },
     });
+  }
+
+  /**
+   * May unread mail wake this agent or continue its turn? The server decides (INV-29): wake mode,
+   * wake types, hourly budget and the agent-only-loop pause. A grant is recorded in the log.
+   */
+  requestWake(caller: Caller, workspace: string, input: unknown): WakeDecision {
+    if (caller.kind !== 'agent') {
+      throw new DomainError(
+        'forbidden',
+        'auth.agent_only',
+        'Only agents ask to be woken.',
+        'Use the agent token from `quorum attach`.',
+      );
+    }
+    const log = this.#workspaceFor(caller, workspace);
+    const { after } = this.#check('wakeRequest', input ?? {});
+    const attachment = this.#registry.attachmentOfAgent(caller.id);
+    if (!attachment || attachment.wake === 'off') return { wake: false, reason: 'mode_off' };
+    const settings = {
+      mode: attachment.wake,
+      ...(attachment.wake_types === null
+        ? {}
+        : { types: JSON.parse(attachment.wake_types) as MessageType[] }),
+    };
+    const pending = log.inbox(caller.address, {
+      after: after ?? log.ackedUpTo(caller.address),
+      limit: MAX_PAGE,
+    }).messages;
+    if (pending.length === 0) return { wake: false, reason: 'no_mail' };
+    const nowMs = this.#clock().getTime();
+    const denials: CoreWakeDecision[] = [];
+    for (const message of pending) {
+      const decision = this.#wake.decide(caller.address, message, settings, nowMs);
+      if (!decision.wake) {
+        denials.push(decision);
+        continue;
+      }
+      const thread = message.thread ?? message.id;
+      this.#commit(() => ({
+        result: undefined,
+        events: [
+          [
+            workspace,
+            this.#event('system:quorum', 'wake.granted', {
+              agent: caller.address,
+              message: message.id,
+              thread,
+            }),
+          ],
+        ],
+      }));
+      return { wake: true, message: message.id, seq: message.seq };
+    }
+    // The most important reason first: limits before filters.
+    const order = [
+      'budget_exhausted',
+      'thread_paused',
+      'type_filtered',
+      'not_direct',
+      'own_message',
+    ];
+    const reason = order.find((r) => denials.some((d) => !d.wake && d.reason === r));
+    return {
+      wake: false,
+      reason: (reason ?? 'own_message') as NonNullable<WakeDecision['reason']>,
+    };
   }
 
   agents(caller: Caller, workspace: string): AgentList {

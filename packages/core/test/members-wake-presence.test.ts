@@ -122,6 +122,15 @@ describe('WakeGovernor (D-9, INV-29)', () => {
     expect(g.decide(B, message(), { mode: 'direct' }, 3_600_001).wake).toBe(true);
   });
 
+  it('counts wakes replayed from the log, so a restart does not refill the budget', () => {
+    const g = new WakeGovernor(limits);
+    for (const t of [0, 1000, 2000]) g.recordWake(B, t);
+    expect(g.decide(B, message(), { mode: 'direct' }, 3000)).toEqual({
+      wake: false,
+      reason: 'budget_exhausted',
+    });
+  });
+
   it('pauses a thread after too many agent-only messages until a human writes', () => {
     const g = new WakeGovernor({ ...limits, wakesPerHour: 100 });
     for (let i = 0; i < 5; i++) g.observe(message());

@@ -349,6 +349,28 @@ export interface AgentList {
   }[];
 }
 
+/** POST /v1/workspaces/{ws}/wake (agents): may new mail wake or continue me? (INV-29) */
+export interface WakeRequest {
+  /** Consider messages after this seq; default: after the caller's last ack. */
+  after?: number;
+}
+
+export type WakeDenial =
+  | 'no_mail'
+  | 'mode_off'
+  | 'own_message'
+  | 'not_direct'
+  | 'type_filtered'
+  | 'thread_paused'
+  | 'budget_exhausted';
+
+export interface WakeDecision {
+  wake: boolean;
+  reason?: WakeDenial;
+  message?: string;
+  seq?: number;
+}
+
 /** Local mode discovery file: how adapters find the local server and which key to pin. */
 export interface LocalDiscovery {
   instance_id: string;
@@ -405,6 +427,8 @@ export interface ApiPayloads {
   messageAccepted: MessageAccepted;
   inboxPage: InboxPage;
   ackRequest: AckRequest;
+  wakeRequest: WakeRequest;
+  wakeDecision: WakeDecision;
   agentList: AgentList;
   localDiscovery: LocalDiscovery;
   localBootstrapFile: LocalBootstrapFile;

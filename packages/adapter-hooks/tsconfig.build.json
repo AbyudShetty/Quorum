@@ -15,16 +15,10 @@
       "path": "../core/tsconfig.build.json"
     },
     {
-      "path": "../adapter-mcp/tsconfig.build.json"
-    },
-    {
       "path": "../local/tsconfig.build.json"
     },
     {
-      "path": "../server/tsconfig.build.json"
-    },
-    {
-      "path": "../adapter-hooks/tsconfig.build.json"
+      "path": "../adapter-mcp/tsconfig.build.json"
     }
   ]
 }

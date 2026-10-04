@@ -333,6 +333,27 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/workspaces/{workspace}/wake': {
+      post: {
+        operationId: 'requestWake',
+        tags: ['messages'],
+        summary: 'May new mail wake this agent or continue its turn? (agents only)',
+        description: [
+          "The server decides, never the adapter: the attachment's wake mode and `wake_types`, the hourly wake budget and the agent-only-loop pause all apply (ARCHITECTURE §15.2, INV-29). A granted wake counts against the budget and is recorded in the event log. Waking never bypasses the agent's own permission prompts.",
+          '',
+          'Adapters call this from a turn-end hook (e.g. `Stop`) when unread mail exists, and continue the turn only on `wake: true`.',
+        ].join('\n'),
+        security: agent,
+        parameters: [workspaceParam],
+        requestBody: { required: true, content: json('WakeRequest') },
+        responses: {
+          '200': { description: 'The decision.', content: json('WakeDecision') },
+          '400': errorRef('BadRequest'),
+          '404': errorRef('NotFound'),
+          ...authErrors,
+        },
+      },
+    },
     '/v1/workspaces/{workspace}/stream': {
       get: {
         operationId: 'streamMessages',
@@ -507,6 +528,8 @@ export const openApiDocument = {
       Attachment: apiSchemas.attachment,
       AttachmentUpdate: apiSchemas.attachmentUpdate,
       AttachmentCreated: apiSchemas.attachmentCreated,
+      WakeRequest: apiSchemas.wakeRequest,
+      WakeDecision: apiSchemas.wakeDecision,
       AgentRef: apiSchemas.agentRef,
       SessionCreate: apiSchemas.sessionCreate,
       SessionCreated: apiSchemas.sessionCreated,

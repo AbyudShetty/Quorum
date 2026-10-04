@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadAttachment, MemoryCredentialStore } from '@quorum/adapter-mcp';
@@ -116,13 +116,13 @@ describe('quorum attach / detach', () => {
     expect(errText()).toContain('quorum login');
   });
 
-  it('attaches a folder, keeps credentials in the keychain, and prints the Codex setup', async () => {
+  it('attaches a folder, keeps credentials in the keychain, and writes the Codex setup', async () => {
     const { env, store, dataDir, project, workspace, text } = await signedIn();
     expect(await main(['attach', '--vendor', 'codex', '--workspace', workspace], env)).toBe(0);
     const id = /\((at_[0-9A-Z]{26})\)/.exec(text())?.[1] ?? '';
     expect(id).not.toBe('');
-    expect(text()).toContain('.codex/config.toml');
-    expect(text()).toContain(`args = ["mcp", "--attachment", "${id}"]`);
+    expect(text()).toContain(join('.codex', 'config.toml'));
+    expect(text()).toContain('/hooks');
     expect(text()).toContain('wake off');
 
     expect((await store.load(id))?.access_token).toMatch(/^qrm_at_/);
@@ -131,8 +131,21 @@ describe('quorum attach / detach', () => {
     expect(record?.root.toLowerCase().replaceAll('\\', '/')).toContain(
       project.toLowerCase().replaceAll('\\', '/').split('/').at(-1),
     );
-    // Nothing secret is in the record, and nothing was written into the project folder.
-    expect(JSON.stringify(record)).not.toContain('qrm_');
+    // The project folder gets vendor config that names the attachment, never a secret (INV-25).
+    const toml = await readFile(join(project, '.codex', 'config.toml'), 'utf8');
+    expect(toml).toContain(id);
+    const hooks = await readFile(join(project, '.codex', 'hooks.json'), 'utf8');
+    expect(hooks).toContain(`hook codex stop --attachment ${id}`);
+    expect(JSON.stringify(record) + toml + hooks).not.toContain('qrm_');
+  });
+
+  it('only prints the setup with --no-config, writing nothing into the folder', async () => {
+    const { env, project, workspace, text } = await signedIn();
+    expect(
+      await main(['attach', '--vendor', 'codex', '--workspace', workspace, '--no-config'], env),
+    ).toBe(0);
+    const id = /\((at_[0-9A-Z]{26})\)/.exec(text())?.[1] ?? '';
+    expect(text()).toContain(`args = ["mcp", "--attachment", "${id}"]`);
     await expect(stat(join(project, '.codex'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 

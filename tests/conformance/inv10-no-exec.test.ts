@@ -1,5 +1,5 @@
 // INV-10 conformance: Quorum never executes anything on an agent's behalf. Two layers:
-//  1. the adapter and CLI sources cannot start processes or evaluate strings at all;
+//  1. the adapter (MCP and hooks) and CLI sources cannot start processes or evaluate strings at all;
 //  2. a message that asks for execution (a `reproduce` field, an instruction) comes back as text
 //     and the MCP tools offer nothing that could act on it.
 import { readdirSync, readFileSync } from 'node:fs';
@@ -18,7 +18,11 @@ const sources = (dir: string): string[] =>
     .map((e) => join(e.parentPath, e.name));
 
 describe('INV-10: no way to run things (static)', () => {
-  const files = [...sources('packages/adapter-mcp/src'), ...sources('packages/cli/src')];
+  const files = [
+    ...sources('packages/adapter-mcp/src'),
+    ...sources('packages/adapter-hooks/src'),
+    ...sources('packages/cli/src'),
+  ];
 
   it('finds the adapter and CLI sources', () => {
     expect(files.length).toBeGreaterThan(8);

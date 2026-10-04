@@ -17,6 +17,9 @@
       "path": "../packages/adapter-mcp/tsconfig.build.json"
     },
     {
+      "path": "../packages/adapter-hooks/tsconfig.build.json"
+    },
+    {
       "path": "../packages/cli/tsconfig.build.json"
     },
     {

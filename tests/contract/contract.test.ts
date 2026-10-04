@@ -416,6 +416,43 @@ describe.skipIf(!targetModule)('/v1 contract', () => {
       expect((await call(t.baseUrl, 'DELETE', sessionPath, { token: a.token })).status).toBe(404);
     });
 
+    it('decides wakes on the server, following the wake mode (INV-29)', async (context) => {
+      if (!t.makeFolder) return context.skip();
+      const a = await attach('wake-a', 'claude-code'); // wake off (the default)
+      const b = await attach('wake-b', 'codex');
+      await call(t.baseUrl, 'PATCH', `/v1/attachments/${b.id}`, {
+        token: t.human.token,
+        body: { wake: 'direct' },
+      });
+      const ask = async (agent: { token: string }) => {
+        const reply = await call(t.baseUrl, 'POST', `${ws()}/wake`, {
+          token: agent.token,
+          body: {},
+        });
+        expect(reply.status).toBe(200);
+        expectPayload('wakeDecision', reply.body);
+        return reply.body as { wake: boolean; reason?: string; message?: string; seq?: number };
+      };
+      expect(await ask(b)).toEqual({ wake: false, reason: 'no_mail' });
+      const sent = await message(a.address, a.token, 'note', [b.address], { text: 'wake up' });
+      const granted = await ask(b);
+      expect(granted).toMatchObject({ wake: true, seq: (sent.body as { seq: number }).seq });
+      expect(await ask(a)).toEqual({ wake: false, reason: 'mode_off' });
+
+      await call(t.baseUrl, 'POST', `${ws()}/inbox/ack`, {
+        token: b.token,
+        body: { up_to: granted.seq },
+      });
+      await message(a.address, a.token, 'note', ['*'], { text: 'to everyone' });
+      expect(await ask(b)).toEqual({ wake: false, reason: 'not_direct' });
+
+      const human = await call(t.baseUrl, 'POST', `${ws()}/wake`, {
+        token: t.human.token,
+        body: {},
+      });
+      expect(human.status).toBe(403);
+    });
+
     it('only agents register sessions', async () => {
       const reply = await call(t.baseUrl, 'POST', '/v1/sessions', {
         token: t.human.token,

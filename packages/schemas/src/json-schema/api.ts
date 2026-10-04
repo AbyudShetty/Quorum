@@ -242,6 +242,42 @@ export const apiSchemas = {
     properties: { up_to: { type: 'integer', minimum: 0 } },
   }),
 
+  /**
+   * An agent's adapter asks whether new mail may wake it or continue its turn (ARCHITECTURE §15.2).
+   * The server decides with the attachment's wake mode, the hourly budget and the agent-only-loop
+   * pause (INV-29); adapters never decide on their own. A granted wake is recorded in the log.
+   */
+  wakeRequest: schema('wake-request', {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      /** Consider messages after this seq. Omitted: after the caller's last acknowledged seq. */
+      after: { type: 'integer', minimum: 0 },
+    },
+  }),
+  wakeDecision: schema('wake-decision', {
+    type: 'object',
+    required: ['wake'],
+    properties: {
+      wake: { type: 'boolean' },
+      /** Why not (only when `wake` is false). */
+      reason: {
+        enum: [
+          'no_mail',
+          'mode_off',
+          'own_message',
+          'not_direct',
+          'type_filtered',
+          'thread_paused',
+          'budget_exhausted',
+        ],
+      },
+      /** The message that justified the wake (only when `wake` is true). */
+      message: common('messageId'),
+      seq: { type: 'integer', minimum: 1 },
+    },
+  }),
+
   agentList: schema('agent-list', {
     type: 'object',
     required: ['agents'],

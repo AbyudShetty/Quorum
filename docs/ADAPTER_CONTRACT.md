@@ -1,6 +1,6 @@
 # Adapter contract
 
-Status: **draft for the Phase 1 contract freeze (IC1)** · Track B (abhijna) · Last updated: 2026-10-03, revised after Track A's answers to the six open questions
+Status: **frozen as `contract-v1` (IC1), with additive changes since** · Track B (abhijna; abyud while abhijna is away) · Last updated: 2026-10-04: real server, auto-start, hooks, server-decided wakes, `attach` writes vendor config
 
 Track B's half of the contract: what the adapters, the CLI and the client library promise, how Claude Code and Codex receive messages, and how the wake modes work. Track A's half is `packages/schemas` (messages, `/v1` API, `localDiscovery`) and `tests/contract`. Changes follow TEAM_PLAN §5.3.
 
@@ -8,13 +8,13 @@ Items marked **[pending]** are not yet verified or not yet built; nothing in thi
 
 ## 1. What exists
 
-| Part                          | Where                      | State                                                                                                                                                          |
-| ----------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Client library                | `packages/adapter-mcp/src` | built: identity check, credentials, refresh, bootstrap login, attachments, outbox, heartbeat, framing (data directory and discovery come from `@quorum/local`) |
-| MCP server (`quorum_*` tools) | `packages/adapter-mcp/src` | built: `quorum_send`, `quorum_inbox`, `quorum_status`                                                                                                          |
-| CLI                           | `packages/cli`             | built: `login`, `attach`, `attach --update`, `detach`, `status`, `inbox`, `send`, `export`, `verify`, `mcp`. **[pending]** `serve`, `stop`, `worktree`, `ui`   |
-| Hook adapter                  | `packages/adapter-hooks`   | **[pending]** (Claude Code mechanics verified by spike S3; Codex hooks need trust approval first)                                                              |
-| Fake `/v1` server             | `tests/fakes/fake-server`  | built; passes `tests/contract`                                                                                                                                 |
+| Part                          | Where                      | State                                                                                                                                                                                                                        |
+| ----------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client library                | `packages/adapter-mcp/src` | built: identity check, credentials, refresh, bootstrap login, attachments, outbox, heartbeat, framing (data directory and discovery come from `@quorum/local`)                                                               |
+| MCP server (`quorum_*` tools) | `packages/adapter-mcp/src` | built: `quorum_send`, `quorum_inbox`, `quorum_status`                                                                                                                                                                        |
+| CLI                           | `packages/cli`             | built: `serve --local`, `stop`, `login`, `workspace`, `attach` (writes vendor config), `attach --update`, `detach`, `status`, `inbox`, `send`, `export`, `verify`, `mcp`, `hook`. **[pending]** `worktree`, `ui`             |
+| Hook adapter                  | `packages/adapter-hooks`   | built: session start, prompt, post-tool, stop (server-decided continuation), session end, for Claude Code and Codex; tested against the real server. **[pending]** idle wake (S1/S2), Codex runs (hooks need `/hooks` trust) |
+| Fake `/v1` server             | `tests/fakes/fake-server`  | built; passes `tests/contract`                                                                                                                                                                                               |
 
 The client library lives in `adapter-mcp` for now because the CLI and the hook adapter both import it. If you prefer a separate `packages/client`, that is a pure move; raise it at the freeze.
 
@@ -25,7 +25,7 @@ The client library lives in `adapter-mcp` for now because the CLI and the hook a
 3. **Identity handshake:** before any credential is sent, `POST /v1/hello` with a fresh 32-byte nonce; verify the signature with `verifyHello` against the pinned `public_key`, and require `instance_id` to equal the discovery file's. Any mismatch → `IdentityError`; the token is **never** sent and there is no fallback. Tests: wrong key, a squatter on the port, wrong instance (the squatter never receives an `Authorization` header).
 4. **Unreachable vs. untrusted:** a connection failure is `UnreachableError` (retry later); a failed handshake is `IdentityError` (stop, tell the human).
 
-**[pending]** Auto-start (`<data>/local/server.lock`, spawn `quorum serve --local`, wait for the discovery file) belongs to the CLI's `serve` and is not built yet. Until then adapters report "no local server is published".
+**Auto-start (built):** CLI commands (and therefore `quorum mcp` and the hooks at session start and on prompts) start the local server when no live one is published, wait for the discovery file, then run the handshake above. The spawn lives in `@quorum/server` with a fixed command line, so adapter and CLI sources contain no process APIs (INV-10). `status` and `stop` never start a server.
 
 ## 3. Credentials (INV-11, INV-25)
 
@@ -36,7 +36,7 @@ The client library lives in `adapter-mcp` for now because the CLI and the hook a
 
 ### Signing in (local mode)
 
-Each time the local server starts it writes a one-time code (`qrm_bc_…`, 10 minutes, single use) to `<data>/local/bootstrap.json`. `quorum login` reads it with `readBootstrapCode` (missing, malformed or expired → "no valid code"), runs the identity handshake, and only then sends the code to `POST /v1/auth/local-bootstrap`; the answer (`human` + `credentials`) is stored under `human`. The code is a secret, so it is sent to nobody who failed the handshake (tested with a squatter that must never see it). Remote mode answers 404 (join codes, Phase 1b). A new code needs a server restart: until `serve`/`stop` exist, `login` says so instead of restarting the server itself **[pending]**.
+Each time the local server starts it writes a one-time code (`qrm_bc_…`, 10 minutes, single use) to `<data>/local/bootstrap.json`. `quorum login` reads it with `readBootstrapCode` (missing, malformed or expired → "no valid code"), runs the identity handshake, and only then sends the code to `POST /v1/auth/local-bootstrap`; the answer (`human` + `credentials`) is stored under `human`. The code is a secret, so it is sent to nobody who failed the handshake (tested with a squatter that must never see it). Remote mode answers 404 (join codes, Phase 1b). `login` starts the server first if none is running (a fresh server writes a fresh code). A code that was already used needs a restart: `quorum stop`, then `quorum login`.
 
 ## 4. Attachment record (written by `quorum attach`)
 
@@ -60,7 +60,7 @@ An adapter is started with `--attachment <at_id>` and loads this record plus the
 
 `quorum attach` (humans only, INV-30) creates the attachment (`POST /v1/attachments`), stores the agent's credentials in the keychain, writes the record above, and prints the exact vendor setup: `claude mcp add --scope local quorum -- quorum mcp --attachment <at_id>` for Claude Code, a `.codex/config.toml` snippet for Codex. It refuses the Quorum data directory and any folder containing it. Wake mode defaults to `off` (the non-interactive default of ARCHITECTURE §15.2). `attach --update <at_id>` changes `wake`, `wake_types` and `lease_enforcement` with `PATCH /v1/attachments/{id}`; `detach` deletes the attachment and forgets the credentials and record.
 
-**[pending]** writing the vendor config files and hooks for the person (today it prints them), the interactive wake prompt, vendor auto-detection (`--vendor` is required), and `permissions.deny` rules for the data directory.
+**Vendor config (built):** `attach` writes the hooks (Claude Code: `.claude/settings.local.json`, exec form; Codex: `.codex/hooks.json`) and, for Codex, the MCP server table in `.codex/config.toml`; it merges with existing settings, adds each file to `.git/info/exclude` (never `.gitignore`), lists every file it changed and prints what is left: `claude mcp add …` for Claude Code (the CLI runs no programs, INV-10), and the one-time `/hooks` review for Codex. `detach` removes exactly those entries. `--no-config` only prints the setup. Commands use `quorum` when it is on the PATH, else Node plus the CLI's absolute path. **[pending]** the interactive wake prompt, vendor auto-detection (`--vendor` is required), and `permissions.deny` rules for the data directory.
 
 ## 5. Tools
 
@@ -82,12 +82,12 @@ Nothing in the adapters executes message content, follows `reproduce` fields, or
 
 ### Delivery paths per vendor
 
-| Path                                                      | Claude Code                                                                                     | Codex                                                                                         |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Pull (`quorum_inbox` etc.)                                | MCP over stdio, **built and tested** with the SDK's in-memory transport against the fake server | MCP over stdio; server runs as the user (S4, verified). **[pending]** end-to-end run in Codex |
-| Mail at session start / on each prompt / after tool calls | hooks with `additionalContext` **[pending]**                                                    | hooks **[pending]** (need trust approval, see S4)                                             |
-| Continue a turn when mail arrived                         | `Stop` hook with `decision: "block"` (S3, verified)                                             | documented, **[pending]** verification                                                        |
-| Wake an idle session                                      | channels or `asyncRewake` **[pending]** (S1, S2 need an interactive session)                    | no documented mechanism; mail waits for the next prompt                                       |
+| Path                                                      | Claude Code                                                                                                                             | Codex                                                                                          |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Pull (`quorum_inbox` etc.)                                | MCP over stdio, **built and tested** with the SDK's in-memory transport against the fake server                                         | MCP over stdio; server runs as the user (S4, verified). **[pending]** end-to-end run in Codex  |
+| Mail at session start / on each prompt / after tool calls | hooks with `additionalContext` (built, `quorum hook claude-code …`)                                                                     | same hooks (built, `quorum hook codex …`); Codex runs them only after the `/hooks` review (S4) |
+| Continue a turn when mail arrived                         | `Stop` hook: asks `POST …/wake`; only on a grant `decision: "block"` with the framed mail; never when `stop_hook_active` (S3, verified) | same hook; documented by OpenAI, **[pending]** a live run                                      |
+| Wake an idle session                                      | channels or `asyncRewake` **[pending]** (S1, S2 need an interactive session)                                                            | no documented mechanism; mail waits for the next prompt                                        |
 
 ## 7. Offline sending and delivery guarantees (INV-20)
 
@@ -104,18 +104,18 @@ At start `quorum mcp` registers a session (`POST /v1/sessions`) with the attache
 
 ### Presence (heartbeats, MESSAGE_SPEC §5.10)
 
-`quorum mcp` sends a `heartbeat` (`status: idle`, no resources) to every attached workspace at start and then every **30 s**; the server marks an agent offline after **90 s** of silence. When the session ends (stdin closes) it sends `status: offline` at once, waiting at most 2 s so a dead server cannot hold up shutdown. Heartbeats bypass the outbox: the server records nothing for them, and a late one is worthless. Send failures never crash the adapter. **[pending]** hook-based adapters send one on each hook event (with the hook adapter); `status` is always `idle` for now.
+`quorum mcp` sends a `heartbeat` (`status: idle`, no resources) to every attached workspace at start and then every **30 s**; the server marks an agent offline after **90 s** of silence. When the session ends (stdin closes) it sends `status: offline` at once, waiting at most 2 s so a dead server cannot hold up shutdown. Heartbeats bypass the outbox: the server records nothing for them, and a late one is worthless. Send failures never crash the adapter. Hooks also report presence: `idle` at session start and when a turn ends, `working` on prompts and tool calls (at most every 20 s), `offline` at session end. The MCP server's timer still says `idle`, so `status` can flip between the two while an agent works.
 
 ## 8. Wake modes (D-9)
 
-The mode is stored per attachment (`off` | `direct` | `all`, optional `wake_types`) and enforced by the server's wake governor (INV-29: hourly budget and the agent-only-loop breaker always apply). Adapters never decide on their own to wake.
+The mode is stored per attachment (`off` | `direct` | `all`, optional `wake_types`) and enforced by the server's wake governor (INV-29: hourly budget and the agent-only-loop breaker always apply). Adapters never decide on their own to wake: they ask `POST /v1/workspaces/{ws}/wake` (agents only), which answers `{wake, reason?, message?, seq?}` and records each grant in the log, so the budget survives a server restart.
 
-| Mode / vendor                         | What the adapter does                                                                                                                                     |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`, both                           | Show mail at the next turn boundary and on `quorum_inbox`. No auto-continue.                                                                              |
-| `direct`/`all`, Claude Code, mid-turn | Surface mail after tool calls; on `Stop`, block once with the framed mail so the turn continues. Use `stop_hook_active` to stop (S3). **[pending]** build |
-| `direct`/`all`, Claude Code, idle     | **[pending]** channels (S2) or `asyncRewake` watcher (S1)                                                                                                 |
-| `direct`/`all`, Codex                 | `Stop` continuation **[pending]** (S3, Codex side); idle: next prompt; the human is notified                                                              |
+| Mode / vendor                         | What the adapter does                                                                                                                                       |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`, both                           | Show mail at the next turn boundary and on `quorum_inbox`. No auto-continue.                                                                                |
+| `direct`/`all`, Claude Code, mid-turn | Surface mail after tool calls; on `Stop`, block once with the framed mail when the server grants a wake; `stop_hook_active` stops a second one (S3). Built. |
+| `direct`/`all`, Claude Code, idle     | **[pending]** channels (S2) or `asyncRewake` watcher (S1)                                                                                                   |
+| `direct`/`all`, Codex                 | Same `Stop` hook (built; a live Codex run is **[pending]**, S3 Codex side); idle: next prompt                                                               |
 
 ## 9. Spike results
 

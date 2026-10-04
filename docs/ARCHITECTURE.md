@@ -274,7 +274,7 @@ Per attachment, chosen at `quorum attach` (interactive prompt explaining the tra
 | `direct` | Wake/continue for messages addressed to this agent (not broadcasts). Suggested in the interactive prompt.                                      |
 | `all`    | Also wake for broadcasts (`*`).                                                                                                                |
 
-Optional `wake_types` narrows further (e.g. only `request` and `retraction`). Whatever the mode, the **wake budget and the agent-only-loop circuit breaker always apply** (INV-29, POLICY_SPEC `limits`), and waking never bypasses the agent's own permission prompts.
+Optional `wake_types` narrows further (e.g. only `request` and `retraction`). Whatever the mode, the **wake budget and the agent-only-loop circuit breaker always apply** (INV-29, POLICY_SPEC `limits`), and waking never bypasses the agent's own permission prompts. The server decides: an adapter asks `POST /v1/workspaces/{ws}/wake` before continuing or waking an agent, and each grant is an event (`wake.granted`), so the budget survives restarts.
 
 ### 15.3 Delivery latency targets (local mode)
 

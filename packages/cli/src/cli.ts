@@ -35,7 +35,21 @@ import {
   serveStdio,
   UnreachableError,
 } from '@quorum/adapter-mcp';
+import {
+  HOOK_EVENTS,
+  HOOK_VENDORS,
+  type HookEvent,
+  type HookVendor,
+  runHook,
+} from '@quorum/adapter-hooks';
 import { liveServer, ServerStartError } from './local-server.js';
+import {
+  type ConfigChange,
+  type QuorumCommand,
+  quorumCommand,
+  removeVendorConfig,
+  writeVendorConfig,
+} from './vendor-config.js';
 
 export interface CliEnv {
   out: (text: string) => void;
@@ -50,6 +64,10 @@ export interface CliEnv {
    * bring their own server.
    */
   startServer?: (dataDir: string) => Promise<void>;
+  /** The hook payload a vendor writes to stdin (`quorum hook`). */
+  stdin?: () => Promise<string>;
+  /** How vendors start `quorum` (default: by name if on the PATH, else Node + this CLI). */
+  quorumCommand?: () => Promise<QuorumCommand>;
   /** Stop a verified local server process (default: SIGTERM). Tests replace it. */
   killServer?: (pid: number) => void;
 }
@@ -67,7 +85,8 @@ Usage: quorum <command> [options]
   login                                      Sign in as the owner on this machine (local server)
   workspace create <name> | workspace list   Create or list your workspaces
   attach [dir] --vendor <v> [--workspace <ws>] [--wake off|direct|all] [--name <n>] [--new-identity]
-                                             Connect a folder to a workspace as an agent
+         [--no-config]                       Connect a folder to a workspace as an agent and write
+                                             the vendor hooks and MCP config (kept out of git)
   attach --update <at_id> [--wake ...] [--wake-types a,b] [--lease-enforcement warn|block]
                                              Change an attachment's wake settings
   detach <at_id>                             Disconnect an attachment and forget its credentials
@@ -79,6 +98,9 @@ Usage: quorum <command> [options]
   export --workspace <ws>                    Print the workspace event log (JSON Lines); humans only
   verify <file.jsonl> --workspace <ws>       Check an exported log's hash chain
   mcp    --attachment <at_id>                Run the MCP server for an agent (used by Claude Code / Codex)
+  hook   <claude-code|codex> <session-start|prompt|post-tool|stop|session-end> --attachment <at_id>
+                                             Run one vendor hook (reads its JSON on stdin; used by
+                                             Claude Code / Codex, never fails the agent)
   help
 
 Not yet available: worktree, ui.
@@ -127,6 +149,8 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
         return await verify(rest, env);
       case 'mcp':
         return await mcp(rest, env);
+      case 'hook':
+        return await hook(rest, env);
       default:
         throw new UsageError(`Unknown command "${command}". Run \`quorum help\`.`);
     }
@@ -495,6 +519,7 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
       'lease-enforcement': { type: 'string' },
       name: { type: 'string' },
       'new-identity': { type: 'boolean', default: false },
+      'no-config': { type: 'boolean', default: false },
       update: { type: 'string' },
     },
     allowPositionals: true,
@@ -603,20 +628,34 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
   });
 
   env.out(
-    `Attached ${root} as ${created.agent.address} (${id}), wake ${created.attachment.wake}.\n\n` +
-      setupInstructions(vendor, id, root),
+    `Attached ${root} as ${created.agent.address} (${id}), wake ${created.attachment.wake}.\n\n`,
   );
+  if (values['no-config']) {
+    env.out(setupInstructions(vendor, id, root));
+    return 0;
+  }
+  const command = await (env.quorumCommand ?? quorumCommand)();
+  const config = await writeVendorConfig(vendor, root, id, command);
+  env.out(describeChanges(config.changes));
+  if (config.steps.length > 0) {
+    env.out(`\nNext:\n${config.steps.map((step) => `- ${step}`).join('\n')}\n`);
+  }
+  env.out(`\nTo undo everything: quorum detach ${id}\n`);
   return 0;
 };
 
-/** What the person runs to connect the vendor tool; writing these files for them is not built yet. */
+/** One line per file written, kept or removed. */
+const describeChanges = (changes: readonly ConfigChange[]): string =>
+  changes.map((c) => `  ${c.action.padEnd(7)} ${c.file}${c.note ? ` (${c.note})` : ''}\n`).join('');
+
+/** With --no-config: what to set up by hand. */
 const setupInstructions = (vendor: string, id: string, root: string): string => {
   const undo = `To undo: quorum detach ${id}\n`;
   if (vendor === 'claude-code') {
     return (
       `Next, in ${root}:\n  claude mcp add --scope local quorum -- quorum mcp --attachment ${id}\n` +
       '(If `quorum` is not on your PATH yet, use `node <repo>/packages/cli/bin/quorum.js` instead.)\n' +
-      `Hooks (new mail while the agent works) are not set up yet.\n${undo}`
+      `Hooks (mail while the agent works) were not written: run attach without --no-config.\n${undo}`
     );
   }
   if (vendor === 'codex') {
@@ -624,7 +663,7 @@ const setupInstructions = (vendor: string, id: string, root: string): string => 
       `Next, create ${root}/.codex/config.toml (keep it out of git, e.g. via .git/info/exclude):\n` +
       `  [mcp_servers.quorum]\n  command = "quorum"\n  args = ["mcp", "--attachment", "${id}"]\n` +
       'Codex asks before each quorum tool call unless you change its approval settings.\n' +
-      `Hooks are not set up yet.\n${undo}`
+      `Hooks were not written: run attach without --no-config.\n${undo}`
     );
   }
   return `Start the MCP server with: quorum mcp --attachment ${id}\n${undo}`;
@@ -633,11 +672,13 @@ const setupInstructions = (vendor: string, id: string, root: string): string => 
 const detach = async (args: string[], env: CliEnv): Promise<number> => {
   const { positionals } = parseArgs({ args, options: {}, allowPositionals: true, strict: true });
   const id = need(positionals[0], 'Pass the attachment id: quorum detach <at_id>.');
+  const info = await loadAttachment(dataDirOf(env), id);
   const client = await humanClient(env);
   await client.deleteAttachment(id);
   await env.store.remove(id);
   await removeAttachment(dataDirOf(env), id);
   env.out(`Detached ${id}. Its credentials were removed from the keychain.\n`);
+  if (info) env.out(describeChanges(await removeVendorConfig(info.vendor, info.root, id)));
   return 0;
 };
 
@@ -663,5 +704,43 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
     void session?.end();
   };
   await serveStdio(server);
+  return 0;
+};
+
+/**
+ * `quorum hook <vendor> <event> --attachment <at_id>`: one Claude Code or Codex hook. Prints the
+ * vendor's JSON (or nothing) and always exits 0, so a Quorum problem never blocks the agent.
+ */
+const hook = async (args: string[], env: CliEnv): Promise<number> => {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { attachment: { type: 'string' } },
+    allowPositionals: true,
+    strict: true,
+  });
+  const [vendor, event] = positionals;
+  if (!HOOK_VENDORS.includes(vendor as HookVendor) || !HOOK_EVENTS.includes(event as HookEvent)) {
+    throw new UsageError(
+      `Use: quorum hook <${HOOK_VENDORS.join('|')}> <${HOOK_EVENTS.join('|')}> --attachment <at_id>.`,
+    );
+  }
+  const info = await attachmentOf(env, values.attachment);
+  let input: unknown;
+  try {
+    input = JSON.parse((await env.stdin?.()) ?? '');
+  } catch {
+    input = undefined;
+  }
+  const result = await runHook({
+    vendor: vendor as HookVendor,
+    event: event as HookEvent,
+    input,
+    attachment: info,
+    dataDir: dataDirOf(env),
+    // Starting a server only makes sense when a session begins or the human asks something.
+    connect: () =>
+      connect(env, info.attachment, { autoStart: event === 'session-start' || event === 'prompt' }),
+  });
+  if (result.stdout) env.out(`${result.stdout}\n`);
   return 0;
 };

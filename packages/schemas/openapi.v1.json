@@ -759,6 +759,69 @@
         }
       }
     },
+    "/v1/workspaces/{workspace}/wake": {
+      "post": {
+        "operationId": "requestWake",
+        "tags": [
+          "messages"
+        ],
+        "summary": "May new mail wake this agent or continue its turn? (agents only)",
+        "description": "The server decides, never the adapter: the attachment's wake mode and `wake_types`, the hourly wake budget and the agent-only-loop pause all apply (ARCHITECTURE §15.2, INV-29). A granted wake counts against the budget and is recorded in the event log. Waking never bypasses the agent's own permission prompts.\n\nAdapters call this from a turn-end hook (e.g. `Stop`) when unread mail exists, and continue the turn only on `wake: true`.",
+        "security": [
+          {
+            "agentToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "path",
+            "required": true,
+            "description": "Workspace ID (`ws_…`).",
+            "schema": {
+              "$ref": "#/components/schemas/Common/$defs/workspaceId"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WakeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WakeDecision"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
     "/v1/workspaces/{workspace}/stream": {
       "get": {
         "operationId": "streamMessages",
@@ -3226,6 +3289,51 @@
                 "minimum": 1
               }
             }
+          }
+        }
+      },
+      "WakeRequest": {
+        "$id": "urn:quorum:schema:api:wake-request:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API wake-request",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "WakeDecision": {
+        "$id": "urn:quorum:schema:api:wake-decision:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API wake-decision",
+        "type": "object",
+        "required": [
+          "wake"
+        ],
+        "properties": {
+          "wake": {
+            "type": "boolean"
+          },
+          "reason": {
+            "enum": [
+              "no_mail",
+              "mode_off",
+              "own_message",
+              "not_direct",
+              "type_filtered",
+              "thread_paused",
+              "budget_exhausted"
+            ]
+          },
+          "message": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/messageId"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },

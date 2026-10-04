@@ -1,13 +1,10 @@
 {
-  "name": "@quorum/cli",
+  "name": "@quorum/adapter-hooks",
   "version": "0.0.0",
   "private": true,
-  "description": "The quorum command line: serve, login, workspaces, attach, status, inbox, send, verify, export and the MCP server entry point.",
+  "description": "Quorum hooks for Claude Code and Codex: unread mail at session start, on each prompt and after tool calls, turn continuation on new mail (as the server allows), sessions and presence.",
   "license": "Apache-2.0",
   "type": "module",
-  "bin": {
-    "quorum": "./bin/quorum.js"
-  },
   "exports": {
     ".": {
       "quorum-source": "./src/index.ts",
@@ -16,15 +13,15 @@
     }
   },
   "files": [
-    "bin",
     "dist"
   ],
   "dependencies": {
-    "@quorum/adapter-hooks": "0.0.0",
     "@quorum/adapter-mcp": "0.0.0",
     "@quorum/core": "0.0.0",
     "@quorum/local": "0.0.0",
-    "@quorum/schemas": "0.0.0",
+    "@quorum/schemas": "0.0.0"
+  },
+  "devDependencies": {
     "@quorum/server": "0.0.0"
   }
 }

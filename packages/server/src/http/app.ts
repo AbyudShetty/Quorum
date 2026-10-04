@@ -304,6 +304,10 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
     },
   );
 
+  app.post<WsParams>('/v1/workspaces/:workspace/wake', (request) =>
+    quorum.requestWake(caller(request), request.params.workspace, request.body),
+  );
+
   app.get<WsParams>('/v1/workspaces/:workspace/agents', (request) =>
     quorum.agents(caller(request), request.params.workspace),
   );

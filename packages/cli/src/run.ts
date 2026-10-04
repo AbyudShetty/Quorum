@@ -8,6 +8,11 @@ export const runFromProcess = (argv: string[]): Promise<number> =>
     out: (text) => process.stdout.write(text),
     err: (text) => process.stderr.write(text),
     store: new KeychainCredentialStore(),
+    stdin: async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+      return Buffer.concat(chunks).toString('utf8');
+    },
     // Commands start the local server when it is not running (ARCHITECTURE §8.2).
     startServer: (dataDir) =>
       ensureLocalServer(dataDir, {

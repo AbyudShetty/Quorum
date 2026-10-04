@@ -25,9 +25,15 @@ import {
   sharedWorktreeWith,
   systemNotice,
   tokenMatches,
+  WakeGovernor,
 } from '@quorum/core';
 import { removeBootstrapCode, writeBootstrapCode } from '@quorum/local';
-import { type DeliveredEnvelope, validateApiPayload, type ApiPayloadKind } from '@quorum/schemas';
+import {
+  type ApiPayloadKind,
+  type DeliveredEnvelope,
+  type MessageType,
+  validateApiPayload,
+} from '@quorum/schemas';
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const ACCESS_TTL_S = 3600;
@@ -135,6 +141,8 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
   const clock = options.clock ?? Date.now;
   /** Last heartbeat per agent: online for 90 s after it, or until it says offline. */
   const heartbeats = new Map<string, { at: number; status: string }>();
+  /** Wake decisions as the real server makes them (INV-29); the fake does not persist grants. */
+  const wakeGovernor = new WakeGovernor({ wakesPerHour: 20, agentOnlyMessagesBeforePause: 12 });
   const PRESENCE_TTL_MS = 90_000;
   let bootstrap: { hash: string; expiresAt: number; used: boolean } | undefined;
   let owner: Account | undefined;
@@ -720,6 +728,50 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
     m = /^threads\/(th_[0-9A-HJKMNP-TV-Z]{26})\/messages$/.exec(rest);
     if (method === 'GET' && m) {
       json(res, 200, ws.log.thread(m[1] ?? '', account.address, { limit: 500 }));
+      return;
+    }
+
+    if (method === 'POST' && rest === 'wake') {
+      if (account.kind !== 'agent') {
+        throw new DomainError(
+          'forbidden',
+          'auth.agent_only',
+          'Only agents ask to be woken.',
+          'Use an agent token.',
+        );
+      }
+      const body = checkPayload('wakeRequest', (await readBody(req)) ?? {}) as { after?: number };
+      const attachment = [...attachments.values()].find((a) => a.account === account);
+      if (!attachment || attachment.wake === 'off') {
+        json(res, 200, { wake: false, reason: 'mode_off' });
+        return;
+      }
+      const pending = ws.log.inbox(account.address, {
+        after: body.after ?? ws.log.ackedUpTo(account.address),
+        limit: 500,
+      }).messages;
+      if (pending.length === 0) {
+        json(res, 200, { wake: false, reason: 'no_mail' });
+        return;
+      }
+      let reason = 'own_message';
+      for (const message of pending) {
+        const decision = wakeGovernor.decide(
+          account.address,
+          message,
+          {
+            mode: attachment.wake as 'direct' | 'all',
+            ...(attachment.wake_types ? { types: attachment.wake_types as MessageType[] } : {}),
+          },
+          clock(),
+        );
+        if (decision.wake) {
+          json(res, 200, { wake: true, message: message.id, seq: message.seq });
+          return;
+        }
+        reason = decision.reason;
+      }
+      json(res, 200, { wake: false, reason });
       return;
     }
 

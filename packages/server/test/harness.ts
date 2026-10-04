@@ -52,6 +52,8 @@ export const HOST = 'localhost:51234';
 export const startHarness = async (
   overrides: Partial<Pick<AppOptions, 'openRequestsPerMinute'>> & {
     messagesPerMinute?: number;
+    wakesPerHour?: number;
+    agentOnlyMessagesBeforePause?: number;
     dir?: string;
     offset?: { ms: number };
   } = {},
@@ -75,6 +77,10 @@ export const startHarness = async (
     ownerName: 'owner',
     clock,
     ...(overrides.messagesPerMinute ? { messagesPerMinute: overrides.messagesPerMinute } : {}),
+    ...(overrides.wakesPerHour ? { wakesPerHour: overrides.wakesPerHour } : {}),
+    ...(overrides.agentOnlyMessagesBeforePause
+      ? { agentOnlyMessagesBeforePause: overrides.agentOnlyMessagesBeforePause }
+      : {}),
   });
   const bootstrap = new LocalBootstrap(dataDir, { now: clock });
   await bootstrap.issue();

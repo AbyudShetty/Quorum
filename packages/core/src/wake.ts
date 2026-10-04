@@ -52,6 +52,14 @@ export class WakeGovernor {
       this.#agentRun.set(thread, (this.#agentRun.get(thread) ?? 0) + 1);
   }
 
+  /**
+   * Count a wake granted earlier (replayed from the log at start), so a restart never refills the
+   * hourly budget early.
+   */
+  recordWake(recipient: string, atMs: number): void {
+    this.#wakes.set(recipient, [...(this.#wakes.get(recipient) ?? []), atMs]);
+  }
+
   /** True when a thread has had too many agent-only messages in a row (INV-29). */
   isPaused(thread: string): boolean {
     return (this.#agentRun.get(thread) ?? 0) > this.limits.agentOnlyMessagesBeforePause;

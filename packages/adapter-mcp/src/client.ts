@@ -372,6 +372,22 @@ export class QuorumClient {
     return (reply.body as { workspaces: { id: string; name: string }[] }).workspaces;
   }
 
+  /**
+   * Agents: may unread mail wake this agent or continue its turn? The server decides (wake mode,
+   * budget, loop pause; INV-29); adapters never decide on their own.
+   */
+  async requestWake(
+    workspace: string,
+    after?: number,
+  ): Promise<{ wake: boolean; reason?: string; message?: string; seq?: number }> {
+    const reply = await this.call(
+      'POST',
+      `/v1/workspaces/${workspace}/wake`,
+      after === undefined ? {} : { after },
+    );
+    return reply.body as { wake: boolean; reason?: string; message?: string; seq?: number };
+  }
+
   /** Humans only: create a workspace; the creator becomes its first member. */
   async createWorkspace(name: string): Promise<{ id: string; name: string; created_at: string }> {
     const reply = await this.call('POST', '/v1/workspaces', { name });
