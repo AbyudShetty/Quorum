@@ -12,3 +12,4 @@ export {
   runHook,
 } from './hooks.js';
 export { type HookState, loadHookState, saveHookState } from './state.js';
+export { type WatchClient, type WatchContext, type WatchResult, watchForMail } from './watch.js';

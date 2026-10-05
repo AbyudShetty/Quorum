@@ -282,6 +282,84 @@ export class QuorumClient {
     return { status, body: text ? (JSON.parse(text) as unknown) : undefined };
   }
 
+  /**
+   * Live push (SSE, MESSAGE_SPEC §4): calls `onMessage` for every new message visible to this
+   * agent until `signal` aborts or the server closes the stream (restart, revocation). With
+   * `lastEventId`, first receives everything after that seq. Resolves when the stream ends; the
+   * caller reconnects. No request timeout: the stream is meant to stay open.
+   */
+  async stream(
+    workspace: string,
+    onMessage: (message: DeliveredEnvelope) => void,
+    options: { signal: AbortSignal; lastEventId?: number },
+  ): Promise<void> {
+    const headers: Record<string, string> = {
+      accept: 'text/event-stream',
+      authorization: `Bearer ${await this.#accessToken()}`,
+      ...(options.lastEventId === undefined
+        ? {}
+        : { 'last-event-id': String(options.lastEventId) }),
+    };
+    let response: Response;
+    try {
+      response = await this.#fetch(`${this.#target.baseUrl}/v1/workspaces/${workspace}/stream`, {
+        headers,
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (options.signal.aborted) return;
+      throw new UnreachableError(
+        `Cannot reach the Quorum server at ${this.#target.baseUrl}.`,
+        error,
+      );
+    }
+    if (!response.ok || !response.body) {
+      const text = await response.text().catch(() => '');
+      let parsed: unknown = text;
+      try {
+        parsed = text ? JSON.parse(text) : undefined;
+      } catch {
+        // not JSON
+      }
+      throw this.#toApiError(response.status, parsed);
+    }
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = '';
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        buffer += value.replaceAll('\r\n', '\n');
+        let end = buffer.indexOf('\n\n');
+        while (end >= 0) {
+          const block = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          end = buffer.indexOf('\n\n');
+          const lines = block.split('\n');
+          const event = lines
+            .find((l) => l.startsWith('event:'))
+            ?.slice(6)
+            .trim();
+          const data = lines
+            .filter((l) => l.startsWith('data:'))
+            .map((l) => l.slice(5).trimStart())
+            .join('\n');
+          if (event !== 'message' || !data) continue; // comments and keepalives
+          try {
+            onMessage(JSON.parse(data) as DeliveredEnvelope);
+          } catch {
+            // A malformed event is skipped; the inbox still has the message.
+          }
+        }
+      }
+    } catch (error) {
+      if (options.signal.aborted) return;
+      throw new UnreachableError('The Quorum stream was interrupted.', error);
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   /** The workspace event log as JSON Lines (humans only), for `quorum verify`. */
   async exportEvents(workspace: string): Promise<string> {
     return (await this.#authenticated('GET', `/v1/workspaces/${workspace}/export`)).text;

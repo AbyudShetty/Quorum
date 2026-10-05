@@ -14,7 +14,13 @@ import { createIdFactory } from '@quorum/core';
 import { readBootstrapCode } from '@quorum/local';
 import { type LocalServer, startLocalServer } from '@quorum/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type HookEvent, type HookVendor, loadHookState, runHook } from '../src/index.js';
+import {
+  type HookEvent,
+  type HookVendor,
+  loadHookState,
+  runHook,
+  watchForMail,
+} from '../src/index.js';
 
 let root: string;
 let server: LocalServer;
@@ -247,5 +253,76 @@ describe('Claude Code and Codex hooks', () => {
       connect: () => Promise.reject(new IdentityError('Not our server.')),
     });
     expect(codex.stdout).toBe('');
+  });
+});
+
+describe('idle-wake watcher (spike S1, INV-29)', () => {
+  const watch = (info: AttachmentInfo, extra: { maxLifetimeMs?: number; session?: string } = {}) =>
+    watchForMail({
+      attachment: info,
+      dataDir: server.dataDir,
+      input: { session_id: extra.session ?? 'idle-session' },
+      connect: connectAs(info),
+      checkEveryMs: 50,
+      reconnectMs: 50,
+      ...(extra.maxLifetimeMs === undefined ? {} : { maxLifetimeMs: extra.maxLifetimeMs }),
+    });
+  const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('wakes an idle session with direct mail once the server grants it', async () => {
+    const sender = await attach('watch-from', 'codex', 'off');
+    const claude = await attach('watch-to', 'claude-code', 'direct');
+    const watching = watch(claude);
+    await tick(300); // the watcher is connected and waiting
+    await note(sender, [claude.agent], 'are you there?');
+    const woke = await watching;
+    expect(woke.exitCode).toBe(2);
+    expect(woke.output).toContain('are you there?');
+    expect(woke.output).toMatch(/QUORUM UNTRUSTED MESSAGE/);
+    expect(woke.output).toMatch(/while you were idle/);
+  });
+
+  it('wakes at once for mail that was already waiting', async () => {
+    const sender = await attach('waiting-from', 'codex', 'off');
+    const claude = await attach('waiting-to', 'claude-code', 'all');
+    await note(sender, [claude.agent], 'sent before you went idle');
+    expect((await watch(claude)).exitCode).toBe(2);
+  });
+
+  it('ignores broadcasts in direct mode, then wakes for a direct message', async () => {
+    const sender = await attach('bcast-from', 'codex', 'off');
+    const claude = await attach('bcast-to', 'claude-code', 'direct');
+    await hook(claude, 'post-tool'); // read everything older first
+    const watching = watch(claude);
+    await tick(300);
+    await note(sender, ['*'], 'for everyone');
+    await tick(300);
+    await note(sender, [claude.agent], 'just for you');
+    const woke = await watching;
+    expect(woke.exitCode).toBe(2);
+    expect(woke.output).toContain('just for you');
+  });
+
+  it('stands down when wake mode is off', async () => {
+    const claude = await attach('watch-off', 'claude-code', 'off');
+    expect(await watch(claude)).toEqual({ exitCode: 0, output: '' });
+  });
+
+  it('stands down when a newer watcher or a new prompt takes over', async () => {
+    const claude = await attach('watch-replace', 'claude-code', 'direct');
+    await hook(claude, 'post-tool');
+    const first = watch(claude, { session: 's-replace' });
+    await tick(200);
+    const second = watch(claude, { session: 's-replace' });
+    expect(await first).toEqual({ exitCode: 0, output: '' });
+    await tick(200);
+    await hook(claude, 'prompt', { session_id: 's-replace' });
+    expect(await second).toEqual({ exitCode: 0, output: '' });
+  });
+
+  it('stands down after its lifetime', async () => {
+    const claude = await attach('watch-old', 'claude-code', 'direct');
+    await hook(claude, 'post-tool');
+    expect(await watch(claude, { maxLifetimeMs: 200 })).toEqual({ exitCode: 0, output: '' });
   });
 });

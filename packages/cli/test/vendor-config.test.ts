@@ -74,7 +74,13 @@ describe('Claude Code: .claude/settings.local.json', () => {
       'UserPromptSubmit',
     ]);
     expect(settings.hooks?.PostToolUse).toHaveLength(2); // the person's lint hook and ours
-    expect(settings.hooks?.Stop).toHaveLength(1);
+    expect(settings.hooks?.Stop).toHaveLength(2); // the turn-end hook and the idle watcher
+    expect(settings.hooks?.Stop?.[1]?.hooks[0]).toEqual({
+      type: 'command',
+      command: absolute.node,
+      args: [absolute.bin, 'hook', 'claude-code', 'watch', '--attachment', ID],
+      asyncRewake: true,
+    });
     expect(firstHook(settings, 'Stop')).toEqual({
       type: 'command',
       command: absolute.node,

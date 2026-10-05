@@ -134,6 +134,8 @@ const mergeHooks = async (
   attachment: string,
   entry: (event: HookEvent) => Record<string, unknown>,
   approveMcp = false,
+  /** Further hooks for this attachment, by vendor event name. */
+  extra: readonly { event: string; entry: Record<string, unknown> }[] = [],
 ): Promise<ConfigChange> => {
   const existed = await exists(file);
   const settings = await readJsonFile(file);
@@ -146,6 +148,7 @@ const mergeHooks = async (
     const name = HOOK_EVENT_NAMES[event];
     (hooks[name] ??= []).push({ hooks: [entry(event)] });
   }
+  for (const more of extra) (hooks[more.event] ??= []).push({ hooks: [more.entry] });
   if (approveMcp) {
     const approved = Array.isArray(settings[APPROVED_KEY])
       ? (settings[APPROVED_KEY] as unknown[])
@@ -293,6 +296,18 @@ export const writeVendorConfig = async (
         timeout: TIMEOUT_S[event] ?? 30,
       }),
       mcpWritten,
+      [
+        {
+          // The idle-wake watcher (spike S1): started in the background when a turn ends; exit 2
+          // wakes the idle session with new mail, only when the server grants it (INV-29).
+          event: 'Stop',
+          entry: {
+            type: 'command',
+            ...execForm(command, ['hook', 'claude-code', 'watch', '--attachment', attachment]),
+            asyncRewake: true,
+          },
+        },
+      ],
     );
     const changes = [mcpChange, change];
     const written = [mcpWritten ? [mcpFile] : [], change.action === 'skipped' ? [] : [settings]];

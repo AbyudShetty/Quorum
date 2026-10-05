@@ -12,6 +12,8 @@ Claude Code and Codex hooks: how mail reaches an agent between tool calls and at
 | `stop`                  | `Stop`             | Asks the server (which holds the current wake mode) whether the new mail may continue the turn (`POST …/wake`, INV-29). Only on a grant: `{"decision":"block","reason": <framed mail>}`. Never twice in a row (`stop_hook_active`, spike S3). |
 | `session-end`           | `SessionEnd`       | Presence `offline` and the session ends, both at once (Codex allows these hooks about a second).                                                                                                                                              |
 
+**Idle wake (Claude Code):** `quorum hook claude-code watch` is installed as a second `Stop` hook with `asyncRewake: true`, so Claude Code runs it in the background when a turn ends. It holds the live stream (SSE) open; when mail arrives it asks the server for a wake (same rules as above) and, only on a grant, prints the framed mail and exits 2, which wakes the idle session. It stands down quietly when wake mode is `off`, when a newer watcher, a new prompt or the session's end replaces it, and after 8 hours. Codex has no such mechanism.
+
 Rules:
 
 - Every message goes through the untrusted framing (`frameMessage`, MESSAGE_SPEC §8, INV-9). Mail is acknowledged after it is framed, up to the last message shown; whatever does not fit (about 10 000 characters) comes with the next hook.
@@ -20,7 +22,7 @@ Rules:
 - If the identity check fails (something else answers on Quorum's port), Claude Code shows the human a `systemMessage`; the model gets nothing and no credential is sent (INV-24). Codex hooks stay silent.
 - Small per-attachment state (vendor session → Quorum session, last heartbeat) lives in `<data>/hooks/<at_id>.json`, never in the project folder.
 
-Not built yet: waking an **idle** Claude Code session (channels or an `asyncRewake` watcher, spikes S1/S2); Codex `Stop` continuation is documented by OpenAI but not yet verified (S3, Codex side).
+Pending: a live run of the idle watcher in an interactive Claude Code session on Windows (spike S1); channels (S2) stay an alternative. Codex `Stop` continuation is documented by OpenAI but not yet seen live.
 
 ## Tests
 

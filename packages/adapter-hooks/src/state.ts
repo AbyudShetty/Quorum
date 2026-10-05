@@ -11,6 +11,11 @@ export interface HookState {
   sessions: Record<string, string>;
   /** When a heartbeat was last sent (ms since epoch). */
   lastHeartbeatMs?: number;
+  /**
+   * Vendor session id → token of the one idle watcher allowed to run for it. A newer watcher, a
+   * new prompt or the session's end replaces or removes the token, and the old watcher exits.
+   */
+  watchers?: Record<string, string>;
 }
 
 const safe = (id: string): string => id.replaceAll(/[^A-Za-z0-9_-]/g, '_');
@@ -22,15 +27,22 @@ export const loadHookState = async (dataDir: string, attachment: string): Promis
   try {
     const parsed = JSON.parse(await readFile(statePath(dataDir, attachment), 'utf8')) as unknown;
     if (typeof parsed !== 'object' || parsed === null) return { sessions: {} };
-    const value = parsed as { sessions?: unknown; lastHeartbeatMs?: unknown };
+    const value = parsed as { sessions?: unknown; lastHeartbeatMs?: unknown; watchers?: unknown };
     const sessions: Record<string, string> = {};
     if (typeof value.sessions === 'object' && value.sessions !== null) {
       for (const [key, id] of Object.entries(value.sessions)) {
         if (typeof id === 'string') sessions[key] = id;
       }
     }
+    const watchers: Record<string, string> = {};
+    if (typeof value.watchers === 'object' && value.watchers !== null) {
+      for (const [key, token] of Object.entries(value.watchers)) {
+        if (typeof token === 'string') watchers[key] = token;
+      }
+    }
     return {
       sessions,
+      ...(Object.keys(watchers).length > 0 ? { watchers } : {}),
       ...(typeof value.lastHeartbeatMs === 'number'
         ? { lastHeartbeatMs: value.lastHeartbeatMs }
         : {}),

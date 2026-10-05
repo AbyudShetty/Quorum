@@ -87,7 +87,7 @@ Nothing in the adapters executes message content, follows `reproduce` fields, or
 | Pull (`quorum_inbox` etc.)                                | MCP over stdio, **built and tested** with the SDK's in-memory transport against the fake server                                         | MCP over stdio; server runs as the user (S4, verified). **[pending]** end-to-end run in Codex  |
 | Mail at session start / on each prompt / after tool calls | hooks with `additionalContext` (built, `quorum hook claude-code …`)                                                                     | same hooks (built, `quorum hook codex …`); Codex runs them only after the `/hooks` review (S4) |
 | Continue a turn when mail arrived                         | `Stop` hook: asks `POST …/wake`; only on a grant `decision: "block"` with the framed mail; never when `stop_hook_active` (S3, verified) | same hook; documented by OpenAI, **[pending]** a live run                                      |
-| Wake an idle session                                      | channels or `asyncRewake` **[pending]** (S1, S2 need an interactive session)                                                            | no documented mechanism; mail waits for the next prompt                                        |
+| Wake an idle session                                      | `asyncRewake` watcher (built, `quorum hook claude-code watch`); live check **[pending]** (S1)                                           | no documented mechanism; mail waits for the next prompt                                        |
 
 ## 7. Offline sending and delivery guarantees (INV-20)
 
@@ -110,12 +110,12 @@ At start `quorum mcp` registers a session (`POST /v1/sessions`) with the attache
 
 The mode is stored per attachment (`off` | `direct` | `all`, optional `wake_types`) and enforced by the server's wake governor (INV-29: hourly budget and the agent-only-loop breaker always apply). Adapters never decide on their own to wake: they ask `POST /v1/workspaces/{ws}/wake` (agents only), which answers `{wake, reason?, message?, seq?}` and records each grant in the log, so the budget survives a server restart.
 
-| Mode / vendor                         | What the adapter does                                                                                                                                       |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`, both                           | Show mail at the next turn boundary and on `quorum_inbox`. No auto-continue.                                                                                |
-| `direct`/`all`, Claude Code, mid-turn | Surface mail after tool calls; on `Stop`, block once with the framed mail when the server grants a wake; `stop_hook_active` stops a second one (S3). Built. |
-| `direct`/`all`, Claude Code, idle     | **[pending]** channels (S2) or `asyncRewake` watcher (S1)                                                                                                   |
-| `direct`/`all`, Codex                 | Same `Stop` hook (built; a live Codex run is **[pending]**, S3 Codex side); idle: next prompt                                                               |
+| Mode / vendor                         | What the adapter does                                                                                                                                                                                   |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`, both                           | Show mail at the next turn boundary and on `quorum_inbox`. No auto-continue.                                                                                                                            |
+| `direct`/`all`, Claude Code, mid-turn | Surface mail after tool calls; on `Stop`, block once with the framed mail when the server grants a wake; `stop_hook_active` stops a second one (S3). Built.                                             |
+| `direct`/`all`, Claude Code, idle     | `asyncRewake` watcher (built: SSE, server-granted wake, exit 2 with the framed mail; stands down when replaced, on a new prompt, at session end or after 8 h). **[pending]** live check on Windows (S1) |
+| `direct`/`all`, Codex                 | Same `Stop` hook (built; a live Codex run is **[pending]**, S3 Codex side); idle: next prompt                                                                                                           |
 
 ## 9. Spike results
 

@@ -89,7 +89,7 @@ const contextOutput = (event: HookEvent, text: string): HookResult =>
  * Unread mail for the agent, framed, as much as fits; acknowledged up to the last message shown,
  * so the rest comes with the next hook. Acknowledging after framing keeps delivery at-least-once.
  */
-const deliverMail = async (
+export const deliverMail = async (
   client: HookClient,
   attachment: AttachmentInfo,
   workspaces: readonly string[],
@@ -242,7 +242,10 @@ const onSessionEnd = async (client: HookClient, context: HookContext, state: Hoo
     maybeHeartbeat(client, context, state, 'offline', true),
     session ? client.deleteSession(session).catch(() => undefined) : Promise.resolve(),
   ]);
-  if (key) Reflect.deleteProperty(state.sessions, key);
+  if (key) {
+    Reflect.deleteProperty(state.sessions, key);
+    if (state.watchers) Reflect.deleteProperty(state.watchers, key); // the idle watcher stands down
+  }
   return NOTHING;
 };
 
@@ -272,6 +275,11 @@ export const runHook = async (context: HookContext): Promise<HookResult> => {
         break;
       case 'prompt':
       case 'post-tool': {
+        // A new prompt means the session is busy again: the idle watcher stands down.
+        const key = sessionKey(context.input);
+        if (context.event === 'prompt' && key && state.watchers) {
+          Reflect.deleteProperty(state.watchers, key);
+        }
         await maybeHeartbeat(client, context, state, 'working');
         const mail = await deliverMail(
           client,

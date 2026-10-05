@@ -41,6 +41,7 @@ import {
   type HookEvent,
   type HookVendor,
   runHook,
+  watchForMail,
 } from '@quorum/adapter-hooks';
 import { liveServer, ServerStartError } from './local-server.js';
 import {
@@ -727,7 +728,11 @@ const hook = async (args: string[], env: CliEnv): Promise<number> => {
     strict: true,
   });
   const [vendor, event] = positionals;
-  if (!HOOK_VENDORS.includes(vendor as HookVendor) || !HOOK_EVENTS.includes(event as HookEvent)) {
+  const watch = vendor === 'claude-code' && event === 'watch';
+  if (
+    !watch &&
+    (!HOOK_VENDORS.includes(vendor as HookVendor) || !HOOK_EVENTS.includes(event as HookEvent))
+  ) {
     throw new UsageError(
       `Use: quorum hook <${HOOK_VENDORS.join('|')}> <${HOOK_EVENTS.join('|')}> --attachment <at_id>.`,
     );
@@ -738,6 +743,17 @@ const hook = async (args: string[], env: CliEnv): Promise<number> => {
     input = JSON.parse((await env.stdin?.()) ?? '');
   } catch {
     input = undefined;
+  }
+  if (watch) {
+    // Claude Code's asyncRewake hook: exit 2 wakes the idle session with what we print.
+    const woke = await watchForMail({
+      attachment: info,
+      dataDir: dataDirOf(env),
+      input,
+      connect: () => connect(env, info.attachment, { autoStart: false }),
+    });
+    if (woke.output) env.err(`${woke.output}\n`);
+    return woke.exitCode;
   }
   const result = await runHook({
     vendor: vendor as HookVendor,
