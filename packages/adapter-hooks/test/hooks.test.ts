@@ -25,7 +25,6 @@ import {
   saveHookState,
   startCodexWaker,
   watchForMail,
-  WOKEN_INTRO,
 } from '../src/index.js';
 
 let root: string;
@@ -396,7 +395,7 @@ describe('Codex idle wake through the Codex daemon', () => {
     }
   };
 
-  it('starts a turn in the idle Codex session with the neat lines; the agent gets the framed copy', async () => {
+  it('wakes an idle Codex session with the framed mail, asking it to show the person first', async () => {
     const sender = await attach('cx-from', 'claude-code', 'off');
     const codex = await attach('cx-to', 'codex', 'direct');
     await hook(codex, 'post-tool'); // older broadcasts out of the way
@@ -417,29 +416,13 @@ describe('Codex idle wake through the Codex daemon', () => {
     await waker.stop();
     expect(fake.turns).toHaveLength(1);
     expect(fake.turns[0]?.threadId).toBe('idle-1');
-    // What the person sees in Codex: the neat line only.
-    expect(fake.turns[0]?.text).toBe(
+    // The bridge puts this into the thread's history, not the person's prompt box (daemon.test.ts).
+    const text = fake.turns[0]?.text ?? '';
+    expect(text.startsWith(IDLE_WAKE_INTRO)).toBe(true);
+    expect(text).toMatch(/<<quorum [0-9a-f]{16}>>/);
+    expect(text).toContain(
       `${sender.agent.replace('agent:', '')}:\n\n  please look at the failing test`,
     );
-    // The woken turn's prompt hook gives the agent the framed copy, saying it is not the human.
-    const woken = parse((await hook(codex, 'prompt', { session_id: 'idle-1' })).stdout);
-    const context = woken?.hookSpecificOutput?.additionalContext ?? '';
-    expect(context).toContain(WOKEN_INTRO);
-    expect(context).toMatch(/<<quorum [0-9a-f]{16}>>/);
-    expect(context).toContain('please look at the failing test');
-    // Given once only.
-    const again = parse((await hook(codex, 'prompt', { session_id: 'idle-1' })).stdout);
-    expect(again?.hookSpecificOutput?.additionalContext ?? '').not.toContain(WOKEN_INTRO);
-  });
-
-  it('never gives a stale framed copy to a later prompt of the human', async () => {
-    const codex = await attach('cx-stale', 'codex', 'off');
-    const state = await loadHookState(server.dataDir, codex.attachment);
-    state.wakeContexts = { 'old-turn': { text: 'stale copy', atMs: Date.now() - 10 * 60_000 } };
-    await saveHookState(server.dataDir, codex.attachment, state);
-    const out = parse((await hook(codex, 'prompt', { session_id: 'old-turn' })).stdout);
-    expect(out?.hookSpecificOutput?.additionalContext ?? '').not.toContain('stale copy');
-    expect((await loadHookState(server.dataDir, codex.attachment)).wakeContexts).toBeUndefined();
   });
 
   it('prefers the session its hooks registered, and leaves busy sessions to the hooks', async () => {

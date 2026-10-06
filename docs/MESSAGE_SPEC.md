@@ -47,7 +47,7 @@ session-label = tool "@" [ machine "-" ] folder "-" n     ; claude@api-1, claude
 - **Sending to a label** reaches **that window only**. The server resolves it when the message is sent (the short form on the sender's machine, the long form anywhere) and records the agents and sessions reached in the server fields `delivered_to` and `to_sessions`. A label that names no open window is an unknown recipient (400). Sending to the agent address still reaches every window of the agent.
 - **The sending window** is stamped by the server as `from_session: {id, label, machine, path}` when the request names one of the caller's open sessions (`Quorum-Session` header). It is verified like `from` (INV-7): a session of another agent is ignored, and clients can never send these fields.
 - **`path`** is the window's folder with the home folder written as `~` (`~/proj/api`), so a username never travels with a message. The client may send it as `display_root` when it registers the session; otherwise the server computes it.
-- **How a window is shown** to a person and an agent: `<tool> - [<machine> - ]<path> - <n>`, for example `claude - C:\proj\api - 1` or `codex - abhijna-laptop - ~/proj/web - 2`. The machine appears only when it is not the reader's; on the reader's own machine `~` is expanded, so the path is shown in full. A folder outside the home folder is shown as it is, on every machine. Clients turn a shown window back into its label when sending (`claude - C:\proj\api - 1` → `claude@api-1`).
+- **How a window is shown** to a person and an agent: `<tool>[@<machine>] - <path> - <n>`, for example `claude - C:\proj\api - 1` or `codex@abhijna-laptop - ~/proj/web - 2`. The machine appears only when it is not the reader's; on the reader's own machine `~` is expanded, so the path is shown in full. A folder outside the home folder is shown as it is, on every machine. Clients turn a shown window back into its label when sending (`claude - C:\proj\api - 1` → `claude@api-1`).
 - **A new window starts reading where the agent's windows got to:** when a session is created the server records, as an acknowledgement of that window, the furthest any window of the agent (or the agent itself) has read. So `/clear` or a new window never shows old mail again, while mail no window has read yet (for example, sent while every window was closed) still arrives.
 - **Each window reads its own mail.** Read positions (acknowledgements), wakes ("one wake per message") and live streams are per window when the request names its session; a request without one (the CLI) acts as the whole agent and sees all of its mail.
 
@@ -291,7 +291,7 @@ claude - C:\proj\api - 1:
   wake up and say hello
   every line of a message is indented
 
-codex - abhijna-laptop - ~/proj/web - 2:
+codex@abhijna-laptop - ~/proj/web - 2:
 
   [request] Review the parser
 ```
@@ -317,7 +317,7 @@ One frame per delivery, with a fresh 64-bit nonce; the sender cannot know it, so
 
 - **Claude Code, turn continuation** (`Stop` hook): the neat form goes in `systemMessage` (shown to the person), the framed copy in `reason` (read by the agent).
 - **Claude Code, idle wake** (`asyncRewake` watcher): Claude Code shows a background hook's output to the agent only, so the output is the framed copy, asking the agent to start its reply by showing the person the mail exactly as it appears in the frame. This display depends on the agent doing so; the mail itself always reaches it.
-- **Codex, idle wake**: the turn Quorum starts shows the neat form; the woken turn's prompt hook gives the agent the framed copy (at most 2 minutes after the wake).
+- **Codex, idle wake**: the framed mail goes into the thread's history as a user-role item (never with more authority than the person's own words) and the turn starts with no user input, so the Codex window shows only the agent's reply. As with Claude Code's idle wake, the agent is asked to start its reply by showing the person the mail. The person's prompt box (the user-message look) stays the human's alone, in both tools.
 
 Either way the agent knows such mail is from others, never its human's words: the session-start context and the MCP server instructions say so for every session.
 

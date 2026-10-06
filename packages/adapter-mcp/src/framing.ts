@@ -118,7 +118,7 @@ const windowPath = (
 
 /**
  * How a sender is shown (MESSAGE_SPEC §1.1): a window as `tool - path - number`, with its machine
- * when it is on another one (`claude - abhijna-laptop - ~/proj/api - 2`); else the agent address
+ * when it is on another one (`claude@abhijna-laptop - ~/proj/api - 2`); else the agent address
  * without its prefix (`claude-api@laptop`), a human as `abyud (human)`, the server as `quorum`.
  */
 export const senderName = (message: Message, display: DisplayOptions | string = {}): string => {
@@ -130,7 +130,7 @@ export const senderName = (message: Message, display: DisplayOptions | string = 
     const parts = SESSION_PARTS.exec(session.label);
     if (parts) {
       const [, tool = '', , number = ''] = parts;
-      const where = session.machine === options.ownMachine ? '' : ` - ${session.machine}`;
+      const where = session.machine === options.ownMachine ? '' : `@${session.machine}`;
       const path = windowPath(
         { label: session.label, machine: session.machine, path: session.path },
         options,
@@ -145,7 +145,7 @@ export const senderName = (message: Message, display: DisplayOptions | string = 
 
 /**
  * The address to send to, from what an agent was shown (MESSAGE_SPEC §1.1): a window's
- * `tool - [machine - ]path - number` becomes its label (`claude@api-1`), `abyud (human)` becomes
+ * `tool[@machine] - path - number` becomes its label (`claude@api-1`), `abyud (human)` becomes
  * `human:abyud`, a bare agent address gets its `agent:` prefix. A trailing `:` (as in the sender
  * line) is ignored. Anything else is passed as given (the server checks every address).
  */
@@ -198,7 +198,7 @@ const BODY_INDENT = '  ';
  *     wake up and say hello
  *     a second line of the same message
  *
- *   codex - abhijna-laptop - ~/proj/web - 2:
+ *   codex@abhijna-laptop - ~/proj/web - 2:
  *
  *     [request] Review the parser
  *

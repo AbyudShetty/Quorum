@@ -6,11 +6,11 @@
 // knows which window the mail is for) and, only on a grant, starts one turn carrying the mail.
 // It also keeps the windows the daemon still has open alive on the server (a heartbeat each).
 //
-// Codex shows that turn in the user's position, to the person as well: so it carries only the neat
-// form (`claude - /proj/api - 1:`, blank line, message). The agent learns the turn is mail, not its
-// human (INV-9), from the MCP instructions and session-start context, and from the framed copy the
-// woken turn's prompt hook adds as hidden context. The bridge never changes the session's sandbox
-// or approval settings. Off switch: QUORUM_CODEX_IDLE_WAKE=off, or wake mode `off`.
+// The mail never takes the person's place: the framed mail (INV-9) goes into the thread's history
+// as a user-role item (no more authority than the person's own words) and the turn starts with no
+// user input, so the Codex window shows only the agent's reply, which starts by showing the person
+// the mail. The bridge never changes the session's sandbox or approval settings. Off switch:
+// QUORUM_CODEX_IDLE_WAKE=off, or wake mode `off`.
 import { type AttachmentInfo } from '@quorum/adapter-mcp';
 import { createIdFactory } from '@quorum/core';
 import type { SubmittedEnvelope } from '@quorum/schemas';
@@ -19,10 +19,9 @@ import {
   framedMail,
   MAX_CONTEXT_CHARS,
   MCP_WINDOW_PREFIX,
-  neatMail,
-  WOKEN_INTRO,
+  IDLE_WAKE_INTRO,
 } from './hooks.js';
-import { type HookWindow, loadHookState, saveHookState } from './state.js';
+import { type HookWindow, loadHookState } from './state.js';
 import type { WatchClient } from './watch.js';
 
 /** What the waker needs from the Codex daemon (the real one is @quorum/codex-bridge). */
@@ -97,15 +96,9 @@ export const startCodexWaker = (options: CodexWakerOptions): Promise<CodexWaker>
       if (!decision.wake) return false;
       const mail = await collectMail(client, attachment, [workspace], MAX_CONTEXT_CHARS);
       if (mail.length === 0) return false;
-      // The framed copy waits for the woken turn's prompt hook (hidden from the person).
-      const state = await loadHookState(options.dataDir, attachment.attachment);
-      state.wakeContexts = {
-        ...state.wakeContexts,
-        [threadId]: { text: framedMail(mail, attachment, WOKEN_INTRO), atMs: Date.now() },
-      };
-      await saveHookState(options.dataDir, attachment.attachment, state).catch(() => undefined);
-      // The visible turn: the neat form only.
-      await codex.startTurn(threadId, neatMail(mail, attachment));
+      // The framed mail goes into the thread's history, not into the person's prompt box; the
+      // agent starts its reply by showing the person the mail (like Claude Code's idle wake).
+      await codex.startTurn(threadId, framedMail(mail, attachment, IDLE_WAKE_INTRO));
       return true;
     });
 

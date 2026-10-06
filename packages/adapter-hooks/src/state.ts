@@ -22,11 +22,6 @@ export interface HookState {
    * session for its hooks, its tools and its idle wake.
    */
   windows?: Record<string, HookWindow>;
-  /**
-   * Vendor session key → the framed copy of mail that just woke it (Codex): the woken turn shows
-   * the person only the neat lines, and the next prompt hook gives the agent this framed copy.
-   */
-  wakeContexts?: Record<string, { text: string; atMs: number }>;
 }
 
 export interface HookWindow {
@@ -56,7 +51,6 @@ export const loadHookState = async (dataDir: string, attachment: string): Promis
       lastHeartbeatMs?: unknown;
       watchers?: unknown;
       windows?: unknown;
-      wakeContexts?: unknown;
     };
     const sessions: Record<string, string> = {};
     if (typeof value.sessions === 'object' && value.sessions !== null) {
@@ -89,18 +83,8 @@ export const loadHookState = async (dataDir: string, attachment: string): Promis
         }
       }
     }
-    const wakeContexts: Record<string, { text: string; atMs: number }> = {};
-    if (typeof value.wakeContexts === 'object' && value.wakeContexts !== null) {
-      for (const [key, raw] of Object.entries(value.wakeContexts as Record<string, unknown>)) {
-        const c = raw as { text?: unknown; atMs?: unknown } | null;
-        if (typeof c?.text === 'string' && typeof c.atMs === 'number') {
-          wakeContexts[key] = { text: c.text, atMs: c.atMs };
-        }
-      }
-    }
     return {
       sessions,
-      ...(Object.keys(wakeContexts).length > 0 ? { wakeContexts } : {}),
       ...(Object.keys(watchers).length > 0 ? { watchers } : {}),
       ...(Object.keys(windows).length > 0 ? { windows } : {}),
       ...(typeof value.lastHeartbeatMs === 'number'

@@ -10,8 +10,6 @@ export {
   framedMail,
   neatMail,
   MCP_WINDOW_PREFIX,
-  WAKE_CONTEXT_TTL_MS,
-  WOKEN_INTRO,
   type HookClient,
   type HookContext,
   type HookEvent,

@@ -175,9 +175,26 @@ export class CodexDaemon {
     return threads.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  /** Start a turn whose user input is `text`. Only the keys in TURN_START_KEYS are sent. */
+  /**
+   * Start a turn that reads `text` without showing it as the person's message (spike 2026-10-07):
+   * `text` goes into the thread's model-visible history (`thread/inject_items`, role `user`, the
+   * least authority; never `developer` or `system`), then a turn starts with no user input. The
+   * person's Codex window shows only the agent's reply: the user-prompt look stays the human's.
+   * A Codex without `thread/inject_items` gets `text` as the turn's input instead.
+   * Only the keys in TURN_START_KEYS are sent with `turn/start`.
+   */
   async startTurn(threadId: string, text: string): Promise<string> {
-    const params = { threadId, input: [{ type: 'text', text }], turnTrigger: 'quorum' };
+    let input: { type: 'text'; text: string }[] = [];
+    try {
+      await this.request('thread/inject_items', {
+        threadId,
+        items: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text }] }],
+      });
+    } catch (error) {
+      if (!(error instanceof CodexDaemonError) || this.#closed) throw error;
+      input = [{ type: 'text', text }]; // an older Codex: the text is the turn's input
+    }
+    const params = { threadId, input, turnTrigger: 'quorum' };
     const result = (await this.request('turn/start', params)) as { turn?: { id?: unknown } };
     return typeof result.turn?.id === 'string' ? result.turn.id : '';
   }

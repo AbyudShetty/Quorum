@@ -110,7 +110,7 @@ describe('senderName (MESSAGE_SPEC §1.1)', () => {
 
   it('names the machine and keeps ~ for a window on another machine', () => {
     expect(senderName(from(window), { ownMachine: 'other', home: '/home/me' })).toBe(
-      'claude - laptop - ~/proj/api - 1',
+      'claude@laptop - ~/proj/api - 1',
     );
   });
 

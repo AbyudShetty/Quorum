@@ -48,8 +48,12 @@ const fakeDaemon = (handler: Handler, options: { status?: string; silent?: boole
         requests.push({ method: message.method, params: message.params ?? {} });
         if (message.id === undefined) continue;
         const result = handler(message.method, message.params ?? {});
+        // A handler answers { refuse: error } to send a JSON-RPC error instead of a result.
+        const refused = (result as { refuse?: unknown } | undefined)?.refuse;
+        const answer =
+          refused === undefined ? { id: message.id, result } : { id: message.id, error: refused };
         setImmediate(() => {
-          onData(serverFrame(JSON.stringify({ id: message.id, result })));
+          onData(serverFrame(JSON.stringify(answer)));
         });
       }
     },
@@ -110,12 +114,32 @@ describe('CodexDaemon', () => {
     daemon.close();
   });
 
-  it('starts a turn with only the thread, the text and the trigger: never sandbox or approval settings', async () => {
+  it('puts the text into the history as a user item, then starts a turn with no user input', async () => {
     const fake = fakeDaemon(handler);
     const daemon = await CodexDaemon.open(fake.transport);
     expect(await daemon.startTurn('t1', 'hello')).toBe('turn-1');
+    const inject = fake.requests.find((r) => r.method === 'thread/inject_items');
+    expect(inject?.params).toEqual({
+      threadId: 't1',
+      items: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+    });
+    // Only the thread, empty input and the trigger: never sandbox or approval settings.
     const start = fake.requests.find((r) => r.method === 'turn/start');
     expect(Object.keys(start?.params ?? {}).sort()).toEqual([...TURN_START_KEYS].sort());
+    expect(start?.params).toEqual({ threadId: 't1', input: [], turnTrigger: 'quorum' });
+    expect(fake.requests.indexOf(inject as never)).toBeLessThan(
+      fake.requests.indexOf(start as never),
+    );
+    daemon.close();
+  });
+
+  it('gives an older Codex (no thread/inject_items) the text as the turn input', async () => {
+    const fake = fakeDaemon((method, params) =>
+      method === 'thread/inject_items' ? { refuse: { code: -32601 } } : handler(method, params),
+    );
+    const daemon = await CodexDaemon.open(fake.transport);
+    expect(await daemon.startTurn('t1', 'hello')).toBe('turn-1');
+    const start = fake.requests.find((r) => r.method === 'turn/start');
     expect(start?.params).toEqual({
       threadId: 't1',
       input: [{ type: 'text', text: 'hello' }],
