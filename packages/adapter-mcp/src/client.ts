@@ -2,6 +2,7 @@
 //  1. INV-24: no credential is sent until the server has proven, with a fresh nonce, that it
 //     holds the key we pinned. A failed check throws IdentityError and never falls back.
 //  2. INV-11: refresh tokens rotate; the new pair is stored before the old one is forgotten.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   type Attachment,
   type AttachmentCreate,
@@ -129,6 +130,8 @@ export class QuorumClient {
   #lockDir: string | undefined;
   /** This window's session (`sess_…`): sent with every request so mail and wakes are per window. */
   #session: string | undefined;
+  /** A window set for some calls only (`asSession`); other work keeps `#session`. */
+  readonly #callSession = new AsyncLocalStorage<{ session: string | undefined }>();
   readonly #key: string;
   readonly #store: CredentialStore;
   readonly #fetch: typeof fetch;
@@ -190,6 +193,20 @@ export class QuorumClient {
     this.#session = id;
   }
 
+  /**
+   * Run `work` speaking for `session`: its requests carry that window, while other work running at
+   * the same time keeps its own (one MCP server serving several Codex windows).
+   */
+  asSession<T>(session: string | undefined, work: () => Promise<T>): Promise<T> {
+    return this.#callSession.run({ session }, work);
+  }
+
+  /** The window the current request speaks for. */
+  #sessionNow(): string | undefined {
+    const scoped = this.#callSession.getStore();
+    return scoped ? scoped.session : this.#session;
+  }
+
   async #handshake(): Promise<void> {
     const nonce = newHelloNonce();
     const response = await this.#raw('POST', '/v1/hello', { nonce });
@@ -215,7 +232,8 @@ export class QuorumClient {
   async #raw(method: string, path: string, body?: unknown, token?: string): Promise<Response> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (token) headers.authorization = `Bearer ${token}`;
-    if (token && this.#session) headers['quorum-session'] = this.#session;
+    const session = this.#sessionNow();
+    if (token && session) headers['quorum-session'] = session;
     if (body !== undefined) headers['content-type'] = 'application/json';
     try {
       return await this.#fetch(`${this.#target.baseUrl}${path}`, {
@@ -387,10 +405,11 @@ export class QuorumClient {
     options: { signal: AbortSignal; lastEventId?: number },
   ): Promise<void> {
     await this.#ensureVerified();
+    const session = this.#sessionNow();
     const headers: Record<string, string> = {
       accept: 'text/event-stream',
       authorization: `Bearer ${await this.#accessToken()}`,
-      ...(this.#session ? { 'quorum-session': this.#session } : {}),
+      ...(session ? { 'quorum-session': session } : {}),
       ...(options.lastEventId === undefined
         ? {}
         : { 'last-event-id': String(options.lastEventId) }),

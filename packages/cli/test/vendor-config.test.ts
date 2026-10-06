@@ -75,12 +75,16 @@ describe('Claude Code: .claude/settings.local.json', () => {
     ]);
     expect(settings.hooks?.PostToolUse).toHaveLength(2); // the person's lint hook and ours
     expect(settings.hooks?.Stop).toHaveLength(2); // the turn-end hook and the idle watcher
-    expect(settings.hooks?.Stop?.[1]?.hooks[0]).toEqual({
+    const watcher = {
       type: 'command',
       command: absolute.node,
       args: [absolute.bin, 'hook', 'claude-code', 'watch', '--attachment', ID],
       asyncRewake: true,
-    });
+    };
+    expect(settings.hooks?.Stop?.[1]?.hooks[0]).toEqual(watcher);
+    // A new window can be woken before its first prompt: the watcher also starts with the session.
+    expect(settings.hooks?.SessionStart).toHaveLength(2);
+    expect(settings.hooks?.SessionStart?.[1]?.hooks[0]).toEqual(watcher);
     expect(firstHook(settings, 'Stop')).toEqual({
       type: 'command',
       command: absolute.node,

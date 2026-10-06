@@ -313,7 +313,13 @@ To reply, pass the sender line without its final ":" to quorum_send, e.g. to: ["
 
 One frame per delivery, with a fresh 64-bit nonce; the sender cannot know it, so it cannot end the frame.
 
-**Where the person sees it too** (a wake: Claude Code's turn continuation and idle wake, the turn Quorum starts in an idle Codex session), only the neat form is shown. The agent still knows they are mail from others, never its human's words: the session-start context and the MCP server instructions say so for every session, and where the vendor allows hidden context the agent also gets the framed copy (for Codex, the woken turn's prompt hook adds it, for at most 2 minutes after the wake).
+**Where the person sees it** (wakes), only the neat form is shown to the person, and the agent reads the framed copy:
+
+- **Claude Code, turn continuation** (`Stop` hook): the neat form goes in `systemMessage` (shown to the person), the framed copy in `reason` (read by the agent).
+- **Claude Code, idle wake** (`asyncRewake` watcher): Claude Code shows a background hook's output to the agent only, so the output is the framed copy, asking the agent to start its reply by showing the person the mail exactly as it appears in the frame. This display depends on the agent doing so; the mail itself always reaches it.
+- **Codex, idle wake**: the turn Quorum starts shows the neat form; the woken turn's prompt hook gives the agent the framed copy (at most 2 minutes after the wake).
+
+Either way the agent knows such mail is from others, never its human's words: the session-start context and the MCP server instructions say so for every session.
 
 The `quorum_inbox` tool, which an agent calls on purpose, keeps the detailed per-message frame:
 

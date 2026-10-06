@@ -1,5 +1,7 @@
 // The per-user private data directory (ARCHITECTURE §4, §8.2; INV-25).
-import { chmod, mkdir, rename, stat, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { chmod, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { currentUserSid, lockDown, lockDownCommands, otherEntries } from './windows-acl.js';
@@ -66,12 +68,28 @@ export const ensurePrivateDir = async (
   if (!check.ok) throw new Error(`${check.problem}. Fix: ${check.fix}`);
 };
 
+/** Windows refuses to replace a file another process has open for a moment; those pass. */
+const BRIEFLY_LOCKED = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
 /**
  * Write a file atomically and privately: write a temporary file, then rename over the target,
- * so readers never see a half-written file. (On Windows the directory ACL protects it.)
+ * so readers never see a half-written file. (On Windows the directory ACL protects it.) A rename
+ * refused because a reader has the target open is retried for up to about a second.
  */
 export const writePrivateFile = async (path: string, content: string): Promise<void> => {
-  const temp = `${path}.${String(process.pid)}.tmp`;
+  const temp = `${path}.${String(process.pid)}.${randomBytes(4).toString('hex')}.tmp`;
   await writeFile(temp, content, { mode: 0o600 });
-  await rename(temp, path);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(temp, path);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if (!BRIEFLY_LOCKED.has(code) || attempt >= 10) {
+        await rm(temp, { force: true });
+        throw error;
+      }
+      await delay(10 * (attempt + 1));
+    }
+  }
 };

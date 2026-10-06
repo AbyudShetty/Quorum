@@ -296,18 +296,17 @@ export const writeVendorConfig = async (
         timeout: TIMEOUT_S[event] ?? 30,
       }),
       mcpWritten,
-      [
-        {
-          // The idle-wake watcher (spike S1): started in the background when a turn ends; exit 2
-          // wakes the idle session with new mail, only when the server grants it (INV-29).
-          event: 'Stop',
-          entry: {
-            type: 'command',
-            ...execForm(command, ['hook', 'claude-code', 'watch', '--attachment', attachment]),
-            asyncRewake: true,
-          },
+      // The idle-wake watcher (spike S1): started in the background when a session starts (a new
+      // window can be woken before its first prompt) and whenever a turn ends; exit 2 wakes the
+      // idle session with new mail, only when the server grants it (INV-29).
+      (['SessionStart', 'Stop'] as const).map((event) => ({
+        event,
+        entry: {
+          type: 'command',
+          ...execForm(command, ['hook', 'claude-code', 'watch', '--attachment', attachment]),
+          asyncRewake: true,
         },
-      ],
+      })),
     );
     const changes = [mcpChange, change];
     const written = [mcpWritten ? [mcpFile] : [], change.action === 'skipped' ? [] : [settings]];

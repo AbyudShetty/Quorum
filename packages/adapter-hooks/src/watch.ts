@@ -1,16 +1,22 @@
 // The idle-wake watcher for Claude Code (ARCHITECTURE §15.1, spike S1). Claude Code starts it as an
 // `asyncRewake` background hook when a turn ends. It holds the live stream open; when mail arrives,
 // it asks the server for a wake (INV-29: wake mode, budget, loop pause), and only on a grant prints
-// the mail and exits with code 2, which wakes the idle session with that output. The person sees
-// that output too, so it is the neat form only (`claude - /proj/api - 1:`, blank line, message); the agent was
-// told at session start that such lines are mail, data from others (INV-9).
+// the framed mail and exits with code 2, which wakes the idle session with that output. Claude Code
+// shows that output to the agent only, so the agent is asked to start its reply by showing the
+// person the mail in the neat form (`claude - /proj/api - 1:`, blank line, message).
 //
 // It stands down (exit 0, no output) when: wake mode is off; a newer watcher, a new prompt or the
 // session's end takes its place; or it has run for its maximum lifetime. Codex has no such
 // mechanism: there mail waits for the next prompt.
 import { randomBytes } from 'node:crypto';
 import { type AttachmentInfo, IdentityError } from '@quorum/adapter-mcp';
-import { collectMail, type HookClient, MAX_CONTEXT_CHARS, neatMail } from './hooks.js';
+import {
+  collectMail,
+  framedMail,
+  type HookClient,
+  IDLE_WAKE_INTRO,
+  MAX_CONTEXT_CHARS,
+} from './hooks.js';
 import { loadHookState, saveHookState } from './state.js';
 
 export type WatchClient = HookClient & {
@@ -19,6 +25,8 @@ export type WatchClient = HookClient & {
     onMessage: (message: { from: string; seq: number }) => void,
     options: { signal: AbortSignal; lastEventId?: number },
   ): Promise<void>;
+  /** Run some calls speaking for one window (one Codex `quorum mcp` serves all its windows). */
+  asSession<T>(session: string | undefined, work: () => Promise<T>): Promise<T>;
 };
 
 export interface WatchContext {
@@ -53,6 +61,10 @@ const sessionKey = (input: unknown): string => {
 
 const delay = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve(); // stopped before we got here: the abort event will not come again
+      return;
+    }
     const timer = setTimeout(resolve, ms);
     signal.addEventListener(
       'abort',
@@ -82,8 +94,15 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     return STAND_DOWN; // server down: the next turn's hooks catch up
   }
   // Watch for this window's mail: messages to another window of the agent must not wake this one.
+  // Started with the session, the watcher may run before the session-start hook registered the
+  // window, so it looks again before each wake request (the server decides per window).
   const known = register.sessions[key];
   if (known) client.session = known;
+  const findWindow = async () => {
+    if (client.session) return;
+    const state = await loadHookState(context.dataDir, context.attachment.attachment);
+    client.session = state.sessions[key];
+  };
 
   const stop = new AbortController();
   /** Read through a call: the signal changes while we wait, which narrowing cannot see. */
@@ -95,12 +114,17 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
 
   /** Ask the server for a wake in each workspace; on a grant, the mail as neat lines. */
   const tryWake = async (): Promise<WatchResult | undefined> => {
+    await findWindow();
+    // Not as the whole agent: that could wake this window with mail for (or read by) another.
+    if (!client.session) return undefined;
     for (const workspace of context.attachment.workspaces) {
       const decision = await client.requestWake(workspace);
       if (decision.reason === 'mode_off') return STAND_DOWN;
       if (!decision.wake) continue;
       const mail = await collectMail(client, context.attachment, [workspace], MAX_CONTEXT_CHARS);
-      if (mail.length > 0) return { exitCode: 2, output: neatMail(mail, context.attachment) };
+      if (mail.length > 0) {
+        return { exitCode: 2, output: framedMail(mail, context.attachment, IDLE_WAKE_INTRO) };
+      }
     }
     return undefined;
   };

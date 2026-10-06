@@ -215,7 +215,11 @@ describe('quorum attach / detach', () => {
       wake: 'direct',
       wake_types: ['request', 'retraction'],
     });
-    expect(await main(['attach', '--update', id], env)).toBe(64); // nothing to change
+    // No settings to change: it brings the folder's hooks and MCP config up to this version.
+    const before = text().length;
+    expect(await main(['attach', '--update', id], env)).toBe(0);
+    expect(text().slice(before)).toContain('.codex');
+    expect(await main(['attach', '--update', 'at_00000000000000000000000000'], env)).toBe(64);
     expect(await main(['attach', '--update', id, '--wake-types', 'gossip'], env)).toBe(64);
   });
 

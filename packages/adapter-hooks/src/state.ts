@@ -35,6 +35,11 @@ export interface HookWindow {
   vendorPid: number;
   /** The `quorum mcp` process that adopted this window, if any. */
   adoptedBy?: number;
+  /**
+   * When its hooks last ran (a prompt, a tool call, a turn's end). Codex runs one `quorum mcp` for
+   * all its windows, which speaks for the most recently active one.
+   */
+  activeAtMs?: number;
 }
 
 const safe = (id: string): string => id.replaceAll(/[^A-Za-z0-9_-]/g, '_');
@@ -79,6 +84,7 @@ export const loadHookState = async (dataDir: string, attachment: string): Promis
             label: w.label,
             vendorPid: w.vendorPid,
             ...(typeof w.adoptedBy === 'number' ? { adoptedBy: w.adoptedBy } : {}),
+            ...(typeof w.activeAtMs === 'number' ? { activeAtMs: w.activeAtMs } : {}),
           };
         }
       }

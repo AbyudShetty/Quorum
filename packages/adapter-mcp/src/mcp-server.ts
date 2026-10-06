@@ -38,6 +38,11 @@ export interface McpDependencies {
   session?: { sharedWorktreeWith: readonly string[] };
   /** This window's label, e.g. claude@api-1 (read on each call: the window can change, e.g. /clear). */
   label?: string | (() => string | undefined);
+  /**
+   * Runs before each tool call: Codex runs one MCP server for all its windows, so the CLI picks the
+   * window the call is for (the one active last) here.
+   */
+  beforeTool?: () => Promise<void>;
   ids?: IdFactory;
   now?: () => Date;
 }
@@ -133,6 +138,7 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
     },
     async (args) => {
       try {
+        await deps.beforeTool?.();
         // A note can be given as plain text; every other shape goes through the server's checks.
         const body = args.body ?? (args.text === undefined ? undefined : { text: args.text });
         if (!body || (args.body && args.text !== undefined)) {
@@ -197,6 +203,7 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
     },
     async (args) => {
       try {
+        await deps.beforeTool?.();
         const workspace = workspaceFor(args.workspace);
         const page = await client.inbox(workspace, { limit: args.limit });
         if (page.messages.length === 0) return text('No new messages.');
@@ -225,6 +232,7 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
     },
     async (args) => {
       try {
+        await deps.beforeTool?.();
         const workspace = workspaceFor(args.workspace);
         const queued = await outbox.size();
         const label = labelNow();

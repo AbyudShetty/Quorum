@@ -15,9 +15,11 @@ import { readBootstrapCode } from '@quorum/local';
 import { type LocalServer, startLocalServer } from '@quorum/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  activeWindow,
   type CodexSessions,
   type HookEvent,
   type HookVendor,
+  IDLE_WAKE_INTRO,
   loadHookState,
   runHook,
   saveHookState,
@@ -194,8 +196,12 @@ describe('Claude Code and Codex hooks', () => {
     await note(sender, [direct.agent], 'please re-run the tests');
     const out = parse((await hook(direct, 'stop')).stdout);
     expect(out?.decision).toBe('block');
-    // The person sees this too: the neat line only, no frame (MESSAGE_SPEC §8).
-    expect(out?.reason).toBe(`${sender.agent.replace('agent:', '')}:\n\n  please re-run the tests`);
+    // The person sees the neat form (systemMessage); the agent reads the framed copy (reason).
+    expect(out?.systemMessage).toBe(
+      `${sender.agent.replace('agent:', '')}:\n\n  please re-run the tests`,
+    );
+    expect(out?.reason).toMatch(/<<quorum [0-9a-f]{16}>>/);
+    expect(out?.reason).toContain('please re-run the tests');
 
     await note(sender, [direct.agent], 'another one');
     expect((await hook(direct, 'stop', { stop_hook_active: true })).stdout).toBe(''); // loop guard
@@ -264,8 +270,24 @@ describe('Claude Code and Codex hooks', () => {
 });
 
 describe('idle-wake watcher (spike S1, INV-29)', () => {
-  const watch = (info: AttachmentInfo, extra: { maxLifetimeMs?: number; session?: string } = {}) =>
-    watchForMail({
+  /** Register a window as the session-start hook would (without delivering its mail). */
+  const register = async (info: AttachmentInfo, key: string) => {
+    const created = await (
+      await connectAs(info)()
+    ).createSession({
+      vendor_session_id: key,
+      root: info.root,
+    });
+    const state = await loadHookState(server.dataDir, info.attachment);
+    state.sessions[key] = created.session_id;
+    await saveHookState(server.dataDir, info.attachment, state);
+  };
+  const watch = async (
+    info: AttachmentInfo,
+    extra: { maxLifetimeMs?: number; session?: string; unregistered?: boolean } = {},
+  ) => {
+    if (!extra.unregistered) await register(info, extra.session ?? 'idle-session');
+    return watchForMail({
       attachment: info,
       dataDir: server.dataDir,
       input: { session_id: extra.session ?? 'idle-session' },
@@ -274,6 +296,7 @@ describe('idle-wake watcher (spike S1, INV-29)', () => {
       reconnectMs: 50,
       ...(extra.maxLifetimeMs === undefined ? {} : { maxLifetimeMs: extra.maxLifetimeMs }),
     });
+  };
   const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   it('wakes an idle session with direct mail once the server grants it', async () => {
@@ -284,11 +307,24 @@ describe('idle-wake watcher (spike S1, INV-29)', () => {
     await note(sender, [claude.agent], 'are you there?');
     const woke = await watching;
     expect(woke.exitCode).toBe(2);
-    // The person sees this too: neat lines only (an earlier broadcast may come along), no frame.
-    expect(woke.output.endsWith(`${sender.agent.replace('agent:', '')}:\n\n  are you there?`)).toBe(
-      true,
-    );
-    expect(woke.output).not.toContain('<<quorum');
+    // Only the agent sees this output: framed, asking it to show the person the neat form first.
+    expect(woke.output.startsWith(IDLE_WAKE_INTRO)).toBe(true);
+    expect(woke.output).toMatch(/<<quorum [0-9a-f]{16}>>/);
+    expect(woke.output).toContain(`${sender.agent.replace('agent:', '')}:\n\n  are you there?`);
+  });
+
+  it('started with the session, it waits for the window to be registered, then wakes it', async () => {
+    const sender = await attach('early-from', 'codex', 'off');
+    const claude = await attach('early-to', 'claude-code', 'direct');
+    const watching = watch(claude, { session: 'early-session', unregistered: true });
+    await tick(300);
+    await note(sender, [claude.agent], 'before the window was registered');
+    await tick(300); // no window yet: no wake as the whole agent
+    await register(claude, 'early-session');
+    await note(sender, [claude.agent], 'after');
+    const woke = await watching;
+    expect(woke.exitCode).toBe(2);
+    expect(woke.output).toContain('after');
   });
 
   it('wakes at once for mail that was already waiting', async () => {
@@ -445,7 +481,8 @@ describe('Codex idle wake through the Codex daemon', () => {
     expect(mail?.hookSpecificOutput?.additionalContext).toContain('while busy');
   });
 
-  it('never touches Codex when wake mode is off', async () => {
+  it('never starts a turn when wake mode is off', async () => {
+    const sender = await attach('cx-off-from', 'claude-code', 'off');
     const codex = await attach('cx-off', 'codex', 'off');
     const fake = fakeCodex([{ id: 'idle', status: 'idle' }]);
     const waker = await startCodexWaker({
@@ -453,9 +490,47 @@ describe('Codex idle wake through the Codex daemon', () => {
       attachment: codex,
       dataDir: server.dataDir,
       openCodex: fake.open,
+      reconnectMs: 50,
     });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await note(sender, [codex.agent], 'do not wake');
+    await new Promise((resolve) => setTimeout(resolve, 400));
     await waker.stop();
-    expect(fake.opened()).toBe(0);
+    expect(fake.turns).toEqual([]);
+  });
+
+  it('keeps every Codex window the daemon has open alive on the server', async () => {
+    const codex = await attach('cx-alive', 'codex', 'off');
+    await hook(codex, 'session-start', { session_id: 'alive-thread' });
+    const window = (await loadHookState(server.dataDir, codex.attachment)).sessions['alive-thread'];
+    const fake = fakeCodex([{ id: 'alive-thread', status: 'idle' }]);
+    // Which window each message (here: heartbeats) was sent as.
+    const sent: (string | null)[] = [];
+    const client = await QuorumClient.connect({
+      dataDir: server.dataDir,
+      credentialKey: codex.attachment,
+      store,
+      fetch: (input, init) => {
+        const url = input instanceof Request ? input.url : input.toString();
+        if (url.endsWith('/messages') && init?.method === 'POST') {
+          sent.push(new Headers(init.headers).get('quorum-session'));
+        }
+        return fetch(input, init);
+      },
+    });
+    const waker = await startCodexWaker({
+      client,
+      attachment: codex,
+      dataDir: server.dataDir,
+      openCodex: fake.open,
+      keepAliveMs: 50,
+    });
+    for (let i = 0; i < 100 && sent.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await waker.stop();
+    expect(window).toMatch(/^sess_/);
+    expect(sent[0]).toBe(window); // a heartbeat as the open window
   });
 });
 
@@ -484,7 +559,13 @@ describe('windows: each session has a label and its own mail (MESSAGE_SPEC §1.1
     const after = await loadHookState(server.dataDir, codex.attachment);
     expect(after.sessions['thread-9']).toBe('sess_EARLY');
     expect(after.windows).toEqual({
-      sess_EARLY: { key: 'thread-9', label: 'codex@late-hook-1', vendorPid: 777, adoptedBy: 4242 },
+      sess_EARLY: {
+        key: 'thread-9',
+        label: 'codex@late-hook-1',
+        vendorPid: 777,
+        adoptedBy: 4242,
+        activeAtMs: expect.any(Number) as unknown,
+      },
     });
   });
 
@@ -513,17 +594,26 @@ describe('windows: each session has a label and its own mail (MESSAGE_SPEC §1.1
     ).toEqual(['claude@win-to-1', 'claude@win-to-2']);
   });
 
-  it('wakes exactly the Codex window it belongs to', async () => {
+  it('wakes exactly the Codex window the mail is for, and speaks as the active window', async () => {
     const sender = await attach('cxw-from', 'claude-code', 'off');
     const codex = await attach('cxw-to', 'codex', 'direct');
     await hook(codex, 'post-tool');
+    // Two Codex windows in one folder; one quorum mcp (in Codex's daemon) serves both.
+    const first = parse((await hook(codex, 'session-start', { session_id: 'thread-a' })).stdout);
+    await hook(codex, 'session-start', { session_id: 'thread-b' });
+    const label = /You are (codex@\S+)/.exec(
+      first?.hookSpecificOutput?.additionalContext ?? '',
+    )?.[1];
+    expect(label).toBe('codex@cxw-to-1');
+    // The window the person used last is the one tool calls speak for.
+    expect((await activeWindow(server.dataDir, codex.attachment))?.key).toBe('thread-b');
     const turns: string[] = [];
     const open = (): Promise<CodexSessions> =>
       Promise.resolve({
         threadsIn: () =>
           Promise.resolve([
-            { id: 'other-window', status: 'idle' },
-            { id: 'my-window', status: 'idle' },
+            { id: 'thread-b', status: 'idle' },
+            { id: 'thread-a', status: 'idle' },
           ]),
         startTurn: (threadId: string) => {
           turns.push(threadId);
@@ -536,15 +626,16 @@ describe('windows: each session has a label and its own mail (MESSAGE_SPEC §1.1
       attachment: codex,
       dataDir: server.dataDir,
       openCodex: open,
-      windowKey: () => 'my-window',
       reconnectMs: 50,
+      keepAliveMs: 60_000,
     });
     await new Promise((resolve) => setTimeout(resolve, 200));
-    await note(sender, [codex.agent], 'for my window');
+    await note(sender, [label ?? ''], 'for window a only');
     for (let i = 0; i < 100 && turns.length === 0; i++) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
+    await new Promise((resolve) => setTimeout(resolve, 200));
     await waker.stop();
-    expect(turns).toEqual(['my-window']);
+    expect(turns).toEqual(['thread-a']);
   });
 });

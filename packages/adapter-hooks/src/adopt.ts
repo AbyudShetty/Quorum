@@ -93,6 +93,22 @@ export const forgetMcpWindow = async (
   await saveHookState(dataDir, attachment, state);
 };
 
+/**
+ * The window that was active last (its hooks ran most recently). Codex runs one `quorum mcp` for
+ * all its windows (inside its shared daemon), so a tool call speaks for the window the person is
+ * using: the one whose prompt or tool hooks just ran.
+ */
+export const activeWindow = async (
+  dataDir: string,
+  attachment: string,
+): Promise<AdoptedWindow | undefined> => {
+  const state = await loadHookState(dataDir, attachment);
+  const [found] = Object.entries(state.windows ?? {})
+    .filter(([, w]) => !w.key.startsWith(MCP_WINDOW_PREFIX))
+    .sort(([, a], [, b]) => (b.activeAtMs ?? 0) - (a.activeAtMs ?? 0));
+  return found ? { id: found[0], key: found[1].key, label: found[1].label } : undefined;
+};
+
 export interface WindowTracker {
   /** The window `quorum mcp` speaks for right now. */
   current(): AdoptedWindow;

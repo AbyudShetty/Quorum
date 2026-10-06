@@ -13,7 +13,7 @@ afterEach(async () => {
   world = undefined;
 });
 
-const start = async (w: World) => {
+const start = async (w: World, extra: { beforeTool?: () => Promise<void> } = {}) => {
   const attachment: AttachmentInfo = {
     attachment: 'at_test',
     agent: w.agent.address,
@@ -27,6 +27,7 @@ const start = async (w: World) => {
     client: await connectAs(w),
     outbox: new Outbox(w.dataDir, 'at_test'),
     attachment,
+    ...extra,
   });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await server.connect(serverSide);
@@ -81,6 +82,20 @@ describe('quorum MCP server', () => {
       from: world.agent.address,
       body: { text: 'ready for review' },
     });
+  });
+
+  it('runs beforeTool before every tool call (Codex picks its window there)', async () => {
+    world = await startWorld();
+    const calls: string[] = [];
+    const client = await start(world, {
+      beforeTool: () => {
+        calls.push('before');
+        return Promise.resolve();
+      },
+    });
+    await call(client, 'quorum_status');
+    await call(client, 'quorum_send', { to: [world.peer.address], text: 'hi' });
+    expect(calls).toEqual(['before', 'before']);
   });
 
   it('quorum_send takes plain text for a note, and asks for text or body when given neither', async () => {

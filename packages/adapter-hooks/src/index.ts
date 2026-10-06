@@ -4,6 +4,8 @@ export {
   HOOK_HEARTBEAT_MIN_MS,
   HOOK_VENDORS,
   collectMail,
+  CONTINUE_INTRO,
+  IDLE_WAKE_INTRO,
   deliverMail,
   framedMail,
   neatMail,
@@ -29,6 +31,7 @@ export {
 export {
   type AdoptedWindow,
   type AdoptOptions,
+  activeWindow,
   adoptWindow,
   forgetMcpWindow,
   recordMcpWindow,

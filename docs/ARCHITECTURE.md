@@ -199,7 +199,7 @@ Three layers, so identity can be stable by default yet changed whenever needed (
 
 **Naming:** `<vendor-short>-<folder-name>@<machine>`, e.g. `claude-api@laptop-a`, `codex-web@laptop-a`. Collisions get `-2`, `-3`. `quorum agent rename` changes the display name; the `ag_` id never changes.
 
-**Windows (D-17):** each live session gets a label `<tool>@<folder>-<n>` (numbers count up per tool, folder and machine and are never reused; with the machine prefix from elsewhere), shown to people and agents as `claude - <path> - 1`. Messages carry the sending window, can be sent to one window, and each window reads its own mail (MESSAGE_SPEC §1.1). One window is one session: `quorum mcp` adopts the session its hooks registered (same vendor process), or registers one that the late hook takes over, and follows the window when it changes (`/clear`).
+**Windows (D-17):** each live session gets a label `<tool>@<folder>-<n>` (numbers count up per tool, folder and machine and are never reused; with the machine prefix from elsewhere), shown to people and agents as `claude - <path> - 1`. Messages carry the sending window, can be sent to one window, and each window reads its own mail (MESSAGE_SPEC §1.1). One window is one session: `quorum mcp` adopts the session its hooks registered (same vendor process), or registers one that the late hook takes over, and follows the window when it changes (`/clear`). Codex is different: it runs MCP servers inside its shared daemon, so one `quorum mcp` serves every Codex window in the folder. It registers no session of its own (the windows' hooks do), speaks for each tool call as the window whose hooks ran last, and its waker wakes and keeps alive each window the daemon has open.
 
 **Flexible identity (D-12):**
 

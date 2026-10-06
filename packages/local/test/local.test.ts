@@ -3,11 +3,13 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -26,6 +28,7 @@ import {
   removeDiscovery,
   writeBootstrapCode,
   writeDiscovery,
+  writePrivateFile,
 } from '../src/index.js';
 
 const dirs: string[] = [];
@@ -224,5 +227,17 @@ describe('bootstrap code file', () => {
     const dir = codeDir();
     await writeBootstrapCode(dir, file);
     expect(statSync(bootstrapPath(dir)).mode & 0o077).toBe(0);
+  });
+});
+
+describe('writePrivateFile', () => {
+  it('replaces a file while others keep reading it (Windows refuses for a moment)', async () => {
+    const path = join(tempDir(), 'state.json');
+    await writePrivateFile(path, '0');
+    const reads = Array.from({ length: 200 }, () => readFile(path, 'utf8'));
+    const writes = Array.from({ length: 50 }, (_, i) => writePrivateFile(path, String(i + 1)));
+    await Promise.all([...reads, ...writes]);
+    expect(Number(await readFile(path, 'utf8'))).toBeGreaterThan(0);
+    expect(readdirSync(join(path, '..')).filter((f) => f.endsWith('.tmp'))).toEqual([]);
   });
 });

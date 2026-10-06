@@ -1,15 +1,19 @@
 // Idle wake for Codex (spike 2026-10-05). Codex hooks cannot wake an idle session, but Codex 0.160+
 // runs sessions on a shared local daemon, and a turn started there appears live in the person's
-// Codex window. `quorum mcp` (alive for the whole Codex session) runs this waker: on new mail it
-// asks the server for a wake (INV-29) and, only on a grant and only for an IDLE session in this
-// folder, starts one turn carrying the mail.
+// Codex window. The daemon also runs Codex's MCP servers, so ONE `quorum mcp` serves every Codex
+// window in the folder; it runs this waker for all of them. On new mail it asks the server, for
+// each IDLE window its hooks registered, whether that window may be woken (INV-29: the server
+// knows which window the mail is for) and, only on a grant, starts one turn carrying the mail.
+// It also keeps the windows the daemon still has open alive on the server (a heartbeat each).
 //
 // Codex shows that turn in the user's position, to the person as well: so it carries only the neat
-// form (`claude - /proj/api - 1:`, blank line, message). The agent learns the turn is mail, not its human (INV-9),
-// from the MCP instructions and session-start context, and from the framed copy the woken turn's
-// prompt hook adds as hidden context. The bridge never changes the session's sandbox or approval
-// settings. Off switch: QUORUM_CODEX_IDLE_WAKE=off, or wake mode `off`.
+// form (`claude - /proj/api - 1:`, blank line, message). The agent learns the turn is mail, not its
+// human (INV-9), from the MCP instructions and session-start context, and from the framed copy the
+// woken turn's prompt hook adds as hidden context. The bridge never changes the session's sandbox
+// or approval settings. Off switch: QUORUM_CODEX_IDLE_WAKE=off, or wake mode `off`.
 import { type AttachmentInfo } from '@quorum/adapter-mcp';
+import { createIdFactory } from '@quorum/core';
+import type { SubmittedEnvelope } from '@quorum/schemas';
 import {
   collectMail,
   framedMail,
@@ -18,7 +22,7 @@ import {
   neatMail,
   WOKEN_INTRO,
 } from './hooks.js';
-import { loadHookState, saveHookState } from './state.js';
+import { type HookWindow, loadHookState, saveHookState } from './state.js';
 import type { WatchClient } from './watch.js';
 
 /** What the waker needs from the Codex daemon (the real one is @quorum/codex-bridge). */
@@ -36,13 +40,9 @@ export interface CodexWakerOptions {
   /** Connect to the Codex daemon (one short connection per wake). */
   openCodex: () => Promise<CodexSessions>;
   reconnectMs?: number;
+  /** How often open windows say they are alive (default 30 s, MESSAGE_SPEC §5.10). */
+  keepAliveMs?: number;
   onError?: (error: unknown) => void;
-  /**
-   * The Codex session this `quorum mcp` belongs to (its key is the Codex thread id), read at each
-   * wake: the window can change (its hooks start late). When known, only that window is woken;
-   * otherwise the most suitable idle window in the folder.
-   */
-  windowKey?: () => string | undefined;
 }
 
 export interface CodexWaker {
@@ -51,6 +51,10 @@ export interface CodexWaker {
 
 const delay = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve(); // stopped before we got here: the abort event will not come again
+      return;
+    }
     const timer = setTimeout(resolve, ms);
     signal.addEventListener(
       'abort',
@@ -62,46 +66,68 @@ const delay = (ms: number, signal: AbortSignal) =>
     );
   });
 
-/** Start watching for mail that may wake an idle Codex session. */
+/** Start watching for mail that may wake an idle Codex window. */
 export const startCodexWaker = (options: CodexWakerOptions): Promise<CodexWaker> => {
   const { client, attachment } = options;
   const onError = options.onError ?? (() => undefined);
   const stop = new AbortController();
   const stopped = () => stop.signal.aborted;
+  const ids = createIdFactory();
 
-  // No probe at start: asking the server for a wake can use up a grant (and the mail with it).
-  // Wake mode `off` is the server's answer to each request.
-  /** One wake attempt for a workspace; serialised so two messages never start two turns. */
-  const tryWake = async (workspace: string): Promise<void> => {
-    let codex: CodexSessions | undefined;
-    try {
-      codex = await options.openCodex();
-      const threads = await codex.threadsIn(attachment.root);
-      const idle = threads.filter((t) => t.status === 'idle');
-      if (idle.length === 0) return; // busy: the hooks deliver mid-turn; or no Codex session open
-      // Prefer the sessions our hooks registered for this attachment (Codex session id = thread id).
-      const ours = new Set(
-        Object.keys((await loadHookState(options.dataDir, attachment.attachment)).sessions),
-      );
-      const windowKey = options.windowKey?.();
-      const target =
-        windowKey && !windowKey.startsWith(MCP_WINDOW_PREFIX)
-          ? idle.find((t) => t.id === windowKey)
-          : (idle.find((t) => ours.has(t.id)) ?? idle[0]);
-      if (!target) return;
+  /** The windows our hooks registered, by Codex thread id (the hooks' session id). */
+  const windowsByThread = async (): Promise<Map<string, [string, HookWindow]>> => {
+    const state = await loadHookState(options.dataDir, attachment.attachment);
+    return new Map(
+      Object.entries(state.windows ?? {})
+        .filter(([, w]) => !w.key.startsWith(MCP_WINDOW_PREFIX))
+        .map(([id, w]) => [w.key, [id, w]]),
+    );
+  };
+
+  /** Wake one idle thread if the server allows it, speaking as its window (or the agent). */
+  const wakeThread = async (
+    codex: CodexSessions,
+    workspace: string,
+    threadId: string,
+    session: string | undefined,
+  ): Promise<boolean> =>
+    client.asSession(session, async () => {
+      // No probe at start: asking the server for a wake can use up a grant (and the mail with it).
       const decision = await client.requestWake(workspace);
-      if (!decision.wake) return;
+      if (!decision.wake) return false;
       const mail = await collectMail(client, attachment, [workspace], MAX_CONTEXT_CHARS);
-      if (mail.length === 0) return;
+      if (mail.length === 0) return false;
       // The framed copy waits for the woken turn's prompt hook (hidden from the person).
       const state = await loadHookState(options.dataDir, attachment.attachment);
       state.wakeContexts = {
         ...state.wakeContexts,
-        [target.id]: { text: framedMail(mail, attachment, WOKEN_INTRO), atMs: Date.now() },
+        [threadId]: { text: framedMail(mail, attachment, WOKEN_INTRO), atMs: Date.now() },
       };
       await saveHookState(options.dataDir, attachment.attachment, state).catch(() => undefined);
-      // The visible turn: the neat lines only.
-      await codex.startTurn(target.id, neatMail(mail, attachment));
+      // The visible turn: the neat form only.
+      await codex.startTurn(threadId, neatMail(mail, attachment));
+      return true;
+    });
+
+  /** One wake round for a workspace; serialised so two messages never start two turns at once. */
+  const tryWake = async (workspace: string): Promise<void> => {
+    let codex: CodexSessions | undefined;
+    try {
+      codex = await options.openCodex();
+      const idle = (await codex.threadsIn(attachment.root)).filter((t) => t.status === 'idle');
+      if (idle.length === 0) return; // busy: the hooks deliver mid-turn; or no Codex window open
+      const windows = await windowsByThread();
+      const registered = idle.filter((t) => windows.has(t.id));
+      if (registered.length === 0) {
+        // No hooks registered yet (they run with the first prompt): wake as the agent.
+        const [first] = idle;
+        if (first) await wakeThread(codex, workspace, first.id, undefined);
+        return;
+      }
+      // Each window for its own mail: the server says which ones have any.
+      for (const thread of registered) {
+        await wakeThread(codex, workspace, thread.id, windows.get(thread.id)?.[0]);
+      }
     } catch (error) {
       onError(error);
     } finally {
@@ -109,31 +135,76 @@ export const startCodexWaker = (options: CodexWakerOptions): Promise<CodexWaker>
     }
   };
 
-  let queue: Promise<void> = Promise.resolve();
-  const streams = attachment.workspaces.map(async (workspace) => {
-    let lastSeen: number | undefined;
+  /** Keep each window the daemon still has open alive on the server (its own heartbeat). */
+  const keepAlive = async (): Promise<void> => {
     while (!stopped()) {
+      let codex: CodexSessions | undefined;
       try {
-        await client.stream(
-          workspace,
-          (message) => {
-            lastSeen = message.seq;
-            if (message.from === attachment.agent) return;
-            queue = queue.then(() => (stopped() ? undefined : tryWake(workspace)));
-          },
-          { signal: stop.signal, ...(lastSeen === undefined ? {} : { lastEventId: lastSeen }) },
-        );
+        codex = await options.openCodex();
+        const threads = await codex.threadsIn(attachment.root);
+        const windows = await windowsByThread();
+        for (const thread of threads) {
+          const window = windows.get(thread.id);
+          if (!window) continue;
+          await client.asSession(window[0], () =>
+            Promise.all(
+              attachment.workspaces.map((workspace) =>
+                client.send(workspace, {
+                  spec: 'quorum/1',
+                  id: ids.id('message'),
+                  workspace,
+                  from: attachment.agent,
+                  to: ['*'],
+                  type: 'heartbeat',
+                  type_version: 1,
+                  created_at: new Date().toISOString(),
+                  body: {
+                    status: thread.status === 'idle' ? 'idle' : 'working',
+                    resources_in_use: [],
+                  },
+                } as unknown as SubmittedEnvelope),
+              ),
+            ),
+          );
+        }
       } catch (error) {
         onError(error);
+      } finally {
+        codex?.close();
       }
-      await delay(options.reconnectMs ?? 2000, stop.signal);
+      await delay(options.keepAliveMs ?? 30_000, stop.signal);
     }
-  });
+  };
+
+  let queue: Promise<void> = Promise.resolve();
+  // The stream is the agent's (no window): it sees the mail of every window.
+  const streams = attachment.workspaces.map((workspace) =>
+    client.asSession(undefined, async () => {
+      let lastSeen: number | undefined;
+      while (!stopped()) {
+        try {
+          await client.stream(
+            workspace,
+            (message) => {
+              lastSeen = message.seq;
+              if (message.from === attachment.agent) return;
+              queue = queue.then(() => (stopped() ? undefined : tryWake(workspace)));
+            },
+            { signal: stop.signal, ...(lastSeen === undefined ? {} : { lastEventId: lastSeen }) },
+          );
+        } catch (error) {
+          onError(error);
+        }
+        await delay(options.reconnectMs ?? 2000, stop.signal);
+      }
+    }),
+  );
+  const alive = keepAlive();
 
   return Promise.resolve({
     stop: async () => {
       stop.abort();
-      await Promise.allSettled(streams);
+      await Promise.allSettled([...streams, alive]);
       await queue;
     },
   });

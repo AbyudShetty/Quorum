@@ -20,6 +20,7 @@ import {
 import { MESSAGE_TYPES, type SubmittedEnvelope, VENDORS } from '@quorum/schemas';
 import {
   ApiError,
+  type AttachmentInfo,
   type CredentialStore,
   createQuorumMcpServer,
   frameMessages,
@@ -33,6 +34,7 @@ import {
   Outbox,
   QuorumClient,
   serveStdio,
+  type Session,
   UnreachableError,
 } from '@quorum/adapter-mcp';
 import {
@@ -42,6 +44,7 @@ import {
   type HookEvent,
   type HookVendor,
   runHook,
+  activeWindow,
   adoptWindow,
   forgetMcpWindow,
   recordMcpWindow,
@@ -102,7 +105,8 @@ Usage: quorum <command> [options]
          [--no-config]                       Connect a folder to a workspace as an agent and write
                                              the vendor hooks and MCP config (kept out of git)
   attach --update <at_id> [--wake ...] [--wake-types a,b] [--lease-enforcement warn|block]
-                                             Change an attachment's wake settings
+                                             Change an attachment's wake settings, and rewrite
+                                             its vendor hooks and MCP config to this version
   detach <at_id>                             Disconnect an attachment and forget its credentials
   status [--attachment <at_id>]              Is the local server up, and is it really ours?
   inbox  --attachment <at_id> [--workspace <ws>] [--limit <n>] [--keep]
@@ -562,23 +566,33 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
       ...(wakeTypes ? { wake_types: wakeTypes } : {}),
       ...(lease ? { lease_enforcement: lease } : {}),
     };
-    if (Object.keys(change).length === 0) {
-      throw new UsageError('Nothing to change: pass --wake, --wake-types or --lease-enforcement.');
-    }
     const info = await loadAttachment(dataDirOf(env), values.update);
-    const client = await humanClient(env);
-    const updated = await client.updateAttachment(values.update, change);
-    if (info) {
-      await saveAttachment(dataDirOf(env), {
-        ...info,
-        wake: updated.wake,
-        lease_enforcement: updated.lease_enforcement,
-        ...(updated.wake_types ? { wake_types: updated.wake_types } : {}),
-      });
+    if (Object.keys(change).length === 0 && !info) {
+      throw new UsageError(
+        `Unknown attachment ${values.update} on this machine. Run \`quorum attach\` in its folder.`,
+      );
     }
-    env.out(
-      `Updated ${values.update}: wake ${updated.wake}, lease enforcement ${updated.lease_enforcement}.\n`,
-    );
+    if (Object.keys(change).length > 0) {
+      const client = await humanClient(env);
+      const updated = await client.updateAttachment(values.update, change);
+      if (info) {
+        await saveAttachment(dataDirOf(env), {
+          ...info,
+          wake: updated.wake,
+          lease_enforcement: updated.lease_enforcement,
+          ...(updated.wake_types ? { wake_types: updated.wake_types } : {}),
+        });
+      }
+      env.out(
+        `Updated ${values.update}: wake ${updated.wake}, lease enforcement ${updated.lease_enforcement}.\n`,
+      );
+    }
+    // Bring the folder's hooks and MCP config up to this version of Quorum.
+    if (info && !values['no-config']) {
+      const command = await (env.quorumCommand ?? quorumCommand)();
+      const config = await writeVendorConfig(info.vendor, info.root, values.update, command);
+      env.out(describeChanges(config.changes));
+    }
     return 0;
   }
 
@@ -701,15 +715,42 @@ const detach = async (args: string[], env: CliEnv): Promise<number> => {
   return 0;
 };
 
-const mcp = async (args: string[], env: CliEnv): Promise<number> => {
-  const { values } = parseArgs({ args, options: { attachment: { type: 'string' } }, strict: true });
-  const info = await attachmentOf(env, values.attachment);
-  const dataDir = dataDirOf(env);
-  const client = await connect(env, info.attachment);
-  // One window, one session (MESSAGE_SPEC §1.1): adopt the session this window's hooks registered
-  // (same vendor process). Without one yet (Codex runs its session-start hook only with the first
-  // prompt; or hooks are off), register our own, which also tells the server our working tree
-  // (INV-28), and record it so the window's hook takes it over. Best effort either way.
+/**
+ * Which window `quorum mcp` speaks for (MESSAGE_SPEC §1.1), and how it follows changes.
+ *
+ * Claude Code starts one MCP server per window: adopt the session that window's hooks registered
+ * (same vendor process). Without one yet (hooks off, or slow), register our own, which also tells
+ * the server our working tree (INV-28), and record it so the window's hook takes it over. Then
+ * follow the window: `/clear` ends one session and starts the next in the same process.
+ *
+ * Codex runs its MCP servers inside its shared daemon: one `quorum mcp` serves every Codex window
+ * in the folder, and no process links it to one. It registers nothing (the windows' hooks do) and
+ * speaks, for each tool call, as the window that was active last (its prompt or tool hooks just
+ * ran); the Codex waker serves all the windows.
+ */
+const mcpWindow = async (
+  env: CliEnv,
+  client: QuorumClient,
+  info: AttachmentInfo,
+  dataDir: string,
+): Promise<{
+  label: () => string | undefined;
+  beforeTool?: () => Promise<void>;
+  session?: Session;
+  stop: () => Promise<void>;
+}> => {
+  if (info.vendor === 'codex') {
+    let label: string | undefined;
+    return {
+      label: () => label,
+      beforeTool: async () => {
+        const active = await activeWindow(dataDir, info.attachment).catch(() => undefined);
+        client.session = active?.id;
+        label = active?.label;
+      },
+      stop: () => Promise.resolve(),
+    };
+  }
   const vendorPid = env.vendorPid ?? process.ppid;
   const adopted = await adoptWindow(dataDir, info.attachment, {
     vendorPid,
@@ -728,7 +769,6 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
         }).catch(() => undefined)
       : undefined);
   client.session = window?.id;
-  // Follow the window: `/clear` starts a new session in the same process; Codex's late hook re-keys it.
   const tracker = window
     ? trackWindow(dataDir, info.attachment, window, {
         vendorPid,
@@ -738,18 +778,40 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
         },
       })
     : undefined;
+  return {
+    label: () => tracker?.current().label ?? session?.label,
+    ...(session ? { session } : {}),
+    stop: async () => {
+      tracker?.stop();
+      await Promise.all([
+        session?.end(),
+        window
+          ? forgetMcpWindow(dataDir, info.attachment, window.id).catch(() => undefined)
+          : undefined,
+      ]);
+    },
+  };
+};
+
+const mcp = async (args: string[], env: CliEnv): Promise<number> => {
+  const { values } = parseArgs({ args, options: { attachment: { type: 'string' } }, strict: true });
+  const info = await attachmentOf(env, values.attachment);
+  const dataDir = dataDirOf(env);
+  const client = await connect(env, info.attachment);
+  const window = await mcpWindow(env, client, info, dataDir);
   const server = createQuorumMcpServer({
     client,
     outbox: new Outbox(dataDir, info.attachment),
     attachment: info,
-    ...(session ? { session } : {}),
-    label: () => tracker?.current().label ?? session?.label,
+    ...(window.session ? { session: window.session } : {}),
+    label: window.label,
+    ...(window.beforeTool ? { beforeTool: window.beforeTool } : {}),
   });
   // Presence: a heartbeat every 30 s, and `offline` at once when the session ends (stdin closes
   // when Claude Code or Codex exits).
   const presence = startHeartbeat({ client, attachment: info });
-  // Codex: wake the idle session on mail the server allows (Codex has no hook for that; its
-  // shared daemon does). Off switch: QUORUM_CODEX_IDLE_WAKE=off.
+  // Codex: wake idle windows on mail the server allows (Codex has no hook for that; its shared
+  // daemon does). Off switch: QUORUM_CODEX_IDLE_WAKE=off.
   const codexWaker =
     info.vendor === 'codex' && process.env.QUORUM_CODEX_IDLE_WAKE !== 'off'
       ? await startCodexWaker({
@@ -757,22 +819,13 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
           attachment: info,
           dataDir,
           openCodex: () => (env.openCodex ?? openCodexDaemon)(),
-          // Codex's session id is its thread id: wake exactly this window.
-          windowKey: () => tracker?.current().key,
         }).catch(() => undefined)
       : undefined;
   let closing: Promise<void> | undefined;
   const goodbye = () =>
-    (closing ??= Promise.all([
-      presence.stop(),
-      session?.end(),
-      codexWaker?.stop(),
-      window
-        ? forgetMcpWindow(dataDir, info.attachment, window.id).catch(() => undefined)
-        : undefined,
-    ]).then(() => {
-      tracker?.stop();
-    }));
+    (closing ??= Promise.all([presence.stop(), window.stop(), codexWaker?.stop()]).then(
+      () => undefined,
+    ));
   server.server.onclose = () => {
     void goodbye();
   };
