@@ -18,6 +18,8 @@ export interface FlushResult {
   rejected: { id: string; code: string; message: string }[];
   /** Still queued (server unreachable, rate limited or token expired). */
   pending: number;
+  /** Why the flush stopped early, when it did. */
+  stoppedBy?: 'unreachable' | 'credentials' | 'rate_limited' | 'server';
 }
 
 export type SendFn = (workspace: string, envelope: SubmittedEnvelope) => Promise<unknown>;
@@ -102,6 +104,14 @@ export class Outbox {
           });
         } else if (error instanceof UnreachableError || error instanceof ApiError) {
           result.pending = files.length - index;
+          result.stoppedBy =
+            error instanceof UnreachableError
+              ? 'unreachable'
+              : error.status === 401
+                ? 'credentials'
+                : error.status === 429
+                  ? 'rate_limited'
+                  : 'server';
           return result;
         } else {
           throw error;

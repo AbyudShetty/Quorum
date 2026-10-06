@@ -1,4 +1,4 @@
-export { type AgentConfig, type AgentResult, prng, runAgent } from './agent.js';
+export { type AgentConfig, type AgentResult, type FleetProgress, prng, runAgent } from './agent.js';
 export { runFleetCli, startBarrier } from './cli.js';
 export {
   agentConfig,

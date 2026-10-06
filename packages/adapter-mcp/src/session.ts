@@ -3,11 +3,14 @@
 // the same one (INV-28). Registration is best effort: a server that is down or refuses must never
 // stop the agent from working, so failures are reported and the session simply goes unregistered.
 import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
 import type { QuorumClient } from './client.js';
 import { findGit } from './git.js';
 
 export interface Session {
   id: string;
+  /** This window's label, e.g. claude@api-1 (MESSAGE_SPEC §1.1). */
+  label?: string;
   /** Other live agents in the same working tree when this session registered (INV-28). */
   sharedWorktreeWith: string[];
   /** End the session. Safe to call more than once; never throws. */
@@ -26,6 +29,18 @@ export interface StartSessionOptions {
   onError?: (error: unknown) => void;
 }
 
+/**
+ * A folder as others see it (MESSAGE_SPEC §1.1): the home folder as `~`, so a username never
+ * travels with a message. On this machine it is shown in full again.
+ */
+export const displayRoot = (root: string, home: string = homedir()): string => {
+  const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const h = home.replace(/[\\/]+$/, '');
+  return h && fold(root).startsWith(fold(h)) && /^[\\/]?$/.test(root.charAt(h.length))
+    ? `~${root.slice(h.length)}`
+    : root;
+};
+
 export const startSession = async (options: StartSessionOptions): Promise<Session | undefined> => {
   const onError = options.onError ?? (() => undefined);
   try {
@@ -33,11 +48,13 @@ export const startSession = async (options: StartSessionOptions): Promise<Sessio
     const created = await options.client.createSession({
       vendor_session_id: options.vendorSessionId ?? `mcp-${randomBytes(8).toString('hex')}`,
       root: options.root,
+      display_root: displayRoot(options.root),
       ...(git ? { git } : {}),
     });
     let ended: Promise<void> | undefined;
     return {
       id: created.session_id,
+      ...(created.label ? { label: created.label } : {}),
       sharedWorktreeWith: created.shared_worktree_with,
       end: () => {
         ended ??= options.client.deleteSession(created.session_id).catch(onError);

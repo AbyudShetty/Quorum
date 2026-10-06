@@ -136,7 +136,8 @@ describe('fleet against the fake server', () => {
     const results = await runLocalFleet(manifest, {
       ratePerSecond: 5,
       durationMs: 2000,
-      drainMs: 1000,
+      // An upper bound: the run ends as soon as every message arrived (a busy CI box needs longer).
+      drainMs: 15_000,
       pollIntervalMs: 50,
       seed: 3,
     });
@@ -164,7 +165,7 @@ describe('fleet against the fake server', () => {
     const run = runLocalFleet(manifest, {
       ratePerSecond: 5,
       durationMs: 4000,
-      drainMs: 3000,
+      drainMs: 15_000, // upper bound; ends once everything queued arrived
       pollIntervalMs: 50,
       seed: 5,
     });

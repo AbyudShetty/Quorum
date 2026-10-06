@@ -25,6 +25,9 @@
     },
     {
       "path": "../adapter-hooks/tsconfig.build.json"
+    },
+    {
+      "path": "../codex-bridge/tsconfig.build.json"
     }
   ]
 }

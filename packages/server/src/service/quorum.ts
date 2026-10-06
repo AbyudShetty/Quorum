@@ -9,6 +9,7 @@
 // Migration seam: the message projections are rebuilt in memory from the log on start. Moving them
 // to SQL tables (or Postgres) changes this file only; the API and the log stay the same.
 import { realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import {
   acceptMessage,
@@ -19,6 +20,7 @@ import {
   type EventRecord,
   folderName,
   generateToken,
+  labelSlug,
   hashToken,
   type IdFactory,
   MessageLog,
@@ -32,6 +34,7 @@ import {
   sharedWorktreeWith,
   systemNotice,
   tokenKind,
+  toolName,
 } from '@quorum/core';
 import {
   type AgentList,
@@ -53,7 +56,13 @@ import {
   type WorkspaceList,
 } from '@quorum/schemas';
 import type { Db } from '../storage/database.js';
-import type { AgentRow, AttachmentRow, HumanRow, Registry } from '../storage/registry.js';
+import type {
+  AgentRow,
+  AttachmentRow,
+  HumanRow,
+  Registry,
+  SessionRow,
+} from '../storage/registry.js';
 import type { SqliteEventStore } from '../storage/sqlite-event-store.js';
 import { Notifier, type Subscriber } from './notifier.js';
 import { RateLimiter } from './rate-limit.js';
@@ -74,7 +83,26 @@ export interface Caller {
   /** hu_ or ag_ id. */
   id: string;
   address: string;
+  /**
+   * The calling window, when the request names one of this agent's open sessions
+   * (`Quorum-Session` header). Verified here, so a window can never speak as another (INV-7).
+   */
+  session?: { id: string; label: string; machine: string; path?: string };
 }
+
+/** A folder shown with the home folder as ~ (so a username never travels with a message). */
+const homeShortened = (path: string, home: string): string => {
+  const fold = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const h = home.replace(/[\\/]+$/, '');
+  return h && fold(path).startsWith(fold(h)) && /^[\\/]?$/.test(path.charAt(h.length))
+    ? `~${path.slice(h.length)}`
+    : path;
+};
+
+/** `claude@api-1` → `claude@abyud-laptop-api-1`: the form that is unique across machines. */
+const longLabel = (label: string, machine: string): string => label.replace('@', `@${machine}-`);
+
+const SESSION_LABEL_FORM = /^[a-z][a-z0-9-]{0,31}@[a-z0-9][a-z0-9-]{0,95}-[1-9][0-9]{0,3}$/;
 
 export interface QuorumOptions {
   db: Db;
@@ -124,6 +152,10 @@ export class Quorum {
   readonly #logs = new Map<string, MessageLog>();
   readonly #presence = new PresenceBook(HEARTBEAT_INTERVAL_MS);
   readonly #wake: WakeGovernor;
+  /** Messages that already woke each agent: one wake per message, however many adapters ask. */
+  readonly #woken = new Map<string, Set<string>>();
+  /** When each session last made a request (ms): a window is live while it keeps talking. */
+  readonly #sessionSeen = new Map<string, number>();
   readonly #messageLimit: RateLimiter;
   readonly #heartbeatLimit: RateLimiter;
   readonly notifier = new Notifier();
@@ -151,8 +183,17 @@ export class Quorum {
   #observe(event: EventRecord, replay: boolean): void {
     if (event.kind === 'message.accepted') {
       this.#wake.observe((event.payload as { envelope: SubmittedEnvelope }).envelope);
-    } else if (replay && event.kind === 'wake.granted') {
-      this.#wake.recordWake((event.payload as { agent: string }).agent, Date.parse(event.ts));
+    } else if (event.kind === 'wake.granted') {
+      const { agent, message, session } = event.payload as {
+        agent: string;
+        message: string;
+        session?: string;
+      };
+      const key = session ? `${agent}#${session}` : agent;
+      const woken = this.#woken.get(key) ?? new Set<string>();
+      woken.add(message);
+      this.#woken.set(key, woken);
+      if (replay) this.#wake.recordWake(agent, Date.parse(event.ts));
     }
   }
 
@@ -299,8 +340,13 @@ export class Quorum {
       : undefined;
   }
 
-  /** The caller behind an access token, or 401 (INV-23: also on loopback). */
-  authenticate(token: string | undefined): Caller {
+  /**
+   * The caller behind an access token, or 401 (INV-23: also on loopback). With `sessionId` (the
+   * `Quorum-Session` header) and when it is one of this agent's open, labelled sessions, the
+   * caller carries that window; anything else is ignored rather than refused, so a window whose
+   * session just ended keeps working as the plain agent.
+   */
+  authenticate(token: string | undefined, sessionId?: string): Caller {
     if (!token || tokenKind(token) !== 'access') throw unauthorized();
     const row = this.#registry.token(hashToken(token));
     if (
@@ -312,7 +358,26 @@ export class Quorum {
     }
     const caller = this.#principal(row.principal);
     if (!caller) throw unauthorized();
-    return caller;
+    if (caller.kind !== 'agent' || !sessionId) return caller;
+    const session = this.#registry.session(sessionId);
+    if (
+      session?.agent !== caller.id ||
+      session.ended_at !== null ||
+      !session.label ||
+      !session.machine
+    ) {
+      return caller;
+    }
+    this.#sessionSeen.set(session.id, this.#clock().getTime()); // the window is alive
+    return {
+      ...caller,
+      session: {
+        id: session.id,
+        label: session.label,
+        machine: session.machine,
+        ...(session.display_root ? { path: session.display_root } : {}),
+      },
+    };
   }
 
   /** Rotate a refresh token. Presenting a rotated one again revokes the whole family (INV-11). */
@@ -748,16 +813,73 @@ export class Quorum {
     return beating || this.notifier.isStreaming(agentId);
   }
 
-  /** Open sessions whose agent still shows signs of life. */
+  /**
+   * Is this open session still a live window? Yes when it started recently or made a request
+   * within the presence timeout. A session that never spoke with its own id (older adapters, or
+   * before a server restart) falls back to its agent's presence.
+   */
+  #sessionLive(session: SessionRow, nowMs: number): boolean {
+    if (session.ended_at !== null) return false;
+    const agent = this.#registry.agent(session.agent);
+    if (agent?.status !== 'active') return false;
+    if (nowMs - Date.parse(session.started_at) <= PRESENCE_TTL_MS) return true;
+    const seen = this.#sessionSeen.get(session.id);
+    if (seen !== undefined) return nowMs - seen <= PRESENCE_TTL_MS;
+    return this.#online(agent.id, agent.address, nowMs);
+  }
+
+  /** Open sessions that are live windows. */
   #liveSessions(nowMs: number): { agent: string; worktreeKey: string }[] {
     return this.#registry.openSessions().flatMap((s) => {
       const agent = this.#registry.agent(s.agent);
-      if (agent?.status !== 'active') return [];
-      const fresh = nowMs - Date.parse(s.started_at) <= PRESENCE_TTL_MS;
-      return fresh || this.#online(agent.id, agent.address, nowMs)
+      return agent && this.#sessionLive(s, nowMs)
         ? [{ agent: agent.address, worktreeKey: s.worktree_key }]
         : [];
     });
+  }
+
+  /**
+   * Resolve session labels in `to` (MESSAGE_SPEC §1.1): the short form names a live session on the
+   * sender's machine, the long form (`claude@<machine>-api-1`) one anywhere. Returns the agents and
+   * sessions reached; an unknown or ended label fails loudly, like any unknown recipient.
+   */
+  #resolveSessionLabels(
+    caller: Caller,
+    to: unknown,
+  ): { delivered_to: string[]; to_sessions: string[] } | undefined {
+    if (!Array.isArray(to)) return undefined;
+    const labels = (to as unknown[])
+      .map((value, index) => ({ value, index }))
+      .filter((x): x is { value: string; index: number } => typeof x.value === 'string')
+      .filter((x) => SESSION_LABEL_FORM.test(x.value));
+    if (labels.length === 0) return undefined;
+    const nowMs = this.#clock().getTime();
+    const myMachine = caller.address.split('@')[1] ?? '';
+    const live = this.#registry
+      .openSessions()
+      .filter((s) => s.label && s.machine && this.#sessionLive(s, nowMs));
+    const deliveredTo = new Set<string>();
+    const toSessions = new Set<string>();
+    for (const { value, index } of labels) {
+      const session = live.find(
+        (s) =>
+          (s.label === value && s.machine === myMachine) ||
+          longLabel(s.label ?? '', s.machine ?? '') === value,
+      );
+      const agent = session && this.#registry.agent(session.agent);
+      if (!session || !agent) {
+        throw new DomainError(
+          'invalid',
+          'message.unknown_recipient',
+          `No open session is called ${value}.`,
+          'The window may have closed: send to its agent address instead (GET /v1/workspaces/{workspace}/agents).',
+          `/to/${String(index)}`,
+        );
+      }
+      deliveredTo.add(agent.address);
+      toSessions.add(session.id);
+    }
+    return { delivered_to: [...deliveredTo], to_sessions: [...toSessions] };
   }
 
   createSession(caller: Caller, input: unknown): SessionCreated {
@@ -779,7 +901,29 @@ export class Quorum {
     );
     const sessionId = this.#ids.id('session');
     const now = this.#now();
+    // The label: tool@folder-n, numbered per tool, machine and folder (see below).
+    const agentRow = this.#registry.agent(caller.id);
+    const tool = toolName(agentRow?.vendor ?? 'generic');
+    const machine = caller.address.split('@')[1] ?? 'machine';
+    const folder = labelSlug(folderName(body.root) || agentRow?.folder || 'folder');
+    const group = `${tool}|${machine}|${folder}`;
+    const open = this.#registry.openSessionsInGroup(group);
+    const stale = open.filter((s) => !this.#sessionLive(s, nowMs));
+    // Each conversation keeps one number: a resumed one (same vendor session) gets its number
+    // back unless a live window holds it; a new one gets the next number. Never handed out twice.
+    const numberOf = (s: SessionRow) => Number(/-(\d+)$/.exec(s.label ?? '')?.[1] ?? 0);
+    const everyone = this.#registry.sessionsInGroup(group);
+    const held = new Set(open.filter((s) => this.#sessionLive(s, nowMs)).map((s) => numberOf(s)));
+    const resumed = everyone
+      .filter((s) => s.vendor_session_id === body.vendor_session_id)
+      .map((s) => numberOf(s))
+      .find((n) => n > 0 && !held.has(n));
+    const number = resumed ?? Math.max(0, ...everyone.map((s) => numberOf(s))) + 1;
+    const label = `${tool}@${folder}-${String(number)}`;
+    const displayRoot = body.display_root ?? homeShortened(body.root, homedir());
     return this.#commit(() => {
+      // Windows that went away without saying so give their numbers back.
+      for (const old of stale) this.#registry.endSession(old.id, now);
       const repo = body.git
         ? this.#registry.pathId('repository', pathKey(body.git.common_dir, platform), () =>
             this.#ids.id('repository'),
@@ -797,16 +941,32 @@ export class Quorum {
         worktree: worktree ?? null,
         started_at: now,
         ended_at: null,
+        label,
+        machine,
+        label_group: group,
+        display_root: displayRoot,
       });
-      const events: [string, NewEvent][] = this.#workspaceIdsOf(caller.id).map((workspace) => [
-        workspace,
-        this.#event(caller.address, 'session.started', {
-          session: sessionId,
-          ...(repo ? { repo } : {}),
-          ...(worktree ? { worktree } : {}),
-          shared_worktree_with: shared,
-        }),
-      ]);
+      const events: [string, NewEvent][] = this.#workspaceIdsOf(caller.id).flatMap(
+        (workspace): [string, NewEvent][] => [
+          ...stale.map((old): [string, NewEvent] => [
+            workspace,
+            this.#event('system:quorum', 'session.ended', { session: old.id, reason: 'stale' }),
+          ]),
+          [
+            workspace,
+            this.#event(caller.address, 'session.started', {
+              session: sessionId,
+              label,
+              ...(repo ? { repo } : {}),
+              ...(worktree ? { worktree } : {}),
+              shared_worktree_with: shared,
+            }),
+          ],
+          // A new window starts reading where the agent's windows got to: it gets only mail none
+          // of them read, never the history again (MESSAGE_SPEC §1.1).
+          ...this.#startingPoint(workspace, caller.address, sessionId),
+        ],
+      );
       if (shared.length > 0) {
         events.push(...this.#sharedWorktreeNotices([caller.address, ...shared], worktree, now));
       }
@@ -817,10 +977,21 @@ export class Quorum {
           ...(repo ? { repo } : {}),
           ...(worktree ? { worktree } : {}),
           shared_worktree_with: shared,
+          label,
+          machine,
         },
         events,
       };
     });
+  }
+
+  /** The read position a new window starts from, as an ack of that window (none if at 0). */
+  #startingPoint(workspace: string, address: string, session: string): [string, NewEvent][] {
+    const from = this.#logs.get(workspace)?.furthestAck(address) ?? 0;
+    if (from === 0) return [];
+    return [
+      [workspace, ackEvent({ kind: 'agent', address }, from, this.#now(), this.#ids, session)],
+    ];
   }
 
   /**
@@ -866,6 +1037,7 @@ export class Quorum {
       );
     }
     const now = this.#now();
+    this.#sessionSeen.delete(sessionId);
     this.#commit(() => {
       this.#registry.endSession(sessionId, now);
       return {
@@ -904,12 +1076,21 @@ export class Quorum {
       heartbeat ? 'heartbeats' : 'messages',
     );
     const principal: Principal = { kind: caller.kind, address: caller.address };
+    // Server fields (never from the client, INV-7): the sending window, and who a session label reached.
+    const targets = heartbeat
+      ? undefined
+      : this.#resolveSessionLabels(caller, (input as { to?: unknown } | null)?.to);
+    const serverFields = {
+      ...(caller.session && !heartbeat ? { from_session: caller.session } : {}),
+      ...targets,
+    };
     const outcome = acceptMessage(log, {
       workspace,
       principal,
       input,
       now: this.#now(),
       ids: this.#ids,
+      ...(Object.keys(serverFields).length > 0 ? { serverFields } : {}),
     });
 
     if (outcome.outcome === 'duplicate') {
@@ -937,8 +1118,12 @@ export class Quorum {
 
     // Every recipient must belong to the workspace: a typo fails loudly instead of vanishing.
     const members = this.#registry.memberAddresses(workspace);
+    const reached = targets?.delivered_to ?? [];
     outcome.envelope.to.forEach((address, i) => {
-      if (address !== '*' && !members.has(address)) {
+      // A session label stands for its agent, which must belong to this workspace too.
+      const label = SESSION_LABEL_FORM.test(address);
+      const ok = label ? reached.every((agent) => members.has(agent)) : members.has(address);
+      if (address !== '*' && !ok) {
         throw new DomainError(
           'invalid',
           'message.unknown_recipient',
@@ -968,9 +1153,11 @@ export class Quorum {
 
   inbox(caller: Caller, workspace: string, options: { after?: number; limit?: number }): InboxPage {
     const log = this.#workspaceFor(caller, workspace);
+    const session = caller.session?.id;
     return log.inbox(caller.address, {
-      after: options.after ?? log.ackedUpTo(caller.address),
+      after: options.after ?? log.ackedUpTo(caller.address, session),
       limit: Math.min(options.limit ?? 100, MAX_PAGE),
+      ...(session ? { session } : {}),
     });
   }
 
@@ -984,18 +1171,21 @@ export class Quorum {
     return log.thread(thread, caller.address, {
       after: options.after ?? 0,
       limit: Math.min(options.limit ?? 100, MAX_PAGE),
+      ...(caller.session ? { session: caller.session.id } : {}),
     });
   }
 
   ack(caller: Caller, workspace: string, input: unknown): void {
     const log = this.#workspaceFor(caller, workspace);
     const { up_to } = this.#check('ackRequest', input);
-    if (up_to <= log.ackedUpTo(caller.address)) return; // nothing new: no event noise
+    const session = caller.session?.id;
+    if (up_to <= log.ackedUpTo(caller.address, session)) return; // nothing new: no event noise
     const event = ackEvent(
       { kind: caller.kind, address: caller.address },
       up_to,
       this.#now(),
       this.#ids,
+      session,
     );
     this.#commit(() => ({ result: undefined, events: [[workspace, event]] }));
   }
@@ -1013,7 +1203,11 @@ export class Quorum {
     const log = this.#workspaceFor(caller, workspace);
     if (lastEventId !== undefined) {
       for (let after = lastEventId; ;) {
-        const page = log.inbox(caller.address, { after, limit: MAX_PAGE });
+        const page = log.inbox(caller.address, {
+          after,
+          limit: MAX_PAGE,
+          ...(caller.session ? { session: caller.session.id } : {}),
+        });
         for (const message of page.messages) sink.send(message);
         if (!page.has_more) break;
         after = page.next_after;
@@ -1022,6 +1216,7 @@ export class Quorum {
     return this.notifier.add({
       principal: caller.id,
       address: caller.address,
+      ...(caller.session ? { session: caller.session.id } : {}),
       workspace,
       send: (message) => {
         sink.send(message);
@@ -1055,14 +1250,22 @@ export class Quorum {
         ? {}
         : { types: JSON.parse(attachment.wake_types) as MessageType[] }),
     };
+    const session = caller.session?.id;
     const pending = log.inbox(caller.address, {
-      after: after ?? log.ackedUpTo(caller.address),
+      after: after ?? log.ackedUpTo(caller.address, session),
       limit: MAX_PAGE,
+      ...(session ? { session } : {}),
     }).messages;
     if (pending.length === 0) return { wake: false, reason: 'no_mail' };
     const nowMs = this.#clock().getTime();
     const denials: CoreWakeDecision[] = [];
+    // One wake per message per window (or per agent, for callers without a session).
+    const wakeKey = session ? `${caller.address}#${session}` : caller.address;
+    const woken = this.#woken.get(wakeKey);
     for (const message of pending) {
+      // Several adapters may ask about the same mail (two Codex windows; Claude's Stop hook and its
+      // idle watcher): the first grant wins and the message never wakes the agent twice.
+      if (woken?.has(message.id)) continue;
       const decision = this.#wake.decide(caller.address, message, settings, nowMs);
       if (!decision.wake) {
         denials.push(decision);
@@ -1076,6 +1279,7 @@ export class Quorum {
             workspace,
             this.#event('system:quorum', 'wake.granted', {
               agent: caller.address,
+              ...(session ? { session } : {}),
               message: message.id,
               thread,
             }),
@@ -1084,6 +1288,8 @@ export class Quorum {
       }));
       return { wake: true, message: message.id, seq: message.seq };
     }
+    // Everything pending already woke the agent once: nothing new to wake for.
+    if (denials.length === 0) return { wake: false, reason: 'no_mail' };
     // The most important reason first: limits before filters.
     const order = [
       'budget_exhausted',

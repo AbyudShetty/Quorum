@@ -114,6 +114,18 @@ const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (kind, key)
   ) STRICT, WITHOUT ROWID;
   `,
+  // 3: numbered sessions (MESSAGE_SPEC §1.1): each window of an agent gets a label such as
+  // claude@api-1, numbered per tool, machine and folder.
+  `
+  ALTER TABLE sessions ADD COLUMN label TEXT;
+  ALTER TABLE sessions ADD COLUMN machine TEXT;
+  ALTER TABLE sessions ADD COLUMN label_group TEXT;
+  CREATE INDEX sessions_label ON sessions (ended_at, label_group);
+  `,
+  // 4: the window's folder as shown in messages (home folder as ~, so usernames don't travel).
+  `
+  ALTER TABLE sessions ADD COLUMN display_root TEXT;
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

@@ -1,7 +1,7 @@
 // The manifest the server side writes (who the agents are and how to reach the server), and an
 // in-process runner that drives every agent from one process: the same agent code the containers
 // run, without Docker. Containers each run `runAgent` for one manifest entry (cli.ts).
-import { type AgentConfig, type AgentResult, runAgent } from './agent.js';
+import { type AgentConfig, type AgentResult, type FleetProgress, runAgent } from './agent.js';
 
 export interface FleetManifest {
   baseUrl: string;
@@ -79,5 +79,15 @@ export const agentConfig = (
 export const runLocalFleet = (
   manifest: FleetManifest,
   options: RunOptions,
-): Promise<AgentResult[]> =>
-  Promise.all(manifest.agents.map((_, i) => runAgent(agentConfig(manifest, i, options))));
+): Promise<AgentResult[]> => {
+  // All agents share one tally, so the run ends as soon as everything queued has arrived.
+  const progress: FleetProgress = {
+    agents: manifest.agents.length,
+    sendersDone: 0,
+    queued: 0,
+    received: 0,
+  };
+  return Promise.all(
+    manifest.agents.map((_, i) => runAgent({ ...agentConfig(manifest, i, options), progress })),
+  );
+};

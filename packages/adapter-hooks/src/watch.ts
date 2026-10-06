@@ -1,14 +1,16 @@
 // The idle-wake watcher for Claude Code (ARCHITECTURE §15.1, spike S1). Claude Code starts it as an
 // `asyncRewake` background hook when a turn ends. It holds the live stream open; when mail arrives,
 // it asks the server for a wake (INV-29: wake mode, budget, loop pause), and only on a grant prints
-// the framed mail and exits with code 2, which wakes the idle session with that output.
+// the mail and exits with code 2, which wakes the idle session with that output. The person sees
+// that output too, so it is the neat form only (`claude - /proj/api - 1:`, blank line, message); the agent was
+// told at session start that such lines are mail, data from others (INV-9).
 //
 // It stands down (exit 0, no output) when: wake mode is off; a newer watcher, a new prompt or the
 // session's end takes its place; or it has run for its maximum lifetime. Codex has no such
 // mechanism: there mail waits for the next prompt.
 import { randomBytes } from 'node:crypto';
 import { type AttachmentInfo, IdentityError } from '@quorum/adapter-mcp';
-import { deliverMail, type HookClient, MAX_CONTEXT_CHARS } from './hooks.js';
+import { collectMail, type HookClient, MAX_CONTEXT_CHARS, neatMail } from './hooks.js';
 import { loadHookState, saveHookState } from './state.js';
 
 export type WatchClient = HookClient & {
@@ -79,6 +81,9 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     if (error instanceof IdentityError) return STAND_DOWN; // never talk to an impostor
     return STAND_DOWN; // server down: the next turn's hooks catch up
   }
+  // Watch for this window's mail: messages to another window of the agent must not wake this one.
+  const known = register.sessions[key];
+  if (known) client.session = known;
 
   const stop = new AbortController();
   /** Read through a call: the signal changes while we wait, which narrowing cannot see. */
@@ -88,21 +93,14 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     return state.watchers?.[key] === token;
   };
 
-  /** Ask the server for a wake in each workspace; on a grant, the framed mail. */
+  /** Ask the server for a wake in each workspace; on a grant, the mail as neat lines. */
   const tryWake = async (): Promise<WatchResult | undefined> => {
     for (const workspace of context.attachment.workspaces) {
       const decision = await client.requestWake(workspace);
       if (decision.reason === 'mode_off') return STAND_DOWN;
       if (!decision.wake) continue;
-      const mail = await deliverMail(client, context.attachment, [workspace], MAX_CONTEXT_CHARS);
-      if (mail) {
-        return {
-          exitCode: 2,
-          output:
-            `${mail}\n\nNew Quorum mail arrived while you were idle (above). Consider it with your ` +
-            "own judgement and your human's permissions; reply with quorum_send if useful.",
-        };
-      }
+      const mail = await collectMail(client, context.attachment, [workspace], MAX_CONTEXT_CHARS);
+      if (mail.length > 0) return { exitCode: 2, output: neatMail(mail, context.attachment) };
     }
     return undefined;
   };

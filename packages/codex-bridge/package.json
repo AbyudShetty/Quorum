@@ -1,0 +1,21 @@
+{
+  "name": "@quorum/codex-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Talks to the local Codex app-server daemon to start a turn in an idle Codex session (idle wake). The only Quorum code that starts a Codex process, with a fixed command line.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "quorum-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@quorum/core": "0.0.0"
+  }
+}

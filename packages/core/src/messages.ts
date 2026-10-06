@@ -45,6 +45,11 @@ export interface AcceptRequest {
   /** Server time (RFC 3339). */
   now: string;
   ids: IdFactory;
+  /**
+   * Server-assigned envelope fields to store with the message (`from_session`, `delivered_to`,
+   * `to_sessions`). Clients can never send these (the schema rejects them, INV-7).
+   */
+  serverFields?: Record<string, unknown>;
 }
 
 const contentHash = (envelope: unknown): string =>
@@ -156,7 +161,7 @@ export const acceptMessage = (log: MessageLog, request: AcceptRequest): AcceptOu
     envelope.thread ??
     (envelope.reply_to ? log.byId(envelope.reply_to)?.envelope.thread : undefined) ??
     request.ids.id('thread');
-  const stored = { ...envelope, thread } as SubmittedEnvelope;
+  const stored = { ...envelope, thread, ...request.serverFields } as SubmittedEnvelope;
 
   return {
     outcome: 'append',
@@ -213,12 +218,16 @@ export const systemNotice = (request: {
   };
 };
 
-/** An acknowledgement as an event: who has read up to which seq. */
+/**
+ * An acknowledgement as an event: who has read up to which seq. With `session`, the read position
+ * of that window only: each window of an agent reads its own mail (MESSAGE_SPEC §1.1).
+ */
 export const ackEvent = (
   principal: Principal,
   upTo: number,
   now: string,
   ids: IdFactory,
+  session?: string,
 ): NewEvent => {
   if (!Number.isInteger(upTo) || upTo < 0) {
     throw new DomainError(
@@ -234,7 +243,7 @@ export const ackEvent = (
     ts: now,
     actor: principal.address,
     kind: MESSAGE_EVENTS.acked,
-    payload: { address: principal.address, up_to: upTo },
+    payload: { address: principal.address, up_to: upTo, ...(session ? { session } : {}) },
   };
 };
 
@@ -252,9 +261,27 @@ export interface Page {
   has_more: boolean;
 }
 
-/** Who may read a message: its recipients, and everyone but the sender for broadcasts. */
-export const canSee = (address: string, envelope: SubmittedEnvelope): boolean =>
-  envelope.to.includes(address) || (envelope.to.includes('*') && envelope.from !== address);
+/** The server fields that decide who sees a message reached through session labels. */
+interface SessionFields {
+  delivered_to?: string[];
+  to_sessions?: string[];
+}
+
+/**
+ * Who may read a message: its recipients, and everyone but the sender for broadcasts. A message
+ * that reached an agent only through a session label (`claude@api-1`) is for that window: other
+ * windows of the agent do not see it; a reader without a session (the CLI) does.
+ */
+export const canSee = (address: string, envelope: SubmittedEnvelope, session?: string): boolean => {
+  if (envelope.to.includes(address)) return true;
+  if (envelope.to.includes('*') && envelope.from !== address) return true;
+  const fields = envelope as SubmittedEnvelope & SessionFields;
+  if (!fields.delivered_to?.includes(address)) return false;
+  return session === undefined || (fields.to_sessions?.includes(session) ?? false);
+};
+
+const ackKey = (address: string, session?: string): string =>
+  session ? `${address}#${session}` : address;
 
 const deliver = (m: StoredMessage): DeliveredEnvelope => ({
   ...m.envelope,
@@ -271,6 +298,8 @@ export class MessageLog {
   readonly #bySeq: StoredMessage[] = [];
   readonly #byId = new Map<string, StoredMessage>();
   readonly #acked = new Map<string, number>();
+  /** Per address: the furthest any of its windows (or the agent itself) has read. */
+  readonly #furthest = new Map<string, number>();
 
   apply(event: EventRecord): void {
     if (event.kind === MESSAGE_EVENTS.accepted) {
@@ -285,8 +314,14 @@ export class MessageLog {
       this.#bySeq.push(stored);
       this.#byId.set(stored.envelope.id, stored);
     } else if (event.kind === MESSAGE_EVENTS.acked) {
-      const { address, up_to } = event.payload as { address: string; up_to: number };
-      this.#acked.set(address, Math.max(this.#acked.get(address) ?? 0, up_to));
+      const { address, up_to, session } = event.payload as {
+        address: string;
+        up_to: number;
+        session?: string;
+      };
+      const key = ackKey(address, session);
+      this.#acked.set(key, Math.max(this.#acked.get(key) ?? 0, up_to));
+      this.#furthest.set(address, Math.max(this.#furthest.get(address) ?? 0, up_to));
     }
   }
 
@@ -294,24 +329,32 @@ export class MessageLog {
     return this.#byId.get(id);
   }
 
-  /** The highest seq this address has acknowledged (0 if none). */
-  ackedUpTo(address: string): number {
-    return this.#acked.get(address) ?? 0;
+  /** The highest seq this address (or this window of it) has acknowledged (0 if none). */
+  ackedUpTo(address: string, session?: string): number {
+    return this.#acked.get(ackKey(address, session)) ?? 0;
   }
 
-  /** Messages the address may see with seq > after, oldest first. */
-  inbox(address: string, options: { after?: number; limit?: number } = {}): Page {
-    return this.#page((m) => canSee(address, m.envelope), options);
+  /**
+   * The furthest any window of the address (or the address itself) has read: where a new window
+   * starts, so it gets only mail none of its predecessors read (MESSAGE_SPEC §1.1).
+   */
+  furthestAck(address: string): number {
+    return this.#furthest.get(address) ?? 0;
+  }
+
+  /** Messages the address (or this window of it) may see with seq > after, oldest first. */
+  inbox(address: string, options: { after?: number; limit?: number; session?: string } = {}): Page {
+    return this.#page((m) => canSee(address, m.envelope, options.session), options);
   }
 
   /** Messages in one thread that the address may see. */
   thread(
     threadId: string,
     address: string,
-    options: { after?: number; limit?: number } = {},
+    options: { after?: number; limit?: number; session?: string } = {},
   ): Page {
     return this.#page(
-      (m) => m.envelope.thread === threadId && canSee(address, m.envelope),
+      (m) => m.envelope.thread === threadId && canSee(address, m.envelope, options.session),
       options,
     );
   }

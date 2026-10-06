@@ -19,3 +19,4 @@ export {
   lockPath,
   type StartLock,
 } from './start-lock.js';
+export { FileLockTimeout, type FileLockOptions, withFileLock } from './file-lock.js';

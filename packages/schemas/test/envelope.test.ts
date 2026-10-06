@@ -248,3 +248,49 @@ describe('RFC 3339 timestamps', () => {
     expect(isRfc3339(value)).toBe(false);
   });
 });
+
+describe('session labels (MESSAGE_SPEC §1.1)', () => {
+  it.each(['claude@api-1', 'codex@web-12', 'claude@abhijna-laptop-api-2'])(
+    'accepts %s as a recipient',
+    (label) => {
+      expect(issues(validateSubmittedEnvelope({ ...envelope('note'), to: [label] }))).toEqual([]);
+    },
+  );
+
+  it.each(['claude@api', 'claude@api-0', 'Claude@api-1', 'claude@-1', 'claude@api-1x'])(
+    'rejects the malformed label %s',
+    (label) => {
+      expect(issues(validateSubmittedEnvelope({ ...envelope('note'), to: [label] }))).toEqual([
+        '/to/0 pattern',
+      ]);
+    },
+  );
+
+  it('never lets a client claim a sending session or session targets (INV-7)', () => {
+    const forged = {
+      ...envelope('note'),
+      from_session: { id: `sess_${U1}`, label: 'claude@api-1', machine: 'laptop-a' },
+      delivered_to: ['agent:codex-web@laptop-a'],
+      to_sessions: [`sess_${U1}`],
+    };
+    expect(issues(validateSubmittedEnvelope(forged))).toEqual([
+      '/from_session false schema',
+      '/delivered_to false schema',
+      '/to_sessions false schema',
+    ]);
+  });
+
+  it('delivers the sending session and the session targets', () => {
+    const delivered = {
+      ...envelope('note'),
+      to: ['codex@web-1'],
+      seq: 3,
+      received_at: '2026-10-02T10:00:01Z',
+      event: `ev_${U1}`,
+      from_session: { id: `sess_${U1}`, label: 'claude@api-1', machine: 'laptop-a' },
+      delivered_to: ['agent:codex-web@laptop-a'],
+      to_sessions: [`sess_${U1}`],
+    };
+    expect(issues(validateDeliveredEnvelope(delivered))).toEqual([]);
+  });
+});

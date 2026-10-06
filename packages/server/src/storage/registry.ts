@@ -65,6 +65,13 @@ export interface SessionRow {
   worktree: string | null;
   started_at: string;
   ended_at: string | null;
+  /** e.g. claude@api-1 (null for sessions from before numbering). */
+  label: string | null;
+  machine: string | null;
+  /** tool|machine|folder: the group a window number belongs to. */
+  label_group: string | null;
+  /** The folder as shown in messages, e.g. ~\proj\api (home folder as ~). */
+  display_root: string | null;
 }
 
 export class Registry {
@@ -294,14 +301,27 @@ export class Registry {
 
   insertSession(row: SessionRow): void {
     this.#run(
-      `INSERT INTO sessions (id, agent, vendor_session_id, worktree_key, repo, worktree, started_at, ended_at)
-       VALUES (@id, @agent, @vendor_session_id, @worktree_key, @repo, @worktree, @started_at, @ended_at)`,
+      `INSERT INTO sessions (id, agent, vendor_session_id, worktree_key, repo, worktree, started_at, ended_at, label, machine, label_group, display_root)
+       VALUES (@id, @agent, @vendor_session_id, @worktree_key, @repo, @worktree, @started_at, @ended_at, @label, @machine, @label_group, @display_root)`,
       { ...row },
     );
   }
 
   endSession(id: string, at: string): void {
     this.#run('UPDATE sessions SET ended_at = ? WHERE id = ? AND ended_at IS NULL', [at, id]);
+  }
+
+  /** Every session of one label group, open or ended (numbers are never handed out twice). */
+  sessionsInGroup(group: string): SessionRow[] {
+    return this.#all('SELECT * FROM sessions WHERE label_group = ? ORDER BY id', group);
+  }
+
+  /** Open sessions of one label group (tool, machine, folder). */
+  openSessionsInGroup(group: string): SessionRow[] {
+    return this.#all(
+      'SELECT * FROM sessions WHERE ended_at IS NULL AND label_group = ? ORDER BY id',
+      group,
+    );
   }
 
   /** End every open session of an agent (detach, revoke). Returns the ended ids. */

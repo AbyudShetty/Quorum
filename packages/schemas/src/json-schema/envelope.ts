@@ -9,7 +9,15 @@ export const SUBMITTED_ENVELOPE_ID = 'urn:quorum:schema:envelope:submitted:1';
 export const DELIVERED_ENVELOPE_ID = 'urn:quorum:schema:envelope:delivered:1';
 
 /** Fields only the server may set (MESSAGE_SPEC §2). */
-export const SERVER_FIELDS = ['seq', 'received_at', 'event', 'flags'] as const;
+export const SERVER_FIELDS = [
+  'seq',
+  'received_at',
+  'event',
+  'flags',
+  'from_session',
+  'delivered_to',
+  'to_sessions',
+] as const;
 
 const sharedProperties = {
   spec: { const: 'quorum/1' },
@@ -97,6 +105,22 @@ export const deliveredEnvelopeSchema = {
       uniqueItems: true,
       items: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,63}$' },
     },
+    /** The sending window, when the sender is a session (stamped by the server, never claimed). */
+    from_session: {
+      type: 'object',
+      required: ['id', 'label', 'machine'],
+      properties: {
+        id: common('sessionId'),
+        label: common('sessionLabel'),
+        machine: common('name'),
+        /** The window's folder, home folder as ~ (MESSAGE_SPEC §1.1). */
+        path: { type: 'string', minLength: 1, maxLength: 4096 },
+      },
+    },
+    /** Agents reached through a session label in `to` (the server resolved them). */
+    delivered_to: { type: 'array', maxItems: 32, items: common('agentAddress') },
+    /** The sessions a session label in `to` named: only those windows see the message. */
+    to_sessions: { type: 'array', maxItems: 32, items: common('sessionId') },
   },
   allOf: [...bodyByType],
 } as const;

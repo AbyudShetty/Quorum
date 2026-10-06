@@ -111,6 +111,20 @@ describe('QuorumClient tokens (INV-11)', () => {
     expect(results).toHaveLength(5);
   });
 
+  it('lets several processes share one credential without a family revocation (INV-11)', async () => {
+    // The MCP server, a hook and the idle watcher all refresh the same attachment's token. Each
+    // is its own client here, sharing the keychain (the store) and the data directory's lock.
+    world = await startWorld();
+    await expire(world);
+    const w = world;
+    const clients = await Promise.all(
+      Array.from({ length: 4 }, () => connectAs(w, { dataDir: w.dataDir })),
+    );
+    await Promise.all(clients.map((c) => c.inbox(w.workspace)));
+    // Nobody presented a rotated refresh token, so every client still works afterwards.
+    for (const client of clients) await client.inbox(w.workspace);
+  });
+
   it('turns server errors into ApiError with the fix', async () => {
     world = await startWorld();
     const client = await connectAs(world);

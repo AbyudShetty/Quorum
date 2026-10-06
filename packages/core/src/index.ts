@@ -50,8 +50,10 @@ export { type WakeDecision, WakeGovernor, type WakeLimits, type WakeSettings } f
 export {
   agentName,
   folderName,
+  labelSlug,
   type LiveSession,
   pathKey,
   sharedWorktreeWith,
+  toolName,
 } from './workspace-members.js';
 export { helloMessage, newHelloNonce, verifyHello } from './hello.js';

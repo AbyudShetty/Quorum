@@ -2,7 +2,13 @@
 export const SPEC_VERSION = 'quorum/1';
 
 export { ACTION_NAME, bodySchemaId, bodySchemas, MESSAGE_TYPES } from './json-schema/bodies.js';
-export { commonSchema, ID_PREFIXES, LIMITS, type IdKind } from './json-schema/common.js';
+export {
+  commonSchema,
+  ID_PREFIXES,
+  LIMITS,
+  SESSION_LABEL,
+  type IdKind,
+} from './json-schema/common.js';
 export {
   DELIVERED_ENVELOPE_ID,
   deliveredEnvelopeSchema,

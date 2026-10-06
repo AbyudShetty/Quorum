@@ -6,6 +6,12 @@ export const ULID = '[0-9A-HJKMNP-TV-Z]{26}';
 /** Agent/machine/human name segment: 1–32 of a-z, 0-9, "-", starting with a letter. */
 export const NAME = '[a-z][a-z0-9-]{0,31}';
 
+/**
+ * A session label (MESSAGE_SPEC §1.1): `<tool>@<folder>-<n>` on the sender's machine, or
+ * `<tool>@<machine>-<folder>-<n>` from anywhere, e.g. `claude@api-1`, `codex@abhijna-laptop-web-2`.
+ */
+export const SESSION_LABEL = '[a-z][a-z0-9-]{0,31}@[a-z0-9][a-z0-9-]{0,95}-[1-9][0-9]{0,3}';
+
 /** Size limits (MESSAGE_SPEC §2.1). Bodies are measured as UTF-8 bytes of their JSON. */
 export const LIMITS = {
   bodyMaxBytes: 96 * 1024,
@@ -67,10 +73,12 @@ export const commonSchema = {
       type: 'string',
       pattern: `^(?:agent:${NAME}@${NAME}|human:${NAME})$`,
     },
-    /** Who may receive a message. */
+    /** One live session (one window) of an agent; the server resolves it when the message is sent. */
+    sessionLabel: { type: 'string', pattern: `^${SESSION_LABEL}$` },
+    /** Who may receive a message: an agent, a human, a session label, or everyone (`*`). */
     recipientAddress: {
       type: 'string',
-      pattern: `^(?:agent:${NAME}@${NAME}|human:${NAME}|\\*)$`,
+      pattern: `^(?:agent:${NAME}@${NAME}|human:${NAME}|${SESSION_LABEL}|\\*)$`,
     },
     /** kind:id[@vN]; kind and id prefix must agree; only artifacts carry versions. */
     ref: { type: 'string', pattern: REF_PATTERN },

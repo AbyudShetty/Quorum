@@ -1295,9 +1295,13 @@
             "type": "string",
             "pattern": "^(?:agent:[a-z][a-z0-9-]{0,31}@[a-z][a-z0-9-]{0,31}|human:[a-z][a-z0-9-]{0,31})$"
           },
+          "sessionLabel": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}@[a-z0-9][a-z0-9-]{0,95}-[1-9][0-9]{0,3}$"
+          },
           "recipientAddress": {
             "type": "string",
-            "pattern": "^(?:agent:[a-z][a-z0-9-]{0,31}@[a-z][a-z0-9-]{0,31}|human:[a-z][a-z0-9-]{0,31}|\\*)$"
+            "pattern": "^(?:agent:[a-z][a-z0-9-]{0,31}@[a-z][a-z0-9-]{0,31}|human:[a-z][a-z0-9-]{0,31}|[a-z][a-z0-9-]{0,31}@[a-z0-9][a-z0-9-]{0,95}-[1-9][0-9]{0,3}|\\*)$"
           },
           "ref": {
             "type": "string",
@@ -1412,7 +1416,10 @@
           "seq": false,
           "received_at": false,
           "event": false,
-          "flags": false
+          "flags": false,
+          "from_session": false,
+          "delivered_to": false,
+          "to_sessions": false
         },
         "allOf": [
           {
@@ -1724,6 +1731,44 @@
             "items": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            }
+          },
+          "from_session": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "machine"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "urn:quorum:schema:common:1#/$defs/sessionId"
+              },
+              "label": {
+                "$ref": "urn:quorum:schema:common:1#/$defs/sessionLabel"
+              },
+              "machine": {
+                "$ref": "urn:quorum:schema:common:1#/$defs/name"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            }
+          },
+          "delivered_to": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "$ref": "urn:quorum:schema:common:1#/$defs/agentAddress"
+            }
+          },
+          "to_sessions": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "$ref": "urn:quorum:schema:common:1#/$defs/sessionId"
             }
           }
         },
@@ -3376,6 +3421,12 @@
             "maxLength": 4096,
             "pattern": "^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)"
           },
+          "display_root": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^[^\\u0000-\\u001f]+$"
+          },
           "git": {
             "type": "object",
             "required": [
@@ -3427,6 +3478,12 @@
             "items": {
               "$ref": "urn:quorum:schema:common:1#/$defs/agentAddress"
             }
+          },
+          "label": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/sessionLabel"
+          },
+          "machine": {
+            "$ref": "urn:quorum:schema:common:1#/$defs/name"
           }
         }
       },

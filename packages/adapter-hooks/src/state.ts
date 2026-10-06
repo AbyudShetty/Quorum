@@ -16,6 +16,25 @@ export interface HookState {
    * new prompt or the session's end replaces or removes the token, and the old watcher exits.
    */
   watchers?: Record<string, string>;
+  /**
+   * Quorum session id → its window: the vendor session key, the label and the vendor process.
+   * `quorum mcp` runs in the same vendor process and adopts that session, so one window is one
+   * session for its hooks, its tools and its idle wake.
+   */
+  windows?: Record<string, HookWindow>;
+  /**
+   * Vendor session key → the framed copy of mail that just woke it (Codex): the woken turn shows
+   * the person only the neat lines, and the next prompt hook gives the agent this framed copy.
+   */
+  wakeContexts?: Record<string, { text: string; atMs: number }>;
+}
+
+export interface HookWindow {
+  key: string;
+  label: string;
+  vendorPid: number;
+  /** The `quorum mcp` process that adopted this window, if any. */
+  adoptedBy?: number;
 }
 
 const safe = (id: string): string => id.replaceAll(/[^A-Za-z0-9_-]/g, '_');
@@ -27,7 +46,13 @@ export const loadHookState = async (dataDir: string, attachment: string): Promis
   try {
     const parsed = JSON.parse(await readFile(statePath(dataDir, attachment), 'utf8')) as unknown;
     if (typeof parsed !== 'object' || parsed === null) return { sessions: {} };
-    const value = parsed as { sessions?: unknown; lastHeartbeatMs?: unknown; watchers?: unknown };
+    const value = parsed as {
+      sessions?: unknown;
+      lastHeartbeatMs?: unknown;
+      watchers?: unknown;
+      windows?: unknown;
+      wakeContexts?: unknown;
+    };
     const sessions: Record<string, string> = {};
     if (typeof value.sessions === 'object' && value.sessions !== null) {
       for (const [key, id] of Object.entries(value.sessions)) {
@@ -40,9 +65,38 @@ export const loadHookState = async (dataDir: string, attachment: string): Promis
         if (typeof token === 'string') watchers[key] = token;
       }
     }
+    const windows: Record<string, HookWindow> = {};
+    if (typeof value.windows === 'object' && value.windows !== null) {
+      for (const [id, raw] of Object.entries(value.windows as Record<string, unknown>)) {
+        const w = raw as Partial<HookWindow> | null;
+        if (
+          typeof w?.key === 'string' &&
+          typeof w.label === 'string' &&
+          typeof w.vendorPid === 'number'
+        ) {
+          windows[id] = {
+            key: w.key,
+            label: w.label,
+            vendorPid: w.vendorPid,
+            ...(typeof w.adoptedBy === 'number' ? { adoptedBy: w.adoptedBy } : {}),
+          };
+        }
+      }
+    }
+    const wakeContexts: Record<string, { text: string; atMs: number }> = {};
+    if (typeof value.wakeContexts === 'object' && value.wakeContexts !== null) {
+      for (const [key, raw] of Object.entries(value.wakeContexts as Record<string, unknown>)) {
+        const c = raw as { text?: unknown; atMs?: unknown } | null;
+        if (typeof c?.text === 'string' && typeof c.atMs === 'number') {
+          wakeContexts[key] = { text: c.text, atMs: c.atMs };
+        }
+      }
+    }
     return {
       sessions,
+      ...(Object.keys(wakeContexts).length > 0 ? { wakeContexts } : {}),
       ...(Object.keys(watchers).length > 0 ? { watchers } : {}),
+      ...(Object.keys(windows).length > 0 ? { windows } : {}),
       ...(typeof value.lastHeartbeatMs === 'number'
         ? { lastHeartbeatMs: value.lastHeartbeatMs }
         : {}),

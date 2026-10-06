@@ -38,11 +38,18 @@ import {
 import {
   HOOK_EVENTS,
   HOOK_VENDORS,
+  type CodexSessions,
   type HookEvent,
   type HookVendor,
   runHook,
+  adoptWindow,
+  forgetMcpWindow,
+  recordMcpWindow,
+  startCodexWaker,
+  trackWindow,
   watchForMail,
 } from '@quorum/adapter-hooks';
+import { openCodexDaemon } from '@quorum/codex-bridge';
 import { liveServer, ServerStartError } from './local-server.js';
 import {
   type ConfigChange,
@@ -69,6 +76,12 @@ export interface CliEnv {
   stdin?: () => Promise<string>;
   /** How vendors start `quorum` (default: by name if on the PATH, else Node + this CLI). */
   quorumCommand?: () => Promise<QuorumCommand>;
+  /** Connect to the local Codex daemon (default: through `codex app-server proxy`). Tests replace it. */
+  openCodex?: () => Promise<CodexSessions>;
+  /** The vendor process `quorum mcp` runs under (default: our parent). Tests replace it. */
+  vendorPid?: number;
+  /** How long `quorum mcp` waits for its window's session-start hook (default 4 s). */
+  adoptTimeoutMs?: number;
   /** Stop a verified local server process (default: SIGTERM). Tests replace it. */
   killServer?: (pid: number) => void;
 }
@@ -188,10 +201,15 @@ const connect = async (
   options: { autoStart?: boolean } = {},
 ): Promise<QuorumClient> => {
   if (options.autoStart ?? true) await env.startServer?.(dataDirOf(env));
+  const startServer = env.startServer;
   return QuorumClient.connect({
     dataDir: dataDirOf(env),
     credentialKey,
     store: env.store,
+    // A long-lived client (`quorum mcp`) finds a restarted server again by itself.
+    ...(startServer && (options.autoStart ?? true)
+      ? { ensureServer: () => startServer(dataDirOf(env)) }
+      : {}),
     ...(env.fetch ? { fetch: env.fetch } : {}),
   });
 };
@@ -688,21 +706,73 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
   const info = await attachmentOf(env, values.attachment);
   const dataDir = dataDirOf(env);
   const client = await connect(env, info.attachment);
-  // Tell the server which working tree this session is in, so it can warn when another agent is
-  // in the same one (INV-28). Best effort: an unreachable server must not stop the agent.
-  const session = await startSession({ client, root: info.root });
+  // One window, one session (MESSAGE_SPEC §1.1): adopt the session this window's hooks registered
+  // (same vendor process). Without one yet (Codex runs its session-start hook only with the first
+  // prompt; or hooks are off), register our own, which also tells the server our working tree
+  // (INV-28), and record it so the window's hook takes it over. Best effort either way.
+  const vendorPid = env.vendorPid ?? process.ppid;
+  const adopted = await adoptWindow(dataDir, info.attachment, {
+    vendorPid,
+    selfPid: process.pid,
+    ...(env.adoptTimeoutMs === undefined ? {} : { timeoutMs: env.adoptTimeoutMs }),
+  }).catch(() => undefined);
+  const session = adopted ? undefined : await startSession({ client, root: info.root });
+  const window =
+    adopted ??
+    (session?.id
+      ? await recordMcpWindow(dataDir, info.attachment, {
+          id: session.id,
+          label: session.label ?? '',
+          vendorPid,
+          selfPid: process.pid,
+        }).catch(() => undefined)
+      : undefined);
+  client.session = window?.id;
+  // Follow the window: `/clear` starts a new session in the same process; Codex's late hook re-keys it.
+  const tracker = window
+    ? trackWindow(dataDir, info.attachment, window, {
+        vendorPid,
+        selfPid: process.pid,
+        onChange: (next) => {
+          client.session = next.id;
+        },
+      })
+    : undefined;
   const server = createQuorumMcpServer({
     client,
     outbox: new Outbox(dataDir, info.attachment),
     attachment: info,
     ...(session ? { session } : {}),
+    label: () => tracker?.current().label ?? session?.label,
   });
   // Presence: a heartbeat every 30 s, and `offline` at once when the session ends (stdin closes
   // when Claude Code or Codex exits).
   const presence = startHeartbeat({ client, attachment: info });
+  // Codex: wake the idle session on mail the server allows (Codex has no hook for that; its
+  // shared daemon does). Off switch: QUORUM_CODEX_IDLE_WAKE=off.
+  const codexWaker =
+    info.vendor === 'codex' && process.env.QUORUM_CODEX_IDLE_WAKE !== 'off'
+      ? await startCodexWaker({
+          client,
+          attachment: info,
+          dataDir,
+          openCodex: () => (env.openCodex ?? openCodexDaemon)(),
+          // Codex's session id is its thread id: wake exactly this window.
+          windowKey: () => tracker?.current().key,
+        }).catch(() => undefined)
+      : undefined;
   let closing: Promise<void> | undefined;
   const goodbye = () =>
-    (closing ??= Promise.all([presence.stop(), session?.end()]).then(() => undefined));
+    (closing ??= Promise.all([
+      presence.stop(),
+      session?.end(),
+      codexWaker?.stop(),
+      window
+        ? forgetMcpWindow(dataDir, info.attachment, window.id).catch(() => undefined)
+        : undefined,
+    ]).then(() => {
+      tracker?.stop();
+    }));
   server.server.onclose = () => {
     void goodbye();
   };

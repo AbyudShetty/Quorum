@@ -18,7 +18,7 @@ import {
   validateApiPayload,
 } from '@quorum/schemas';
 import { newHelloNonce, verifyHello } from '@quorum/core';
-import { defaultDataDir, readDiscovery } from '@quorum/local';
+import { defaultDataDir, readDiscovery, withFileLock } from '@quorum/local';
 import type { CredentialStore, StoredCredentials } from './credentials.js';
 
 export class IdentityError extends Error {
@@ -80,6 +80,11 @@ export interface ConnectOptions {
    * must not hang the agent's tool call for ever. Default 15 s.
    */
   requestTimeoutMs?: number;
+  /**
+   * Local mode: start the server if it is not running. Used when a long-lived client (the MCP
+   * server, the Codex waker) finds its server gone and looks for it again.
+   */
+  ensureServer?: () => Promise<void>;
 }
 
 /** Refresh this long before the access token expires. */
@@ -110,7 +115,20 @@ export interface AgentEntry {
 }
 
 export class QuorumClient {
-  readonly #target: Target;
+  #target: Target;
+  /** Set when the target came from the discovery file: the client may look for it again. */
+  #discovery: { dataDir: string; ensureServer?: () => Promise<void> } | undefined;
+  /**
+   * The server at #target proved its identity and nothing has failed since. Any connection
+   * failure clears this, and the next request that carries a credential first redoes the identity
+   * handshake: a program that took over the port after a restart never sees a token (INV-24).
+   */
+  #verified = false;
+  #reverifying: Promise<void> | undefined;
+  /** Where the cross-process refresh lock lives (the private data directory), when known. */
+  #lockDir: string | undefined;
+  /** This window's session (`sess_…`): sent with every request so mail and wakes are per window. */
+  #session: string | undefined;
   readonly #key: string;
   readonly #store: CredentialStore;
   readonly #fetch: typeof fetch;
@@ -146,13 +164,30 @@ export class QuorumClient {
       options.now ?? Date.now,
       options.requestTimeoutMs ?? 15_000,
     );
+    client.#lockDir = options.dataDir ?? (options.target ? undefined : defaultDataDir());
+    if (!options.target) {
+      client.#discovery = {
+        dataDir: options.dataDir ?? defaultDataDir(),
+        ...(options.ensureServer ? { ensureServer: options.ensureServer } : {}),
+      };
+    }
     await client.#handshake();
+    client.#verified = true;
     client.#credentials = await options.store.load(options.credentialKey);
     return client;
   }
 
   get baseUrl(): string {
     return this.#target.baseUrl;
+  }
+
+  /** The window this client speaks for (MESSAGE_SPEC §1.1); the server verifies it belongs to us. */
+  get session(): string | undefined {
+    return this.#session;
+  }
+
+  set session(id: string | undefined) {
+    this.#session = id;
   }
 
   async #handshake(): Promise<void> {
@@ -180,6 +215,7 @@ export class QuorumClient {
   async #raw(method: string, path: string, body?: unknown, token?: string): Promise<Response> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (token) headers.authorization = `Bearer ${token}`;
+    if (token && this.#session) headers['quorum-session'] = this.#session;
     if (body !== undefined) headers['content-type'] = 'application/json';
     try {
       return await this.#fetch(`${this.#target.baseUrl}${path}`, {
@@ -189,11 +225,35 @@ export class QuorumClient {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch (error) {
+      this.#verified = false; // whatever answers next must prove itself again
       throw new UnreachableError(
         `Cannot reach the Quorum server at ${this.#target.baseUrl}.`,
         error,
       );
     }
+  }
+
+  /**
+   * Before sending a credential: if anything failed since the last identity check, find the
+   * server again (a restart moves it to a new port; the discovery file says where, and which key
+   * to pin) and redo the handshake. One check at a time, shared by concurrent calls.
+   */
+  async #ensureVerified(): Promise<void> {
+    if (this.#verified) return;
+    this.#reverifying ??= (async () => {
+      try {
+        if (this.#discovery) {
+          await this.#discovery.ensureServer?.().catch(() => undefined);
+          const next = await resolveTarget(this.#discovery.dataDir).catch(() => undefined);
+          if (next) this.#target = next;
+        }
+        await this.#handshake();
+        this.#verified = true;
+      } finally {
+        this.#reverifying = undefined;
+      }
+    })();
+    return this.#reverifying;
   }
 
   async #accessToken(): Promise<string> {
@@ -210,35 +270,53 @@ export class QuorumClient {
     return (await this.#refresh()).access_token;
   }
 
-  /** One refresh at a time: two concurrent ones would reuse the same refresh token (INV-11). */
+  /**
+   * One refresh at a time, across processes too: the MCP server, every hook and the idle watcher
+   * share this attachment's credentials, and presenting a refresh token another process already
+   * rotated would look like theft to the server and revoke the whole family (INV-11). So: take
+   * the lock, re-read the keychain, and refresh only if nobody else just did.
+   */
   #refresh(): Promise<StoredCredentials> {
     this.#refreshing ??= (async () => {
       try {
-        const current = this.#credentials;
-        if (!current) throw new Error('no credentials to refresh');
-        const response = await this.#raw('POST', '/v1/auth/refresh', {
-          refresh_token: current.refresh_token,
-        });
-        const body: unknown = await response.json().catch(() => undefined);
-        const checked = validateApiPayload('tokenPair', body);
-        if (!response.ok || !checked.ok) {
-          throw this.#toApiError(response.status, body);
-        }
-        const pair: TokenPair = checked.value;
-        const next: StoredCredentials = {
-          access_token: pair.access_token,
-          refresh_token: pair.refresh_token,
-          access_expires_at: this.#now() + pair.expires_in * 1000,
-        };
-        // Store first: if we crash now the rotated token is not lost.
-        await this.#store.save(this.#key, next);
-        this.#credentials = next;
-        return next;
+        const run = () => this.#refreshHoldingLock();
+        return this.#lockDir
+          ? await withFileLock(this.#lockDir, `refresh-${this.#key}`, run)
+          : await run();
       } finally {
         this.#refreshing = undefined;
       }
     })();
     return this.#refreshing;
+  }
+
+  async #refreshHoldingLock(): Promise<StoredCredentials> {
+    const stored = await this.#store.load(this.#key);
+    if (stored && stored.refresh_token !== this.#credentials?.refresh_token) {
+      // Another process refreshed while we waited: use its pair, never our stale token.
+      this.#credentials = stored;
+      if (this.#now() < stored.access_expires_at - REFRESH_MARGIN_MS) return stored;
+    }
+    const current = this.#credentials;
+    if (!current) throw new Error('no credentials to refresh');
+    const response = await this.#raw('POST', '/v1/auth/refresh', {
+      refresh_token: current.refresh_token,
+    });
+    const body: unknown = await response.json().catch(() => undefined);
+    const checked = validateApiPayload('tokenPair', body);
+    if (!response.ok || !checked.ok) {
+      throw this.#toApiError(response.status, body);
+    }
+    const pair: TokenPair = checked.value;
+    const next: StoredCredentials = {
+      access_token: pair.access_token,
+      refresh_token: pair.refresh_token,
+      access_expires_at: this.#now() + pair.expires_in * 1000,
+    };
+    // Store first: if we crash now the rotated token is not lost.
+    await this.#store.save(this.#key, next);
+    this.#credentials = next;
+    return next;
   }
 
   #toApiError(status: number, body: unknown): ApiError {
@@ -258,6 +336,21 @@ export class QuorumClient {
     path: string,
     body?: unknown,
   ): Promise<{ status: number; text: string }> {
+    try {
+      return await this.#authenticatedOnce(method, path, body);
+    } catch (error) {
+      // The server went away: if it can be found again (local mode), retry once.
+      if (!(error instanceof UnreachableError) || !this.#discovery) throw error;
+      return this.#authenticatedOnce(method, path, body);
+    }
+  }
+
+  async #authenticatedOnce(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<{ status: number; text: string }> {
+    await this.#ensureVerified();
     const response = await this.#raw(method, path, body, await this.#accessToken());
     const text = await response.text();
     if (!response.ok) {
@@ -293,9 +386,11 @@ export class QuorumClient {
     onMessage: (message: DeliveredEnvelope) => void,
     options: { signal: AbortSignal; lastEventId?: number },
   ): Promise<void> {
+    await this.#ensureVerified();
     const headers: Record<string, string> = {
       accept: 'text/event-stream',
       authorization: `Bearer ${await this.#accessToken()}`,
+      ...(this.#session ? { 'quorum-session': this.#session } : {}),
       ...(options.lastEventId === undefined
         ? {}
         : { 'last-event-id': String(options.lastEventId) }),
@@ -308,6 +403,7 @@ export class QuorumClient {
       });
     } catch (error) {
       if (options.signal.aborted) return;
+      this.#verified = false;
       throw new UnreachableError(
         `Cannot reach the Quorum server at ${this.#target.baseUrl}.`,
         error,
@@ -404,6 +500,7 @@ export class QuorumClient {
    * check (INV-24). Throws ApiError (401 wrong/expired/used code, 404 remote mode).
    */
   async bootstrapLogin(code: string): Promise<{ id: string; address: string }> {
+    await this.#ensureVerified(); // the code is a secret too (INV-24)
     const response = await this.#raw('POST', '/v1/auth/local-bootstrap', { code });
     const body: unknown = await response.json().catch(() => undefined);
     const checked = validateApiPayload('localBootstrapResponse', body);

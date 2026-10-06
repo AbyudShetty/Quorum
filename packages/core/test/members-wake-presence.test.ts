@@ -104,6 +104,13 @@ describe('WakeGovernor (D-9, INV-29)', () => {
     });
   });
 
+  it('treats mail to one of the agent’s windows (by label) as direct', () => {
+    const toWindow = { ...message({ to: ['claude@api-1'] }), delivered_to: [B] };
+    expect(
+      new WakeGovernor(limits).decide(B, toWindow as SubmittedEnvelope, { mode: 'direct' }, 0),
+    ).toEqual({ wake: true });
+  });
+
   it('never wakes an agent with its own message', () => {
     expect(
       new WakeGovernor(limits).decide(B, message({ from: B, to: ['*'] }), { mode: 'all' }, 0),

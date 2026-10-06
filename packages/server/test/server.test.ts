@@ -504,3 +504,201 @@ describe('wake decisions (INV-29)', () => {
     expect((await ask(h, workspace, b.token)).wake).toBe(true);
   });
 });
+
+describe('one wake per message (INV-29)', () => {
+  it('grants a message once, however many adapters ask, also after a restart', async () => {
+    const h = await start();
+    const { human, a, b, workspace } = await setUp(h);
+    await h.request('PATCH', `/v1/attachments/${b.attachment}`, {
+      token: human.token,
+      body: { wake: 'direct' },
+    });
+    await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, [b.address], 'wake once'),
+    });
+    const ask = (harness: Harness) =>
+      harness
+        .request('POST', `/v1/workspaces/${workspace}/wake`, { token: b.token, body: {} })
+        .then((r) => r.body as { wake: boolean; reason?: string });
+    const answers = await Promise.all([ask(h), ask(h), ask(h)]);
+    expect(answers.filter((x) => x.wake)).toHaveLength(1);
+    expect(answers.filter((x) => !x.wake).every((x) => x.reason === 'no_mail')).toBe(true);
+    open.splice(open.indexOf(h), 1);
+    const again = await h.restart();
+    open.push(again);
+    expect(await ask(again)).toEqual({ wake: false, reason: 'no_mail' });
+  });
+});
+
+describe('numbered sessions: one window, one label (MESSAGE_SPEC §1.1)', () => {
+  const open = async (
+    h: Harness,
+    agent: { token: string },
+    folder: string,
+    vendorSession = ulid(),
+  ): Promise<{ id: string; label: string }> => {
+    const reply = await h.request('POST', '/v1/sessions', {
+      token: agent.token,
+      body: { vendor_session_id: vendorSession, root: h.folder(folder) },
+    });
+    const body = reply.body as { session_id: string; label: string };
+    return { id: body.session_id, label: body.label };
+  };
+  const as = (agent: { token: string }, session?: { id: string }) => ({
+    token: agent.token,
+    ...(session ? { headers: { 'quorum-session': session.id } } : {}),
+  });
+
+  it('numbers windows per tool and folder; a resumed conversation keeps its number', async () => {
+    const h = await start();
+    const { a, b } = await setUp(h);
+    const conversation = ulid();
+    const w1 = await open(h, a, 'api', conversation);
+    const w2 = await open(h, a, 'api');
+    const codex = await open(h, b, 'web');
+    expect([w1.label, w2.label, codex.label]).toEqual([
+      'claude@api-1',
+      'claude@api-2',
+      'codex@web-1',
+    ]);
+    await h.request('DELETE', `/v1/sessions/${w1.id}`, { token: a.token });
+    // A new conversation (e.g. after /clear) gets the next number, never a used one.
+    expect((await open(h, a, 'api')).label).toBe('claude@api-3');
+    // Resuming the first conversation gives its number back.
+    expect((await open(h, a, 'api', conversation)).label).toBe('claude@api-1');
+    // ...but not while a live window holds it.
+    expect((await open(h, a, 'api', conversation)).label).toBe('claude@api-4');
+    h.advance(91_000); // every window went silent: still no number is handed out twice
+    expect((await open(h, a, 'api')).label).toBe('claude@api-5');
+  });
+
+  it('stamps the sending window, and ignores a session that is not the caller’s (INV-7)', async () => {
+    const h = await start();
+    const { a, b, workspace } = await setUp(h);
+    const mine = await open(h, a, 'api');
+    const theirs = await open(h, b, 'web');
+    const send = (session: { id: string }, text: string) =>
+      h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+        ...as(a, session),
+        body: note(workspace, a.address, [b.address], text),
+      });
+    await send(mine, 'from my window');
+    await send(theirs, 'borrowed header');
+    const inbox = await h.request('GET', `/v1/workspaces/${workspace}/inbox`, { token: b.token });
+    const messages = (
+      inbox.body as { messages: { body: { text: string }; from_session?: unknown }[] }
+    ).messages;
+    expect(messages[0]?.from_session).toEqual({
+      id: mine.id,
+      label: 'claude@api-1',
+      machine: 'lab',
+      path: expect.stringMatching(/api$/) as unknown,
+    });
+    expect(messages[1]?.from_session).toBeUndefined();
+  });
+
+  it('starts a new window where the agent’s windows got to: no old mail again', async () => {
+    const h = await start();
+    const { a, b, workspace } = await setUp(h);
+    const send = (text: string) =>
+      h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+        token: b.token,
+        body: note(workspace, b.address, [a.address], text),
+      });
+    const unread = async (session: { id: string }) => {
+      const page = await h.request('GET', `/v1/workspaces/${workspace}/inbox`, as(a, session));
+      return page.body as { messages: { body: { text: string } }[]; next_after: number };
+    };
+    const first = await open(h, a, 'api');
+    await send('old one');
+    await send('old two');
+    const read = await unread(first);
+    expect(read.messages.map((m) => m.body.text)).toEqual(['old one', 'old two']);
+    await h.request('POST', `/v1/workspaces/${workspace}/inbox/ack`, {
+      ...as(a, first),
+      body: { up_to: read.next_after },
+    });
+    await h.request('DELETE', `/v1/sessions/${first.id}`, { token: a.token });
+    await send('while no window was open'); // nobody read this one: the next window gets it
+    const next = await open(h, a, 'api'); // e.g. after /clear
+    await send('new');
+    expect((await unread(next)).messages.map((m) => m.body.text)).toEqual([
+      'while no window was open',
+      'new',
+    ]);
+  });
+
+  it('delivers a reply to that window only; the agent’s other window does not see it', async () => {
+    const h = await start();
+    const { a, b, workspace } = await setUp(h);
+    const w1 = await open(h, a, 'api');
+    const w2 = await open(h, a, 'api');
+    const codex = await open(h, b, 'web');
+    const reply = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      ...as(b, codex),
+      body: note(workspace, b.address, ['claude@api-2'], 'only for window 2'),
+    });
+    expect(reply.status).toBe(201);
+    const texts = async (session?: { id: string }) => {
+      const page = await h.request(
+        'GET',
+        `/v1/workspaces/${workspace}/inbox?after=0`,
+        as(a, session),
+      );
+      return (page.body as { messages: { body: { text: string } }[] }).messages.map(
+        (m) => m.body.text,
+      );
+    };
+    expect(await texts(w2)).toEqual(['only for window 2']);
+    expect(await texts(w1)).toEqual([]);
+    expect(await texts()).toEqual(['only for window 2']); // the CLI, as the agent, sees all its mail
+    const long = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      ...as(b, codex),
+      body: note(workspace, b.address, ['claude@lab-api-1'], 'long form'),
+    });
+    expect(long.status).toBe(201);
+    expect(await texts(w1)).toEqual(['long form']);
+    const gone = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      ...as(b, codex),
+      body: note(workspace, b.address, ['claude@api-7'], 'nobody'),
+    });
+    expect(gone.body).toMatchObject({
+      error: { code: 'message.unknown_recipient', path: '/to/0' },
+    });
+  });
+
+  it('keeps a read position and a wake per window', async () => {
+    const h = await start();
+    const { human, a, b, workspace } = await setUp(h);
+    await h.request('PATCH', `/v1/attachments/${a.attachment}`, {
+      token: human.token,
+      body: { wake: 'direct' },
+    });
+    const w1 = await open(h, a, 'api');
+    const w2 = await open(h, a, 'api');
+    const sent = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: b.token,
+      body: note(workspace, b.address, [a.address], 'to the agent'),
+    });
+    const seq = (sent.body as { seq: number }).seq;
+    await h.request('POST', `/v1/workspaces/${workspace}/inbox/ack`, {
+      ...as(a, w1),
+      body: { up_to: seq },
+    });
+    const unread = async (session: { id: string }) =>
+      (
+        (await h.request('GET', `/v1/workspaces/${workspace}/inbox`, as(a, session))).body as {
+          messages: unknown[];
+        }
+      ).messages.length;
+    expect(await unread(w1)).toBe(0);
+    expect(await unread(w2)).toBe(1); // window 2 has not read it yet
+    const wake = (session: { id: string }) =>
+      h
+        .request('POST', `/v1/workspaces/${workspace}/wake`, { ...as(a, session), body: {} })
+        .then((r) => (r.body as { wake: boolean }).wake);
+    expect(await wake(w2)).toBe(true);
+    expect(await wake(w2)).toBe(false); // once per message per window
+  });
+});

@@ -40,7 +40,24 @@ export interface AgentConfig {
    * would finish (and stop listening) before the late ones begin, which looks like message loss.
    */
   barrier?: () => Promise<void>;
+  /**
+   * Shared by the agents of one in-process run: once every agent has stopped sending and every
+   * queued message has arrived, draining ends early. `drainMs` stays the upper bound, so a slow
+   * machine gets time instead of a false "lost", and a fast one does not wait for nothing.
+   */
+  progress?: FleetProgress;
 }
+
+export interface FleetProgress {
+  agents: number;
+  sendersDone: number;
+  queued: number;
+  received: number;
+}
+
+/** True when an in-process fleet has delivered everything it queued. */
+const settled = (p: FleetProgress | undefined): boolean =>
+  p !== undefined && p.sendersDone === p.agents && p.received >= p.queued;
 
 export interface AgentResult {
   address: string;
@@ -131,6 +148,7 @@ export const runAgent = async (config: AgentConfig): Promise<AgentResult> => {
       try {
         await outbox.enqueue({ workspace: config.workspace, envelope });
         result.sent.push({ id: envelope.id, to, at });
+        if (config.progress) config.progress.queued += 1;
       } catch (error) {
         fail(error);
       }
@@ -139,7 +157,7 @@ export const runAgent = async (config: AgentConfig): Promise<AgentResult> => {
   };
 
   const flusher = async () => {
-    while (Date.now() < receiveUntil) {
+    while (Date.now() < receiveUntil && !settled(config.progress)) {
       try {
         if ((await outbox.size()) > 0) {
           const flushed = await outbox.flush((ws, e) => client.send(ws, e));
@@ -155,7 +173,7 @@ export const runAgent = async (config: AgentConfig): Promise<AgentResult> => {
   };
 
   const receiver = async () => {
-    while (Date.now() < receiveUntil) {
+    while (Date.now() < receiveUntil && !settled(config.progress)) {
       try {
         const page = await client.inbox(config.workspace, { after: cursor, limit: 100 });
         const now = Date.now();
@@ -165,6 +183,7 @@ export const runAgent = async (config: AgentConfig): Promise<AgentResult> => {
             continue;
           }
           seen.add(message.id);
+          if (config.progress) config.progress.received += 1;
           const sentAt = (message.body as { sent_at?: unknown }).sent_at;
           result.received.push({
             id: message.id,
@@ -184,7 +203,13 @@ export const runAgent = async (config: AgentConfig): Promise<AgentResult> => {
     }
   };
 
-  await Promise.all([sender(), flusher(), receiver()]);
+  await Promise.all([
+    sender().finally(() => {
+      if (config.progress) config.progress.sendersDone += 1;
+    }),
+    flusher(),
+    receiver(),
+  ]);
   result.unsent = await outbox.size();
   return result;
 };

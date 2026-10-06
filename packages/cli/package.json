@@ -22,6 +22,7 @@
   "dependencies": {
     "@quorum/adapter-hooks": "0.0.0",
     "@quorum/adapter-mcp": "0.0.0",
+    "@quorum/codex-bridge": "0.0.0",
     "@quorum/core": "0.0.0",
     "@quorum/local": "0.0.0",
     "@quorum/schemas": "0.0.0",

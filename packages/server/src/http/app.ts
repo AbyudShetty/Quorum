@@ -124,7 +124,14 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
 
   const caller = (request: FastifyRequest): Caller => {
     try {
-      return quorum.authenticate(bearer(request));
+      // The calling window, when the adapter names it (verified by the service, INV-7).
+      const session = request.headers['quorum-session'];
+      return quorum.authenticate(
+        bearer(request),
+        typeof session === 'string' && /^sess_[0-9A-HJKMNP-TV-Z]{26}$/.test(session)
+          ? session
+          : undefined,
+      );
     } catch (error) {
       // Guessing tokens costs: repeated failures from one address are throttled (INV-23).
       authFailureLimit.take(request.ip, 'failed sign-ins');

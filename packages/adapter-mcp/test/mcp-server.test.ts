@@ -99,6 +99,20 @@ describe('quorum MCP server', () => {
     expect(both.isError).toBe(true);
   });
 
+  it('quorum_send says "attach again", not "server down", when the credentials are refused', async () => {
+    world = await startWorld();
+    await world.store.save('at_test', {
+      access_token: `qrm_at_${'x'.repeat(43)}`,
+      refresh_token: `qrm_rt_${'x'.repeat(43)}`,
+      access_expires_at: Date.now() + 3_600_000,
+    });
+    const client = await start(world);
+    const sent = await call(client, 'quorum_send', { to: [world.peer.address], text: 'hi' });
+    expect(sent.isError).toBe(true);
+    expect(sent.text).toContain('quorum attach');
+    expect(sent.text).not.toContain('not reachable');
+  });
+
   it('quorum_send reports a refusal with the fix and does not retry it forever', async () => {
     world = await startWorld();
     const client = await start(world);

@@ -11,6 +11,7 @@ Local-mode building blocks shared by the server, the adapters and the CLI. No da
 | `discovery`      | The `local/server.json` discovery file (port, key to pin; `localDiscovery` schema). Atomic writes; a malformed file is treated as missing.                                                                                       |
 | `bootstrap-file` | The `local/bootstrap.json` code file (`localBootstrapFile` schema). The CLI reads it and exchanges the code at `POST /v1/auth/local-bootstrap`. Expired or malformed codes read as missing.                                      |
 | `start-lock`     | Exactly one local server starts when several agents start at once; locks left by crashed processes are taken over.                                                                                                               |
+| `file-lock`      | `withFileLock(dataDir, name, work)`: a cross-process lock (`mkdir` is atomic) in `<data>/locks`, taken over when stale. Used so processes sharing one credential never refresh it twice (INV-11).                                |
 
 `@quorum/server` re-exports all of these, so `import { defaultDataDir } from '@quorum/server'` keeps working; new code should import from `@quorum/local`.
 

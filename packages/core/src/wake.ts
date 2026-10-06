@@ -77,7 +77,10 @@ export class WakeGovernor {
   ): WakeDecision {
     if (settings.mode === 'off') return { wake: false, reason: 'mode_off' };
     if (message.from === recipient) return { wake: false, reason: 'own_message' };
-    const direct = message.to.includes(recipient);
+    // Direct: addressed to the agent, or to one of its windows by label (the server resolved it).
+    const direct =
+      message.to.includes(recipient) ||
+      ((message as { delivered_to?: string[] }).delivered_to?.includes(recipient) ?? false);
     if (!direct && settings.mode === 'direct') return { wake: false, reason: 'not_direct' };
     if (settings.types && !settings.types.includes(message.type))
       return { wake: false, reason: 'type_filtered' };

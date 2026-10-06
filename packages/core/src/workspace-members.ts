@@ -39,6 +39,24 @@ export const agentName = (
   }
 };
 
+/**
+ * A folder name as it appears in a window label (MESSAGE_SPEC §1.1): lowercase letters, digits
+ * and single hyphens. Server and adapters derive labels with this, so they always agree.
+ */
+export const labelSlug = (folder: string): string =>
+  folder
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+    .replace(/-+$/, '') || 'folder';
+
+/** Short tool names used in window labels: claude, codex, gemini, opencode, agent. */
+export const toolName = (vendor: string): string =>
+  ({ 'claude-code': 'claude', codex: 'codex', 'gemini-cli': 'gemini', opencode: 'opencode' })[
+    vendor
+  ] ?? 'agent';
+
 /** The last segment of a Windows or POSIX path ("C:\\proj\\api" → "api"). */
 export const folderName = (path: string): string =>
   path

@@ -291,3 +291,93 @@ describe('MessageLog inbox', () => {
     expect(rebuilt.ackedUpTo(B)).toBe(2);
   });
 });
+
+describe('sessions: one window, its own mail (MESSAGE_SPEC §1.1)', () => {
+  const A = 'agent:claude-api@m1';
+  const W1 = `sess_${'1'.repeat(26)}`;
+  const W2 = `sess_${'2'.repeat(26)}`;
+  let seq = 0;
+  const event = (kind: string, payload: Record<string, unknown>) => ({
+    ev_id: `ev_${String(++seq).padStart(26, '0')}`,
+    workspace: 'ws_x',
+    seq,
+    ts: '2026-10-02T10:00:00Z',
+    actor: 'agent:codex-web@m1',
+    kind,
+    payload,
+    prev_hash: '0'.repeat(64),
+    hash: '0'.repeat(64),
+  });
+  const message = (id: string, to: string[], extra: Record<string, unknown> = {}) =>
+    event('message.accepted', {
+      envelope: {
+        spec: 'quorum/1',
+        id,
+        workspace: 'ws_x',
+        thread: `th_${'9'.repeat(26)}`,
+        from: 'agent:codex-web@m1',
+        to,
+        type: 'note',
+        type_version: 1,
+        created_at: '2026-10-02T10:00:00Z',
+        body: { text: id },
+        ...extra,
+      },
+      content_hash: id,
+    });
+  const ids = (page: { messages: { id: string }[] }) => page.messages.map((m) => m.id);
+
+  it('shows mail for a session label only to that window; agent and broadcast mail to all', () => {
+    const log = new MessageLog();
+    log.apply(message('msg-agent', [A]));
+    log.apply(message('msg-w1', ['claude@api-1'], { delivered_to: [A], to_sessions: [W1] }));
+    log.apply(message('msg-all', ['*']));
+    expect(ids(log.inbox(A, { session: W1 }))).toEqual(['msg-agent', 'msg-w1', 'msg-all']);
+    expect(ids(log.inbox(A, { session: W2 }))).toEqual(['msg-agent', 'msg-all']);
+    expect(ids(log.inbox(A))).toEqual(['msg-agent', 'msg-w1', 'msg-all']); // the CLI sees all
+  });
+
+  it('keeps a read position per window', () => {
+    const log = new MessageLog();
+    log.apply(message('m1', [A]));
+    log.apply(event('inbox.acked', { address: A, up_to: 1, session: W1 }));
+    expect(log.ackedUpTo(A, W1)).toBe(1);
+    expect(log.ackedUpTo(A, W2)).toBe(0);
+    expect(log.ackedUpTo(A)).toBe(0);
+  });
+
+  it('knows the furthest any window of an address has read (where a new window starts)', () => {
+    const log = new MessageLog();
+    expect(log.furthestAck(A)).toBe(0);
+    log.apply(event('inbox.acked', { address: A, up_to: 4, session: W1 }));
+    log.apply(event('inbox.acked', { address: A, up_to: 2 }));
+    log.apply(event('inbox.acked', { address: B, up_to: 9 }));
+    expect(log.furthestAck(A)).toBe(4);
+  });
+
+  it('stores server fields with the message but hashes what the client sent', () => {
+    const log = new MessageLog();
+    const factory = createIdFactory();
+    const input = {
+      spec: 'quorum/1',
+      id: factory.id('message'),
+      workspace: WS,
+      from: A,
+      to: ['codex@web-1'],
+      type: 'note',
+      type_version: 1,
+      created_at: '2026-10-02T10:00:00Z',
+      body: { text: 'hi' },
+    };
+    const outcome = acceptMessage(log, {
+      workspace: WS,
+      principal: { kind: 'agent', address: A },
+      input,
+      now: '2026-10-02T10:00:01Z',
+      ids: factory,
+      serverFields: { from_session: { id: W1, label: 'claude@api-1', machine: 'm1' } },
+    });
+    if (outcome.outcome !== 'append') throw new Error(outcome.outcome);
+    expect(outcome.envelope).toMatchObject({ from_session: { label: 'claude@api-1' } });
+  });
+});

@@ -22,10 +22,15 @@ export {
 } from './credentials.js';
 export { findGit, type GitInfo } from './git.js';
 export {
+  type DisplayOptions,
+  frameDelivery,
   type FrameOptions,
   frameMessage,
   frameMessages,
+  neatLines,
   newFrameNonce,
+  recipientFor,
+  senderName,
   senderResolver,
   type SenderInfo,
 } from './framing.js';
@@ -44,6 +49,7 @@ export {
 } from './heartbeat.js';
 export {
   type Session,
+  displayRoot,
   sharedWorktreeNotice,
   startSession,
   type StartSessionOptions,

@@ -7,6 +7,8 @@ export interface Subscriber {
   /** hu_ or ag_ id: revocation closes every stream of a principal (INV-13). */
   principal: string;
   address: string;
+  /** The window this stream belongs to: mail for other windows of the agent is not pushed here. */
+  session?: string;
   workspace: string;
   send(message: DeliveredEnvelope): void;
   close(): void;
@@ -31,7 +33,9 @@ export class Notifier {
   publish(workspace: string, message: StoredMessage): void {
     const payload = delivered(message);
     for (const sub of this.#subscribers) {
-      if (sub.workspace === workspace && canSee(sub.address, message.envelope)) sub.send(payload);
+      if (sub.workspace === workspace && canSee(sub.address, message.envelope, sub.session)) {
+        sub.send(payload);
+      }
     }
   }
 

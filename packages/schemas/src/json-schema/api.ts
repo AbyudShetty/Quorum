@@ -194,6 +194,13 @@ export const apiSchemas = {
     properties: {
       vendor_session_id: { type: 'string', minLength: 1, maxLength: 256 },
       root: absolutePath,
+      /** How the folder is shown to others: the home folder as ~ (MESSAGE_SPEC §1.1). */
+      display_root: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 4096,
+        pattern: '^[^\\u0000-\\u001f]+$',
+      },
       git: {
         type: 'object',
         required: ['common_dir', 'worktree_root'],
@@ -212,6 +219,9 @@ export const apiSchemas = {
       worktree: common('worktreeId'),
       /** Other live agents in the same working tree (INV-28); empty when alone. */
       shared_worktree_with: { type: 'array', items: common('agentAddress') },
+      /** This window's label, e.g. `claude@api-1` (numbers count up per tool, folder, machine). */
+      label: common('sessionLabel'),
+      machine: common('name'),
     },
   }),
 

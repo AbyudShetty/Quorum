@@ -138,6 +138,12 @@ export interface ServerFields {
   received_at: Timestamp;
   event: string;
   flags?: string[];
+  /** The sending window, stamped by the server (MESSAGE_SPEC §1.1). */
+  from_session?: { id: string; label: string; machine: string; path?: string };
+  /** Agents reached through a session label in `to`. */
+  delivered_to?: string[];
+  /** Sessions named by session labels in `to`: only those windows see the message. */
+  to_sessions?: string[];
 }
 
 /** What a client receives for a type it knows. */
@@ -306,6 +312,8 @@ export interface LocalBootstrapResponse {
 export interface SessionCreate {
   vendor_session_id: string;
   root: string;
+  /** How the folder is shown to others: the home folder as ~. */
+  display_root?: string;
   git?: { common_dir: string; worktree_root: string };
 }
 
@@ -315,6 +323,9 @@ export interface SessionCreated {
   repo?: string;
   worktree?: string;
   shared_worktree_with: string[];
+  /** This window's label, e.g. `claude@api-1`. */
+  label?: string;
+  machine?: string;
 }
 
 export interface MessageAccepted {
