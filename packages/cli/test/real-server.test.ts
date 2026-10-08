@@ -1,9 +1,15 @@
 // IC2 (TEAM_PLAN §3): the CLI and the adapter client against the REAL local server, not the fake.
 // Same process, real HTTP, real SQLite, real data directory; only the keychain is in memory.
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MemoryCredentialStore, QuorumClient, startSession } from '@quorum/adapter-mcp';
+import {
+  loadAttachment,
+  MemoryCredentialStore,
+  QuorumClient,
+  startSession,
+} from '@quorum/adapter-mcp';
 import { readBootstrapCode, readDiscovery } from '@quorum/local';
 import { type LocalServer, startLocalServer } from '@quorum/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -156,11 +162,67 @@ describe('IC2: CLI and adapter against the real local server', () => {
     const exported = await run('export', '--workspace', workspace);
     expect(exported.code).toBe(0);
     const file = join(root, 'log.jsonl');
-    const { writeFile } = await import('node:fs/promises');
     await writeFile(file, exported.out);
     expect((await run('verify', file, '--workspace', workspace)).out).toContain(
       'hash chain intact',
     );
+  });
+
+  it('moves an agent into its own git worktree, keeping its name (quorum worktree, §13)', async () => {
+    const repo = await folder('mono');
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], {
+        cwd,
+        stdio: 'pipe',
+      });
+    git(repo, 'init', '-q');
+    await writeFile(join(repo, 'README.md'), 'hi');
+    git(repo, 'add', 'README.md');
+    git(repo, 'commit', '-q', '-m', 'first');
+    const attached = await run('attach', repo, '--vendor', 'codex', '--name', 'codex-mono');
+    const id = /\((at_[0-9A-Z]{26})\)/.exec(attached.out)?.[1] ?? '';
+
+    const moved = await run('worktree', '--attachment', id);
+    expect(moved.code).toBe(0);
+    const dir = join(root, 'projects', 'mono-codex-mono');
+    expect(moved.out).toContain(`Created ${dir} on branch quorum/codex-mono`);
+    expect(moved.out).toMatch(/Attached .*mono-codex-mono as agent:codex-mono@/); // same name
+    expect(git(dir, 'branch', '--show-current').toString().trim()).toBe('quorum/codex-mono');
+    expect(await loadAttachment(server.dataDir, id)).toBeUndefined(); // the old one is gone
+    // Again from the new folder: git refuses (the branch exists), and the CLI says so.
+    const newId = /\((at_[0-9A-Z]{26})\)/.exec(moved.out.split('Attached')[1] ?? '')?.[1] ?? '';
+    const again = await run('worktree', '--attachment', newId);
+    expect(again.code).toBe(1);
+    expect(again.err).toContain('already exists');
+    expect((await run('worktree', '--attachment', attachmentA)).err).toContain(
+      'not in a git repository',
+    );
+    // Without --attachment: the attachment of the current folder (or its nearest attached parent).
+    const saved = env.cwd;
+    try {
+      env.cwd = join(api, 'src'); // a subfolder of the Claude Code folder
+      await mkdir(env.cwd, { recursive: true });
+      expect((await run('worktree')).err).toContain('not in a git repository'); // found it
+      env.cwd = root; // attached nowhere
+      expect((await run('worktree')).err).toContain('This folder is not attached');
+    } finally {
+      if (saved === undefined) delete env.cwd;
+      else env.cwd = saved;
+    }
+  });
+
+  it('prints a one-time localhost link to the web timeline (quorum ui)', async () => {
+    const shown = await run('ui');
+    expect(shown.code).toBe(0);
+    const url = /(http:\/\/localhost:\d+\/login\?code=qrm_ul_[A-Za-z0-9_-]{43})/.exec(
+      shown.out,
+    )?.[1];
+    expect(url).toBeDefined();
+    // The browser's first visit: the link opens a session once, then never again.
+    const first = await fetch(url ?? '', { redirect: 'manual' });
+    expect(first.status).toBe(303);
+    expect(first.headers.get('set-cookie')).toMatch(/SameSite=Strict/);
+    expect((await fetch(url ?? '', { redirect: 'manual' })).status).toBe(401);
   });
 
   it('reports status, then stops the server only after it proves its identity', async () => {

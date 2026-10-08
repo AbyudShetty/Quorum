@@ -213,6 +213,42 @@
         }
       }
     },
+    "/v1/auth/ui-link": {
+      "post": {
+        "operationId": "createUiLink",
+        "tags": [
+          "auth"
+        ],
+        "summary": "A one-time web login link for the calling human (`quorum ui`).",
+        "description": "The code (`qrm_ul_…`) is single use and expires in 60 s. Opening `path` on the server's own origin (`http://localhost:<port>` in local mode, INV-26) exchanges it for a session cookie (`HttpOnly; Secure; SameSite=Strict`, INV-21) and shows the read-only timeline.",
+        "security": [
+          {
+            "humanToken": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The link. Open it within 60 seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UiLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
     "/v1/workspaces": {
       "get": {
         "operationId": "listWorkspaces",
@@ -3040,6 +3076,32 @@
                 "minimum": 1
               }
             }
+          }
+        }
+      },
+      "UiLink": {
+        "$id": "urn:quorum:schema:api:ui-link:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API ui-link",
+        "type": "object",
+        "required": [
+          "code",
+          "path",
+          "expires_in"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^qrm_ul_[A-Za-z0-9_-]{43}$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^/login\\?code=qrm_ul_[A-Za-z0-9_-]{43}$"
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600
           }
         }
       },

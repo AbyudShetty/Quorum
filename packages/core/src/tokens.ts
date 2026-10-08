@@ -10,6 +10,10 @@ export const TOKEN_PREFIXES = {
   join: 'qrm_jc_',
   /** One-time local-mode bootstrap code: proves the caller can read the private data directory. */
   bootstrap: 'qrm_bc_',
+  /** One-time web login link from `quorum ui` (single use, 60 s). */
+  uiLink: 'qrm_ul_',
+  /** A web UI session (the cookie value). */
+  uiSession: 'qrm_us_',
 } as const;
 
 export type TokenKind = keyof typeof TOKEN_PREFIXES;
@@ -31,15 +35,22 @@ export const tokenMatches = (token: string, storedHash: string): boolean => {
   return presented.length === stored.length && timingSafeEqual(presented, stored);
 };
 
-const TOKEN_SHAPE = /^qrm_(at|rt|jc|bc)_[A-Za-z0-9_-]{43}$/;
+const TOKEN_SHAPE = /^qrm_(at|rt|jc|bc|ul|us)_[A-Za-z0-9_-]{43}$/;
 
 /** The kind of a well-formed token, or undefined. Shape only: says nothing about validity. */
 export const tokenKind = (token: string): TokenKind | undefined => {
   const match = TOKEN_SHAPE.exec(token);
   if (!match) return undefined;
-  return ({ at: 'access', rt: 'refresh', jc: 'join', bc: 'bootstrap' } as const)[
-    match[1] as 'at' | 'rt' | 'jc' | 'bc'
-  ];
+  return (
+    {
+      at: 'access',
+      rt: 'refresh',
+      jc: 'join',
+      bc: 'bootstrap',
+      ul: 'uiLink',
+      us: 'uiSession',
+    } as const
+  )[match[1] as 'at' | 'rt' | 'jc' | 'bc' | 'ul' | 'us'];
 };
 
 /** A stored refresh token (only its hash is kept). */

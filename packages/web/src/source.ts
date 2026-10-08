@@ -11,6 +11,8 @@ export interface TimelineMessage {
   created_at: string;
   thread?: string;
   refs?: string[];
+  /** The sending window, stamped by the server (MESSAGE_SPEC §1.1). */
+  from_session?: { label: string; machine: string; path?: string };
   /** Untrusted. Only ever rendered through escaping templates. */
   body: unknown;
 }
@@ -37,6 +39,17 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const str = (value: unknown, fallback = ''): string =>
   typeof value === 'string' ? value : fallback;
+
+const windowOf = (value: unknown): Pick<TimelineMessage, 'from_session'> =>
+  isRecord(value) && typeof value.label === 'string' && typeof value.machine === 'string'
+    ? {
+        from_session: {
+          label: value.label,
+          machine: value.machine,
+          ...(typeof value.path === 'string' ? { path: value.path } : {}),
+        },
+      }
+    : {};
 
 /** Read `message.accepted` events from a JSON Lines export; anything else is skipped. */
 export const messagesFromExport = (jsonl: string): TimelineMessage[] => {
@@ -65,6 +78,7 @@ export const messagesFromExport = (jsonl: string): TimelineMessage[] => {
       ...(Array.isArray(envelope.refs)
         ? { refs: envelope.refs.filter((r): r is string => typeof r === 'string') }
         : {}),
+      ...windowOf(envelope.from_session),
       body: envelope.body,
     });
   }

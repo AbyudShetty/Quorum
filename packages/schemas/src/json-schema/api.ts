@@ -102,6 +102,21 @@ export const apiSchemas = {
     },
   }),
 
+  /**
+   * A one-time web login link for the calling human (`quorum ui`, ARCHITECTURE §6): the code is
+   * single use and expires in 60 s; `GET /login?code=…` exchanges it for a session cookie.
+   */
+  uiLink: schema('ui-link', {
+    type: 'object',
+    required: ['code', 'path', 'expires_in'],
+    properties: {
+      code: { type: 'string', pattern: '^qrm_ul_[A-Za-z0-9_-]{43}$' },
+      /** Open this path on the server's origin (`http://localhost:<port>` in local mode). */
+      path: { type: 'string', pattern: '^/login\\?code=qrm_ul_[A-Za-z0-9_-]{43}$' },
+      expires_in: { type: 'integer', minimum: 1, maximum: 600 },
+    },
+  }),
+
   workspaceCreate: schema('workspace-create', {
     type: 'object',
     required: ['name'],

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, join } from 'node:path';
-import { errorPage, timelineFragment, timelinePage } from './views.js';
+import { type DisplayOptions, errorPage, timelineFragment, timelinePage } from './views.js';
 import type { TimelineSource } from './source.js';
 
 /** ARCHITECTURE §7 / INV-21. Nothing here allows inline script or style, or any other origin. */
@@ -37,6 +37,8 @@ export interface WebOptions {
   limit?: number;
   /** Seconds between automatic refreshes. Default 3. */
   refreshSeconds?: number;
+  /** This machine's name and home folder, so windows here show their full path. */
+  display?: Omit<DisplayOptions, 'now'>;
 }
 
 export type WebHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -79,7 +81,7 @@ export const createWebHandler = (source: TimelineSource, options: WebOptions = {
       return;
     }
     if (url.pathname === '/static/app.css') {
-      send(res, 200, 'text/css; charset=utf-8', assets.css, 'public, max-age=300');
+      send(res, 200, 'text/css; charset=utf-8', assets.css, 'no-cache');
       return;
     }
     if (url.pathname !== '/' && url.pathname !== '/fragment/timeline') {
@@ -101,10 +103,11 @@ export const createWebHandler = (source: TimelineSource, options: WebOptions = {
         return;
       }
       const messages = selected ? await source.messages(selected.id, limit) : [];
+      const display = { ...options.display, now: new Date() };
       if (url.pathname === '/fragment/timeline') {
-        page(res, 200, timelineFragment(messages));
+        page(res, 200, timelineFragment(messages, display));
       } else {
-        page(res, 200, timelinePage({ workspaces, selected, messages, refreshSeconds }));
+        page(res, 200, timelinePage({ workspaces, selected, messages, refreshSeconds, display }));
       }
     } catch {
       // Details stay in the server log; the page never echoes internal errors.

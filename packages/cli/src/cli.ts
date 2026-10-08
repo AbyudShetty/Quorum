@@ -1,26 +1,36 @@
 // The `quorum` command line (Track B). Phase 1: serve, stop, login, workspace, attach, detach,
-// status, inbox, send, export, verify and mcp. `worktree` and `ui` follow (see README).
+// status, inbox, send, export, verify, mcp, hook, worktree and ui.
 // Commands that talk to the local server start it when it is not running (ARCHITECTURE §8.2).
 //
 // Everything is a function of (argv, env) so tests can run it against the fake server without
 // spawning processes. Output that contains other participants' messages is always framed as
 // untrusted data (INV-9), because a person may paste it to an agent.
-import { readFile, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createIdFactory, parseJsonl, verifyChain } from '@quorum/core';
 import {
+  addGitWorktree,
   defaultDataDir,
+  GitWorktreeError,
   isProcessAlive,
   readBootstrapCode,
   readDiscovery,
   removeBootstrapCode,
   removeDiscovery,
 } from '@quorum/local';
-import { MESSAGE_TYPES, type SubmittedEnvelope, VENDORS } from '@quorum/schemas';
+import {
+  MESSAGE_TYPES,
+  type MessageType,
+  type SubmittedEnvelope,
+  type Vendor,
+  VENDORS,
+} from '@quorum/schemas';
 import {
   ApiError,
   type AttachmentInfo,
+  findGit,
+  listAttachments,
   type CredentialStore,
   createQuorumMcpServer,
   frameMessages,
@@ -108,6 +118,10 @@ Usage: quorum <command> [options]
                                              Change an attachment's wake settings, and rewrite
                                              its vendor hooks and MCP config to this version
   detach <at_id>                             Disconnect an attachment and forget its credentials
+  ui                                         A one-time link to the read-only web timeline
+  worktree [--attachment <at_id>] [--agent <name>]
+                                             Give the agent its own git worktree (../<repo>-<agent>,
+                                             branch quorum/<agent>) and move its attachment there
   status [--attachment <at_id>]              Is the local server up, and is it really ours?
   inbox  --attachment <at_id> [--workspace <ws>] [--limit <n>] [--keep]
                                              Show new messages (framed as untrusted data)
@@ -155,6 +169,10 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
         return await attach(rest, env);
       case 'detach':
         return await detach(rest, env);
+      case 'worktree':
+        return await worktree(rest, env);
+      case 'ui':
+        return await ui(rest, env);
       case 'status':
         return await status(rest, env);
       case 'inbox':
@@ -177,7 +195,7 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
       env.err(`${error.message}\n`);
       return 64;
     }
-    if (error instanceof NeedsActionError) {
+    if (error instanceof NeedsActionError || error instanceof GitWorktreeError) {
       env.err(`${error.message}\n`);
       return 1;
     }
@@ -218,8 +236,26 @@ const connect = async (
   });
 };
 
+/**
+ * The attachment a command is about: the one named with --attachment, else the one attached to the
+ * current folder or its nearest attached parent, like git (ARCHITECTURE §12).
+ */
 const attachmentOf = async (env: CliEnv, id: string | undefined) => {
-  const attachment = need(id, 'Pass --attachment <at_id>.');
+  if (id === undefined) {
+    const cwd = env.cwd ?? process.cwd();
+    const here = await realpath(cwd).catch(() => resolve(cwd));
+    const around = (await listAttachments(dataDirOf(env)))
+      .filter((a) => isInside(here, a.root))
+      .sort((a, b) => b.root.length - a.root.length);
+    const nearest = around.filter((a) => a.root === around[0]?.root);
+    if (nearest.length === 1 && nearest[0]) return nearest[0];
+    throw new UsageError(
+      nearest.length === 0
+        ? 'This folder is not attached. Run it in an attached folder, or pass --attachment <at_id>.'
+        : `Several agents are attached here: pass --attachment ${nearest.map((a) => `${a.attachment} (${a.vendor})`).join(' or ')}.`,
+    );
+  }
+  const attachment = id;
   const info = await loadAttachment(dataDirOf(env), attachment);
   if (!info) {
     throw new UsageError(
@@ -632,24 +668,59 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
     workspace = mine[0].id;
   }
 
-  const created = await client.createAttachment({
+  await attachFolder(env, client, {
     root,
     vendor,
     workspaces: [workspace],
-    ...(values.name ? { agent_name: values.name } : {}),
-    ...(values['new-identity'] ? { new_identity: true } : {}),
+    ...(values.name ? { name: values.name } : {}),
+    ...(values['new-identity'] ? { newIdentity: true } : {}),
     wake: wake ?? 'off', // non-interactive default (ARCHITECTURE §15.2); a prompt is not built yet
-    ...(wakeTypes ? { wake_types: wakeTypes } : {}),
-    lease_enforcement: lease ?? 'warn',
+    ...(wakeTypes ? { wakeTypes } : {}),
+    lease: lease ?? 'warn',
+    noConfig: values['no-config'],
+  });
+  return 0;
+};
+
+interface AttachFolder {
+  root: string;
+  vendor: Vendor;
+  workspaces: string[];
+  name?: string;
+  newIdentity?: boolean;
+  wake: 'off' | 'direct' | 'all';
+  wakeTypes?: MessageType[];
+  lease: 'warn' | 'block';
+  noConfig?: boolean;
+}
+
+/**
+ * Create the attachment, keep its credentials in the keychain (never in a file or the project
+ * folder, INV-25), record it, and write the vendor hooks and MCP config (kept out of git).
+ */
+const attachFolder = async (
+  env: CliEnv,
+  client: QuorumClient,
+  folder: AttachFolder,
+): Promise<{ id: string; agent: string }> => {
+  const { root, vendor } = folder;
+  const created = await client.createAttachment({
+    root,
+    vendor,
+    workspaces: folder.workspaces,
+    ...(folder.name ? { agent_name: folder.name } : {}),
+    ...(folder.newIdentity ? { new_identity: true } : {}),
+    wake: folder.wake,
+    ...(folder.wakeTypes ? { wake_types: folder.wakeTypes } : {}),
+    lease_enforcement: folder.lease,
   });
   const id = created.attachment.id;
-  // Credentials go to the keychain, never to a file or the project folder (INV-25).
   await env.store.save(id, {
     access_token: created.credentials.access_token,
     refresh_token: created.credentials.refresh_token,
     access_expires_at: Date.now() + created.credentials.expires_in * 1000,
   });
-  await saveAttachment(dataDir, {
+  await saveAttachment(dataDirOf(env), {
     attachment: id,
     agent: created.agent.address,
     workspaces: created.attachment.workspaces,
@@ -663,9 +734,9 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
   env.out(
     `Attached ${root} as ${created.agent.address} (${id}), wake ${created.attachment.wake}.\n\n`,
   );
-  if (values['no-config']) {
+  if (folder.noConfig) {
     env.out(setupInstructions(vendor, id, root));
-    return 0;
+    return { id, agent: created.agent.address };
   }
   const command = await (env.quorumCommand ?? quorumCommand)();
   const config = await writeVendorConfig(vendor, root, id, command);
@@ -674,7 +745,7 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
     env.out(`\nNext:\n${config.steps.map((step) => `- ${step}`).join('\n')}\n`);
   }
   env.out(`\nTo undo everything: quorum detach ${id}\n`);
-  return 0;
+  return { id, agent: created.agent.address };
 };
 
 /** One line per file written, kept or removed. */
@@ -705,13 +776,94 @@ const setupInstructions = (vendor: string, id: string, root: string): string => 
 const detach = async (args: string[], env: CliEnv): Promise<number> => {
   const { positionals } = parseArgs({ args, options: {}, allowPositionals: true, strict: true });
   const id = need(positionals[0], 'Pass the attachment id: quorum detach <at_id>.');
+  await detachFolder(env, await humanClient(env), id);
+  return 0;
+};
+
+/** Detach: the server retires the agent, the keychain and the folder's config forget it. */
+const detachFolder = async (env: CliEnv, client: QuorumClient, id: string): Promise<void> => {
   const info = await loadAttachment(dataDirOf(env), id);
-  const client = await humanClient(env);
   await client.deleteAttachment(id);
   await env.store.remove(id);
   await removeAttachment(dataDirOf(env), id);
   env.out(`Detached ${id}. Its credentials were removed from the keychain.\n`);
   if (info) env.out(describeChanges(await removeVendorConfig(info.vendor, info.root, id)));
+};
+
+/**
+ * `quorum ui` (ARCHITECTURE §6, §7): a one-time login link to the read-only web timeline, served
+ * by the local server at `http://localhost:<port>` (localhost, not 127.0.0.1: a secure context, so
+ * the session cookie can be Secure). Single use, 60 s; the CLI never opens a browser itself
+ * (INV-10), it prints the link.
+ */
+const ui = async (args: string[], env: CliEnv): Promise<number> => {
+  parseArgs({ args, options: {}, strict: true });
+  const client = await humanClient(env);
+  const link = await client.createUiLink();
+  const origin = new URL(client.baseUrl);
+  origin.hostname = 'localhost';
+  env.out(
+    `Open this link in your browser within ${String(link.expires_in)} seconds (it works once):\n\n` +
+      `  ${origin.origin}${link.path}\n\n` +
+      'The timeline is read-only and refreshes by itself. For a new link, run `quorum ui` again.\n',
+  );
+  return 0;
+};
+
+/**
+ * `quorum worktree [--attachment <at_id>] [--agent <name>]` (ARCHITECTURE §13): give an agent its
+ * own git working tree next to the repository, `../<repo>-<agent>` on branch `quorum/<agent>`,
+ * and move its attachment there. The agent keeps its name, inbox and history: the old folder is
+ * detached (its agent retired) and the new one attached under the same name (D-12).
+ */
+const worktree = async (args: string[], env: CliEnv): Promise<number> => {
+  const { values } = parseArgs({
+    args,
+    options: { attachment: { type: 'string' }, agent: { type: 'string' } },
+    strict: true,
+  });
+  const info = await attachmentOf(env, values.attachment);
+  const git = await findGit(info.root);
+  if (!git) throw new UsageError(`${info.root} is not in a git repository.`);
+  const name = /^agent:([^@]+)@/.exec(info.agent)?.[1] ?? '';
+  const agent = values.agent ?? name;
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(agent)) {
+    throw new UsageError('--agent: lowercase letters, digits and dashes (up to 64).');
+  }
+  const repo = git.worktree_root;
+  const dir = join(dirname(repo), `${basename(repo)}-${agent}`);
+  if (
+    await stat(dir).then(
+      () => true,
+      () => false,
+    )
+  ) {
+    throw new UsageError(`${dir} already exists. Pass --agent <another name>, or remove it.`);
+  }
+  await addGitWorktree({ repo, dir, branch: `quorum/${agent}` });
+  env.out(`Created ${dir} on branch quorum/${agent}.\n`);
+  // The attachment may be a subfolder of the repository: the same subfolder in the new tree.
+  const root = join(dir, relative(repo, info.root));
+  await mkdir(root, { recursive: true });
+  const client = await humanClient(env);
+  await detachFolder(env, client, info.attachment);
+  try {
+    await attachFolder(env, client, {
+      root,
+      vendor: info.vendor as Vendor,
+      workspaces: info.workspaces,
+      name,
+      wake: info.wake,
+      ...(info.wake_types ? { wakeTypes: info.wake_types as MessageType[] } : {}),
+      lease: info.lease_enforcement,
+    });
+  } catch (error) {
+    env.err(
+      `The old folder was detached but attaching ${root} failed. To go back: quorum attach ${info.root} --vendor ${info.vendor} --name ${name}\n`,
+    );
+    throw error;
+  }
+  env.out(`\nStart the agent in ${root} from now on; ${info.root} is no longer attached.\n`);
   return 0;
 };
 

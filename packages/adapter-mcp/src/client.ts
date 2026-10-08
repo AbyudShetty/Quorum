@@ -16,6 +16,7 @@ import {
   type InboxPage,
   type SubmittedEnvelope,
   type TokenPair,
+  type UiLink,
   validateApiPayload,
 } from '@quorum/schemas';
 import { newHelloNonce, verifyHello } from '@quorum/core';
@@ -586,6 +587,12 @@ export class QuorumClient {
   async createWorkspace(name: string): Promise<{ id: string; name: string; created_at: string }> {
     const reply = await this.call('POST', '/v1/workspaces', { name });
     return reply.body as { id: string; name: string; created_at: string };
+  }
+
+  /** Humans: a one-time web login link (`quorum ui`): single use, 60 s. */
+  async createUiLink(): Promise<UiLink> {
+    const reply = await this.call('POST', '/v1/auth/ui-link');
+    return reply.body as UiLink;
   }
 
   async health(): Promise<{ status: string; version: string; instance_id: string }> {

@@ -93,6 +93,7 @@ describe('OpenAPI /v1 document', () => {
       .sort();
     expect(humanOnly).toEqual([
       'createAttachment',
+      'createUiLink',
       'createWorkspace',
       'deleteAttachment',
       'exportEvents',

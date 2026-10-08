@@ -30,6 +30,8 @@ describe('findSecrets (INV-14)', () => {
     ['private key', fake('-----BEGIN OPENSSH ', 'PRIVATE KEY-----')],
     ['Quorum token', fake('qrm_', 'rt_', 'q'.repeat(43))],
     ['Quorum token', fake('qrm_', 'bc_', 'b'.repeat(43))],
+    ['Quorum token', fake('qrm_', 'ul_', 'u'.repeat(43))],
+    ['Quorum token', fake('qrm_', 'us_', 's'.repeat(43))],
   ])('finds a %s and names the field, not the value', (kind, secret) => {
     const findings = findSecrets({ notes: ['fine', `token: ${secret}`] }, '/body');
     expect(findings).toEqual([{ path: '/body/notes/1', kind }]);
@@ -59,6 +61,8 @@ describe('tokens (INV-11)', () => {
     expect(generateToken('refresh')).toMatch(/^qrm_rt_/);
     expect(generateToken('join')).toMatch(/^qrm_jc_/);
     expect(generateToken('bootstrap')).toMatch(/^qrm_bc_[A-Za-z0-9_-]{43}$/);
+    expect(generateToken('uiLink')).toMatch(/^qrm_ul_[A-Za-z0-9_-]{43}$/);
+    expect(generateToken('uiSession')).toMatch(/^qrm_us_[A-Za-z0-9_-]{43}$/);
     expect(generateToken('access')).not.toBe(generateToken('access'));
   });
 
@@ -81,6 +85,8 @@ describe('tokens (INV-11)', () => {
   it('recognises token kinds by shape only', () => {
     expect(tokenKind(generateToken('refresh'))).toBe('refresh');
     expect(tokenKind(generateToken('bootstrap'))).toBe('bootstrap');
+    expect(tokenKind(generateToken('uiLink'))).toBe('uiLink');
+    expect(tokenKind(generateToken('uiSession'))).toBe('uiSession');
     expect(tokenKind('Bearer something')).toBeUndefined();
     expect(tokenKind(`${generateToken('access')}x`)).toBeUndefined();
   });

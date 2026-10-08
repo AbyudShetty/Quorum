@@ -22,6 +22,10 @@ const handler = createWebHandler(fromApi(humanClient)); // (req, res) => Promise
 - Read-only: anything but GET/HEAD is 405. Bad `ws` values are rejected without being echoed. Internal errors become a generic 502.
 - Authentication, Host/Origin checks (INV-26) and the human session are the server's job; this handler assumes they ran.
 
+## Where it runs
+
+The local server mounts the handler at its root (`/`, `/fragment/timeline`, `/static/*`; the API stays under `/v1`). `quorum ui` asks `POST /v1/auth/ui-link` for a one-time code (`qrm_ul_…`, single use, 60 s) and prints `http://localhost:<port>/login?code=…`; `GET /login` spends it and sets the session cookie `quorum_ui` (`qrm_us_…`, 12 h, `HttpOnly; Secure; SameSite=Strict`). Pages need the cookie; the vendored assets do not. The server's Host check (INV-26) runs first on every route. Sessions live in memory: a server restart signs the browser out (run `quorum ui` again). `localhost` is a secure context, so browsers keep the `Secure` cookie over plain HTTP there.
+
 ## Data
 
 `TimelineSource` is the only dependency. `fromApi(client)` builds one from the public `/v1` API (workspace list plus the human's event-log export), so the UI also works against the fake server. The real server may implement `TimelineSource` directly on its message projection.
@@ -29,5 +33,5 @@ const handler = createWebHandler(fromApi(humanClient)); // (req, res) => Promise
 ## Known gaps (first part)
 
 - The timeline refreshes by polling, not by the SSE extension named in ARCHITECTURE §7; switching later needs the HTMX SSE extension vendored too.
-- No approval queue yet (Phase 2), no login page, no Playwright phone/desktop runs yet.
+- No approval queue yet (Phase 2), no Playwright phone/desktop runs yet.
 - Every refresh re-reads the exported log; fine for local use, to be replaced by an indexed read on the server side.

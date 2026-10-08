@@ -2,7 +2,7 @@
 // it is, which workspaces it may use, how it may wake. `quorum attach` writes one file per
 // attachment into the private data directory; nothing secret is in it (tokens live in the
 // keychain, INV-25), and nothing is ever written into the attached project folder.
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export interface AttachmentInfo {
@@ -59,6 +59,17 @@ export const loadAttachment = async (
   } catch {
     return undefined;
   }
+};
+
+/** Every attachment recorded on this machine (unreadable records are skipped). */
+export const listAttachments = async (dataDir: string): Promise<AttachmentInfo[]> => {
+  const names = await readdir(join(dataDir, 'attachments')).catch(() => [] as string[]);
+  const found = await Promise.all(
+    names
+      .filter((name) => name.endsWith('.json'))
+      .map((name) => loadAttachment(dataDir, name.slice(0, -'.json'.length))),
+  );
+  return found.filter((info): info is AttachmentInfo => info !== undefined);
 };
 
 /** Forget an attachment's record (`quorum detach`). The keychain entry is removed by the caller. */

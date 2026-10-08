@@ -28,6 +28,11 @@ const examples: ApiPayloads = {
       refresh_expires_in: 2_592_000,
     },
   },
+  uiLink: {
+    code: `qrm_ul_${'u'.repeat(43)}`,
+    path: `/login?code=qrm_ul_${'u'.repeat(43)}`,
+    expires_in: 60,
+  },
   attachment: {
     id: `at_${U1}`,
     root: 'C:\\Users\\abyud\\proj\\api',

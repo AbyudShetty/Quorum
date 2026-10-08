@@ -44,6 +44,7 @@ import {
   type AttachmentCreated,
   type InboxPage,
   type LocalBootstrapResponse,
+  type UiLink,
   type MessageAccepted,
   type MessageType,
   type SessionCreated,
@@ -128,6 +129,10 @@ export interface QuorumOptions {
 const notFound = (code: string, message: string, fix: string) =>
   new DomainError('not_found', code, message, fix);
 
+/** `quorum ui` login links live 60 s; the web sessions they open, 12 hours. */
+const UI_LINK_MS = 60_000;
+const UI_SESSION_MS = 12 * 60 * 60 * 1000;
+
 const unauthorized = (code = 'auth.invalid_token') =>
   new DomainError(
     'unauthorized',
@@ -156,6 +161,9 @@ export class Quorum {
   readonly #woken = new Map<string, Set<string>>();
   /** When each session last made a request (ms): a window is live while it keeps talking. */
   readonly #sessionSeen = new Map<string, number>();
+  /** Web sign-in (hashes only): one-time links and the sessions they open. */
+  readonly #uiLinks = new Map<string, { principal: string; expiresMs: number }>();
+  readonly #uiSessions = new Map<string, { principal: string; expiresMs: number }>();
   readonly #messageLimit: RateLimiter;
   readonly #heartbeatLimit: RateLimiter;
   readonly notifier = new Notifier();
@@ -454,6 +462,76 @@ export class Quorum {
         events,
       };
     });
+  }
+
+  /** This machine's name: the host part of agent addresses here. */
+  get machine(): string {
+    return this.#options.machine;
+  }
+
+  // --- web UI sign-in (ARCHITECTURE §6: `quorum ui`, one-time link → session cookie) ----------
+
+  /**
+   * A one-time login link for the calling human: single use, 60 s. Kept in memory as a hash only
+   * (a restart forgets it, which can only end sign-ins early).
+   */
+  createUiLink(caller: Caller): UiLink {
+    this.#requireHuman(caller);
+    const nowMs = this.#clock().getTime();
+    this.#pruneUi(nowMs);
+    const code = generateToken('uiLink');
+    this.#uiLinks.set(hashToken(code), { principal: caller.id, expiresMs: nowMs + UI_LINK_MS });
+    return { code, path: `/login?code=${code}`, expires_in: UI_LINK_MS / 1000 };
+  }
+
+  /** Spend a login link: a new UI session for its human, or 401 (unknown, used or expired). */
+  openUiSession(code: string | undefined): { session: string; maxAgeSeconds: number } {
+    const invalid = () =>
+      new DomainError(
+        'unauthorized',
+        'auth.invalid_ui_link',
+        'This login link is wrong, expired or already used.',
+        'Run `quorum ui` again and open the new link within 60 seconds.',
+      );
+    if (!code || tokenKind(code) !== 'uiLink') throw invalid();
+    const hash = hashToken(code);
+    const link = this.#uiLinks.get(hash);
+    this.#uiLinks.delete(hash); // single use, whatever happens next
+    const nowMs = this.#clock().getTime();
+    if (!link || link.expiresMs <= nowMs) throw invalid();
+    const caller = this.#principal(link.principal);
+    if (caller?.kind !== 'human') throw invalid();
+    const session = generateToken('uiSession');
+    this.#uiSessions.set(hashToken(session), {
+      principal: caller.id,
+      expiresMs: nowMs + UI_SESSION_MS,
+    });
+    this.#commit(() => ({
+      result: undefined,
+      events: [
+        [SYSTEM_CHAIN, this.#event(caller.address, 'human.signed_in', { method: 'ui-link' })],
+      ],
+    }));
+    return { session, maxAgeSeconds: UI_SESSION_MS / 1000 };
+  }
+
+  /** The human behind a UI session cookie, or 401. */
+  authenticateUi(session: string | undefined): Caller {
+    if (!session || tokenKind(session) !== 'uiSession')
+      throw unauthorized('auth.invalid_ui_session');
+    const entry = this.#uiSessions.get(hashToken(session));
+    if (!entry || entry.expiresMs <= this.#clock().getTime()) {
+      throw unauthorized('auth.invalid_ui_session');
+    }
+    const caller = this.#principal(entry.principal);
+    if (caller?.kind !== 'human') throw unauthorized('auth.invalid_ui_session');
+    return caller;
+  }
+
+  #pruneUi(nowMs: number): void {
+    for (const map of [this.#uiLinks, this.#uiSessions]) {
+      for (const [hash, entry] of map) if (entry.expiresMs <= nowMs) map.delete(hash);
+    }
   }
 
   // --- workspaces ----------------------------------------------------------------------------

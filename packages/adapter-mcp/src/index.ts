@@ -1,5 +1,6 @@
 export {
   type AttachmentInfo,
+  listAttachments,
   loadAttachment,
   removeAttachment,
   saveAttachment,

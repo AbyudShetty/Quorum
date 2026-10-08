@@ -170,6 +170,23 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/auth/ui-link': {
+      post: {
+        operationId: 'createUiLink',
+        tags: ['auth'],
+        summary: 'A one-time web login link for the calling human (`quorum ui`).',
+        description: [
+          "The code (`qrm_ul_…`) is single use and expires in 60 s. Opening `path` on the server's own origin (`http://localhost:<port>` in local mode, INV-26) exchanges it for a session cookie (`HttpOnly; Secure; SameSite=Strict`, INV-21) and shows the read-only timeline.",
+        ].join('\n'),
+        security: human,
+        responses: {
+          '201': { description: 'The link. Open it within 60 seconds.', content: json('UiLink') },
+          '401': errorRef('Unauthorized'),
+          '403': errorRef('Forbidden'),
+          '429': errorRef('TooManyRequests'),
+        },
+      },
+    },
     '/v1/workspaces': {
       get: {
         operationId: 'listWorkspaces',
@@ -521,6 +538,7 @@ export const openApiDocument = {
       TokenPair: apiSchemas.tokenPair,
       LocalBootstrapRequest: apiSchemas.localBootstrapRequest,
       LocalBootstrapResponse: apiSchemas.localBootstrapResponse,
+      UiLink: apiSchemas.uiLink,
       WorkspaceCreate: apiSchemas.workspaceCreate,
       Workspace: apiSchemas.workspace,
       WorkspaceList: apiSchemas.workspaceList,

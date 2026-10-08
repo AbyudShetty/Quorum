@@ -702,3 +702,71 @@ describe('numbered sessions: one window, one label (MESSAGE_SPEC §1.1)', () => 
     expect(await wake(w2)).toBe(false); // once per message per window
   });
 });
+
+describe('web UI sign-in: quorum ui → one-time link → session cookie (ARCHITECTURE §6, INV-21)', () => {
+  const link = async (h: Harness, token: string) => {
+    const reply = await h.request('POST', '/v1/auth/ui-link', { token });
+    return { status: reply.status, body: reply.body as { code: string; path: string } };
+  };
+  const sessionOf = (reply: { headers: Record<string, unknown> }) =>
+    /quorum_ui=(qrm_us_[A-Za-z0-9_-]{43})/.exec(String(reply.headers['set-cookie']))?.[1];
+
+  it('gives a human a single-use link that opens a strict session cookie', async () => {
+    const h = await start();
+    const { human, a, workspace } = await setUp(h);
+    expect((await link(h, a.token)).status).toBe(403); // agents cannot sign in to the UI
+    const issued = await link(h, human.token);
+    expect(issued.status).toBe(201);
+    expect(issued.body.path).toBe(`/login?code=${issued.body.code}`);
+
+    const opened = await h.request('GET', issued.body.path);
+    expect(opened.status).toBe(303);
+    expect(opened.headers.location).toBe('/');
+    const cookie = String(opened.headers['set-cookie']);
+    expect(cookie).toMatch(/HttpOnly/);
+    expect(cookie).toMatch(/Secure/);
+    expect(cookie).toMatch(/SameSite=Strict/);
+    expect((await h.request('GET', issued.body.path)).status).toBe(401); // used up
+
+    // The timeline, with message text escaped (INV-21).
+    await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, ['*'], '<script>alert(1)</script> hello'),
+    });
+    const session = sessionOf(opened) ?? '';
+    const page = await h.request('GET', '/', { headers: { cookie: `quorum_ui=${session}` } });
+    expect(page.status).toBe(200);
+    expect(String(page.headers['content-security-policy'])).toContain("script-src 'self'");
+    const fragment = await h.request('GET', `/fragment/timeline?ws=${workspace}`, {
+      headers: { cookie: `quorum_ui=${session}` },
+    });
+    expect(fragment.text).toContain('&lt;script&gt;alert(1)&lt;/script&gt; hello');
+    expect(fragment.text).not.toContain('<script>alert');
+  });
+
+  it('refuses pages without a session, but serves the vendored assets', async () => {
+    const h = await start();
+    await setUp(h);
+    const page = await h.request('GET', '/');
+    expect(page.status).toBe(401);
+    expect(page.text).toContain('quorum ui');
+    const forged = await h.request('GET', '/', {
+      headers: { cookie: `quorum_ui=qrm_us_${'x'.repeat(43)}` },
+    });
+    expect(forged.status).toBe(401);
+    expect((await h.request('GET', '/static/app.css')).status).toBe(200);
+  });
+
+  it('expires links after 60 s, and checks the Host like the API (INV-26)', async () => {
+    const h = await start();
+    const { human } = await setUp(h);
+    const late = await link(h, human.token);
+    h.advance(61_000);
+    expect((await h.request('GET', late.body.path)).status).toBe(401);
+    const rebound = await link(h, human.token);
+    const evil = await h.request('GET', rebound.body.path, {
+      headers: { host: 'evil.example:51234' },
+    });
+    expect(evil.status).not.toBe(303);
+  });
+});

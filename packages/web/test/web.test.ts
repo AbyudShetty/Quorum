@@ -10,6 +10,7 @@ import {
   html,
   messagesFromExport,
   raw,
+  recipientName,
   type TimelineMessage,
   type TimelineSource,
   timelineFragment,
@@ -107,6 +108,43 @@ describe('views (hostile message content, INV-21)', () => {
     ]).toString();
     expect(out.indexOf('second')).toBeLessThan(out.indexOf('first'));
     expect(out).toContain('<details class="raw">');
+  });
+
+  it('names windows as the agents see them, and recipients plainly (MESSAGE_SPEC §1.1)', () => {
+    const text = (markup: { toString(): string }) =>
+      markup
+        .toString()
+        .replace(/<details[\s\S]*<\/details>/, '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/\s+/g, ' ');
+    const here = text(
+      timelineFragment(
+        [
+          msg({
+            to: ['claude@api-10'],
+            from_session: { label: 'codex@web-10', machine: 'laptop', path: '~/proj/web' },
+          }),
+        ],
+        { machine: 'laptop', home: '/home/me' },
+      ),
+    );
+    expect(here).toContain('codex - /home/me/proj/web - 10');
+    expect(here).toContain('to claude - api - 10');
+    const elsewhere = text(
+      timelineFragment(
+        [
+          msg({
+            to: ['*'],
+            from_session: { label: 'codex@web-2', machine: 'other', path: '~/proj/web' },
+          }),
+        ],
+        { machine: 'laptop', home: '/home/me' },
+      ),
+    );
+    expect(elsewhere).toContain('codex@other - ~/proj/web - 2');
+    expect(elsewhere).toContain('to everyone');
+    expect(recipientName('human:abyud')).toBe('abyud (human)');
+    expect(recipientName('agent:claude-api@laptop')).toBe('claude-api@laptop');
   });
 
   it('says so when there is nothing to show', () => {

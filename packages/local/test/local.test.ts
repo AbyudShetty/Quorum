@@ -15,10 +15,12 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   acquireStartLock,
+  addGitWorktree,
   bootstrapPath,
   checkPrivate,
   defaultDataDir,
   discoveryPath,
+  GitWorktreeError,
   ensurePrivateDir,
   isProcessAlive,
   lockPath,
@@ -239,5 +241,46 @@ describe('writePrivateFile', () => {
     await Promise.all([...reads, ...writes]);
     expect(Number(await readFile(path, 'utf8'))).toBeGreaterThan(0);
     expect(readdirSync(join(path, '..')).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+});
+
+describe('addGitWorktree (the one git command `quorum worktree` runs, INV-10)', () => {
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], {
+      cwd,
+      stdio: 'pipe',
+    });
+
+  it('creates the working tree on a quorum/<agent> branch', async () => {
+    const parent = tempDir();
+    const repo = join(parent, 'proj');
+    mkdirSync(repo);
+    git(repo, 'init', '-q');
+    writeFileSync(join(repo, 'a.txt'), 'a');
+    git(repo, 'add', 'a.txt');
+    git(repo, 'commit', '-q', '-m', 'first');
+    const dir = join(parent, 'proj-codex-web');
+    await addGitWorktree({ repo, dir, branch: 'quorum/codex-web' });
+    expect(readFileSync(join(dir, 'a.txt'), 'utf8')).toBe('a');
+    expect(git(dir, 'branch', '--show-current').toString().trim()).toBe('quorum/codex-web');
+  });
+
+  it('runs nothing for another branch shape or a path git could read as an option', async () => {
+    const dir = tempDir();
+    for (const bad of [
+      { repo: dir, dir: join(dir, 'x'), branch: 'main' },
+      { repo: dir, dir: join(dir, 'x'), branch: 'quorum/--force' },
+      { repo: dir, dir: '--upload-pack=evil', branch: 'quorum/a' },
+      { repo: 'relative', dir: join(dir, 'x'), branch: 'quorum/a' },
+    ]) {
+      await expect(addGitWorktree(bad)).rejects.toBeInstanceOf(GitWorktreeError);
+    }
+  });
+
+  it('reports what git said when it refuses', async () => {
+    const notARepo = tempDir();
+    await expect(
+      addGitWorktree({ repo: notARepo, dir: join(notARepo, 'x'), branch: 'quorum/a' }),
+    ).rejects.toThrow(/git worktree add failed/);
   });
 });

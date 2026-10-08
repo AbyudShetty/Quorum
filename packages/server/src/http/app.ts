@@ -1,7 +1,16 @@
 // The /v1 HTTP API on Fastify (ARCHITECTURE §5). Only translation lives here: requests to service
 // calls, DomainErrors to ErrorResponses (MESSAGE_SPEC §6). Every rule is in the service or core.
+import { homedir } from 'node:os';
 import { DomainError } from '@quorum/core';
 import { type DeliveredEnvelope, validateApiPayload } from '@quorum/schemas';
+import {
+  CONTENT_SECURITY_POLICY,
+  createWebHandler,
+  errorPage,
+  messagesFromExport,
+  type TimelineSource,
+  type WebHandler,
+} from '@quorum/web';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { LocalBootstrap } from '../local/bootstrap.js';
 import type { ServerInstance } from '../local/instance.js';
@@ -84,6 +93,43 @@ const toResponse = (error: unknown): { status: number; body: unknown; retryAfter
   };
 };
 
+/** The web UI session cookie (ARCHITECTURE §6). */
+const UI_COOKIE = 'quorum_ui';
+
+/** One cookie's value from the Cookie header, if present. */
+const cookie = (request: FastifyRequest, name: string): string | undefined => {
+  for (const part of (request.headers.cookie ?? '').split(';')) {
+    const [key, ...value] = part.trim().split('=');
+    if (key === name) return value.join('=');
+  }
+  return undefined;
+};
+
+/** A small HTML page with the UI's security headers (sign-in problems). */
+const uiPage = (reply: FastifyReply, status: number, message: string) =>
+  reply
+    .code(status)
+    .header('content-security-policy', CONTENT_SECURITY_POLICY)
+    .header('referrer-policy', 'no-referrer')
+    .header('content-type', 'text/html; charset=utf-8')
+    .send(errorPage(status, message).toString());
+
+/** The timeline as one human sees it: their workspaces and the messages in their export. */
+const timelineOf = (quorum: Quorum, viewer: Caller): TimelineSource => ({
+  workspaces: () =>
+    Promise.resolve(
+      quorum.listWorkspaces(viewer).workspaces.map((w) => ({ id: w.id, name: w.name })),
+    ),
+  messages: async (workspace, limit) =>
+    messagesFromExport(await quorum.exportEvents(viewer, workspace)).slice(-limit),
+});
+
+/** For the public asset routes, which never read data. */
+const NO_TIMELINE: TimelineSource = {
+  workspaces: () => Promise.resolve([]),
+  messages: () => Promise.resolve([]),
+};
+
 const bearer = (request: FastifyRequest): string | undefined => {
   const header = request.headers.authorization;
   return header?.startsWith('Bearer ') ? header.slice(7).trim() : undefined;
@@ -121,6 +167,7 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
   const openLimit = new RateLimiter(options.openRequestsPerMinute ?? 120, 60_000);
   const authFailureLimit = new RateLimiter(30, 60_000);
   const bootstrapLimit = new RateLimiter(10, 60_000);
+  const uiLoginLimit = new RateLimiter(20, 60_000);
 
   const caller = (request: FastifyRequest): Caller => {
     try {
@@ -230,6 +277,70 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
     }
     return quorum.signInOwner();
   });
+
+  // --- web UI (ARCHITECTURE §7): `quorum ui` → one-time link → session cookie → timeline -------
+
+  app.post('/v1/auth/ui-link', async (request, reply) =>
+    reply.code(201).send(quorum.createUiLink(caller(request))),
+  );
+
+  // The link is opened in the browser: spend it, set the session cookie, go to the timeline. The
+  // Host check above already ran (INV-26); the cookie is HttpOnly, Secure (localhost is a secure
+  // context) and SameSite=Strict (INV-21).
+  app.get('/login', async (request, reply) => {
+    uiLoginLimit.take(request.ip, 'web sign-in attempts');
+    const code = (request.query as Record<string, unknown>).code;
+    let opened: { session: string; maxAgeSeconds: number };
+    try {
+      opened = quorum.openUiSession(typeof code === 'string' ? code : undefined);
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+      return uiPage(reply, 401, error.message + ' Run `quorum ui` again.');
+    }
+    return reply
+      .code(303)
+      .header('referrer-policy', 'no-referrer')
+      .header(
+        'set-cookie',
+        `${UI_COOKIE}=${opened.session}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${String(opened.maxAgeSeconds)}`,
+      )
+      .header('location', '/')
+      .send();
+  });
+
+  // The timeline and its assets. Pages need the session; the vendored assets are public files.
+  const webHandlers = new Map<string, WebHandler>();
+  const web = async (request: FastifyRequest, reply: FastifyReply, needsSession: boolean) => {
+    let viewer: Caller | undefined;
+    if (needsSession) {
+      try {
+        viewer = quorum.authenticateUi(cookie(request, UI_COOKIE));
+      } catch {
+        authFailureLimit.take(request.ip, 'failed sign-ins');
+        return uiPage(
+          reply,
+          401,
+          'Not signed in. Run `quorum ui` in a terminal and open its link.',
+        );
+      }
+    }
+    const key = viewer?.id ?? '';
+    let handler = webHandlers.get(key);
+    if (!handler) {
+      handler = createWebHandler(viewer ? timelineOf(quorum, viewer) : NO_TIMELINE, {
+        display: { machine: quorum.machine, home: homedir() },
+      });
+      webHandlers.set(key, handler);
+    }
+    void reply.hijack();
+    await handler(request.raw, reply.raw);
+  };
+  for (const path of ['/', '/fragment/timeline']) {
+    app.get(path, (request, reply) => web(request, reply, true));
+  }
+  for (const path of ['/static/htmx.min.js', '/static/app.css']) {
+    app.get(path, (request, reply) => web(request, reply, false));
+  }
 
   // --- setup -----------------------------------------------------------------------------------
 

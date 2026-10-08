@@ -14,9 +14,11 @@ export {
   type WorkspaceSummary,
 } from './source.js';
 export {
+  type DisplayOptions,
   errorPage,
   layout,
   messageCard,
+  recipientName,
   type PageModel,
   summaryOf,
   timelineFragment,

@@ -20,3 +20,9 @@ export {
   type StartLock,
 } from './start-lock.js';
 export { FileLockTimeout, type FileLockOptions, withFileLock } from './file-lock.js';
+export {
+  addGitWorktree,
+  GitWorktreeError,
+  type GitWorktreeOptions,
+  QUORUM_BRANCH,
+} from './git-worktree.js';

@@ -309,6 +309,12 @@ export interface LocalBootstrapResponse {
   credentials: TokenPair;
 }
 
+export interface UiLink {
+  code: string;
+  path: string;
+  expires_in: number;
+}
+
 export interface SessionCreate {
   vendor_session_id: string;
   root: string;
@@ -425,6 +431,7 @@ export interface ApiPayloads {
   tokenPair: TokenPair;
   localBootstrapRequest: LocalBootstrapRequest;
   localBootstrapResponse: LocalBootstrapResponse;
+  uiLink: UiLink;
   workspaceCreate: WorkspaceCreate;
   workspace: Workspace;
   workspaceList: WorkspaceList;
