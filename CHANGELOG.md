@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added (Phase 1)
 
+- Phase 1 security review fixes:
+  - INV-30: `quorum attach` and `quorum worktree` ask the person to confirm at a terminal; without one (an agent's shell, a pipe) they refuse, and there is no flag to skip it.
+  - THREAT_MODEL §6 item 7(b) is now true: `attach` adds `Read`/`Edit` deny rules for the Quorum data directory to Claude Code's `.claude/settings.local.json`; `detach` removes them.
+  - INV-28: a session must lie inside its agent's attached folder (`session.outside_attachment`), so an agent cannot raise or dodge shared-working-tree warnings elsewhere; a claimed `display_root` is used only when it names the same folder.
+  - INV-10: the wording now lists all four places that can start a process, and a conformance test pins that list.
+  - CLI: unknown or malformed options are usage errors (exit 64), not crashes.
 - Web timeline redesign: windows and senders named as the agents see them (`codex - C:projweb - 10`, recipients `claude - api - 10` or `everyone`), an avatar per tool, local times grouped under Today / Yesterday, a labelled workspace switcher and a live indicator; message ids, threads and raw JSON fold away under "details". CLI commands that take `--attachment` now default to the attachment of the current folder or its nearest attached parent (ARCHITECTURE §12).
 - `quorum ui` (ARCHITECTURE §6, §7): prints a one-time link (single use, 60 s) to the read-only timeline, which the local server now serves at its root behind its Host check (INV-26). `POST /v1/auth/ui-link` (humans only, `uiLink` schema) issues the code (`qrm_ul_…`); `GET /login` spends it and sets the `quorum_ui` session cookie (`qrm_us_…`, 12 h, `HttpOnly; Secure; SameSite=Strict`, INV-21). Both token kinds are caught by the secret scanner (INV-14). `@quorum/server` now depends on `@quorum/web`.
 - `quorum worktree [--attachment <at_id>] [--agent <name>]` (ARCHITECTURE §13): creates `../<repo>-<agent>` on branch `quorum/<agent>` with `git worktree add` and moves the attachment there under the same agent name (same address, inbox and history). The git call lives in `@quorum/local` (`addGitWorktree`: absolute paths, `quorum/` branches only, no shell); INV-10 now names it as the second process the CLI can start, only from the human's command.

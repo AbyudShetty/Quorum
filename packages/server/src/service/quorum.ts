@@ -971,6 +971,25 @@ export class Quorum {
     }
     const body = this.#check('sessionCreate', input);
     const platform = platformOf();
+    // A window works inside its agent's attached folder: a session elsewhere could raise or dodge
+    // shared-working-tree warnings for folders the agent was never attached to (INV-28).
+    const attached = this.#registry.attachmentOfAgent(caller.id);
+    const rootKey = pathKey(body.root, platform);
+    if (
+      attached &&
+      rootKey !== attached.root_key &&
+      !rootKey.startsWith(
+        attached.root_key.endsWith('/') ? attached.root_key : `${attached.root_key}/`,
+      )
+    ) {
+      throw new DomainError(
+        'invalid',
+        'session.outside_attachment',
+        'A session must be inside the folder this agent is attached to.',
+        `Start the agent in ${attached.root} (or a folder inside it).`,
+        '/root',
+      );
+    }
     const worktreeKey = pathKey(body.git?.worktree_root ?? body.root, platform);
     const nowMs = this.#clock().getTime();
     const shared = sharedWorktreeWith(
@@ -998,7 +1017,15 @@ export class Quorum {
       .find((n) => n > 0 && !held.has(n));
     const number = resumed ?? Math.max(0, ...everyone.map((s) => numberOf(s))) + 1;
     const label = `${tool}@${folder}-${String(number)}`;
-    const displayRoot = body.display_root ?? homeShortened(body.root, homedir());
+    // How others see the folder. The client's `~` form is used only when it names the same folder
+    // (its last part matches the root's); otherwise the server shows the root itself, so a window
+    // cannot present itself as another folder (MESSAGE_SPEC §1.1).
+    const claimed = body.display_root;
+    const lastPart = (p: string) => labelSlug(p.split(/[\\/]/).filter(Boolean).at(-1) ?? '');
+    const displayRoot =
+      claimed && lastPart(claimed) === lastPart(body.root)
+        ? claimed
+        : homeShortened(body.root, homedir());
     return this.#commit(() => {
       // Windows that went away without saying so give their numbers back.
       for (const old of stale) this.#registry.endSession(old.id, now);

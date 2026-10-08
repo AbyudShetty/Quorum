@@ -85,6 +85,12 @@ export interface CliEnv {
    * bring their own server.
    */
   startServer?: (dataDir: string) => Promise<void>;
+  /**
+   * Ask the person at the terminal (INV-30: binding a folder to a workspace is confirmed by a human,
+   * never done by an agent for itself). Resolves false when nobody can answer; there is no flag to
+   * skip it, since an agent could pass a flag.
+   */
+  confirm?: (question: string) => Promise<boolean>;
   /** The hook payload a vendor writes to stdin (`quorum hook`). */
   stdin?: () => Promise<string>;
   /** How vendors start `quorum` (default: by name if on the PATH, else Node + this CLI). */
@@ -191,8 +197,10 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
         throw new UsageError(`Unknown command "${command}". Run \`quorum help\`.`);
     }
   } catch (error) {
-    if (error instanceof UsageError) {
-      env.err(`${error.message}\n`);
+    // Unknown or malformed options (node:util parseArgs) are usage errors too, not crashes.
+    const parseError = String((error as { code?: unknown }).code).startsWith('ERR_PARSE_ARGS_');
+    if (error instanceof UsageError || parseError) {
+      env.err(`${(error as Error).message}\n`);
       return 64;
     }
     if (error instanceof NeedsActionError || error instanceof GitWorktreeError) {
@@ -626,7 +634,13 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
     // Bring the folder's hooks and MCP config up to this version of Quorum.
     if (info && !values['no-config']) {
       const command = await (env.quorumCommand ?? quorumCommand)();
-      const config = await writeVendorConfig(info.vendor, info.root, values.update, command);
+      const config = await writeVendorConfig(
+        info.vendor,
+        info.root,
+        values.update,
+        command,
+        dataDirOf(env),
+      );
       env.out(describeChanges(config.changes));
     }
     return 0;
@@ -692,7 +706,17 @@ interface AttachFolder {
   wakeTypes?: MessageType[];
   lease: 'warn' | 'block';
   noConfig?: boolean;
+  /** The person already confirmed (`quorum worktree` asks once, before git runs). */
+  confirmed?: boolean;
 }
+
+/** Ask before binding a folder to a workspace; refuse when nobody at a terminal says yes. */
+const confirmBinding = async (env: CliEnv, question: string): Promise<void> => {
+  if (await (env.confirm ?? (() => Promise.resolve(false)))(question)) return;
+  throw new UsageError(
+    'Not confirmed. Attaching a folder must be confirmed by you in a terminal (INV-30): an agent cannot attach folders for itself. Run the command yourself and answer y.',
+  );
+};
 
 /**
  * Create the attachment, keep its credentials in the keychain (never in a file or the project
@@ -704,6 +728,12 @@ const attachFolder = async (
   folder: AttachFolder,
 ): Promise<{ id: string; agent: string }> => {
   const { root, vendor } = folder;
+  if (!folder.confirmed) {
+    await confirmBinding(
+      env,
+      `Attach ${root} as a ${vendor} agent${folder.name ? ` (${folder.name})` : ''} to workspace ${folder.workspaces.join(', ')}? Agents working in this folder will read and send messages there.`,
+    );
+  }
   const created = await client.createAttachment({
     root,
     vendor,
@@ -739,7 +769,7 @@ const attachFolder = async (
     return { id, agent: created.agent.address };
   }
   const command = await (env.quorumCommand ?? quorumCommand)();
-  const config = await writeVendorConfig(vendor, root, id, command);
+  const config = await writeVendorConfig(vendor, root, id, command, dataDirOf(env));
   env.out(describeChanges(config.changes));
   if (config.steps.length > 0) {
     env.out(`\nNext:\n${config.steps.map((step) => `- ${step}`).join('\n')}\n`);
@@ -787,7 +817,8 @@ const detachFolder = async (env: CliEnv, client: QuorumClient, id: string): Prom
   await env.store.remove(id);
   await removeAttachment(dataDirOf(env), id);
   env.out(`Detached ${id}. Its credentials were removed from the keychain.\n`);
-  if (info) env.out(describeChanges(await removeVendorConfig(info.vendor, info.root, id)));
+  if (info)
+    env.out(describeChanges(await removeVendorConfig(info.vendor, info.root, id, dataDirOf(env))));
 };
 
 /**
@@ -840,6 +871,10 @@ const worktree = async (args: string[], env: CliEnv): Promise<number> => {
   ) {
     throw new UsageError(`${dir} already exists. Pass --agent <another name>, or remove it.`);
   }
+  await confirmBinding(
+    env,
+    `Create ${dir} (branch quorum/${agent}) and move agent ${info.agent} there? ${info.root} will be detached and the new folder attached to workspace ${info.workspaces.join(', ')}.`,
+  );
   await addGitWorktree({ repo, dir, branch: `quorum/${agent}` });
   env.out(`Created ${dir} on branch quorum/${agent}.\n`);
   // The attachment may be a subfolder of the repository: the same subfolder in the new tree.
@@ -856,6 +891,7 @@ const worktree = async (args: string[], env: CliEnv): Promise<number> => {
       wake: info.wake,
       ...(info.wake_types ? { wakeTypes: info.wake_types as MessageType[] } : {}),
       lease: info.lease_enforcement,
+      confirmed: true,
     });
   } catch (error) {
     env.err(

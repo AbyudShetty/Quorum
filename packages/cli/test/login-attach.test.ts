@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadAttachment, MemoryCredentialStore } from '@quorum/adapter-mcp';
+import { listAttachments, loadAttachment, MemoryCredentialStore } from '@quorum/adapter-mcp';
 import { bootstrapPath } from '@quorum/local';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type FakeServer, startFakeServer } from '../../../tests/fakes/fake-server/fake-server.js';
@@ -40,6 +40,7 @@ const setup = async () => {
     out: (t) => out.push(t),
     err: (t) => err.push(t),
     store,
+    confirm: () => Promise.resolve(true), // the person at the terminal says yes (INV-30)
     dataDir,
     cwd: project,
   };
@@ -198,6 +199,28 @@ describe('quorum attach / detach', () => {
     const viaShortName: CliEnv = { ...w.env, dataDir: shortName };
     expect(await main(['attach', '--vendor', 'codex', w.dataDir], viaShortName)).toBe(64);
     expect(w.errText()).toContain('Quorum data directory');
+  });
+
+  it('attaches only when the person at the terminal says yes, never on its own (INV-30)', async () => {
+    const { env, errText, workspace, dataDir } = await signedIn();
+    const asked: string[] = [];
+    const no: CliEnv = {
+      ...env,
+      confirm: (question) => {
+        asked.push(question);
+        return Promise.resolve(false);
+      },
+    };
+    expect(await main(['attach', '--vendor', 'codex', '--workspace', workspace], no)).toBe(64);
+    expect(asked[0]).toMatch(/^Attach .* as a codex agent to workspace ws_/);
+    expect(errText()).toContain('confirmed by you in a terminal');
+    expect(await listAttachments(dataDir)).toEqual([]); // nothing was created
+    // No terminal to ask at all (an agent's shell): also refused, and there is no flag to skip it.
+    const { confirm: _confirm, ...noTerminal } = env;
+    expect(await main(['attach', '--vendor', 'codex', '--workspace', workspace], noTerminal)).toBe(
+      64,
+    );
+    expect(await main(['attach', '--vendor', 'codex', '--yes'], env)).toBe(64); // unknown option
   });
 
   it('changes wake settings with --update, and the local record follows', async () => {

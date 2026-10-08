@@ -404,7 +404,10 @@ describe('attach (ARCHITECTURE §12, D-12, INV-25)', () => {
 describe('presence and shared working trees (INV-28)', () => {
   it('does not warn about a session whose agent went silent', async () => {
     const h = await start();
-    const { a, b } = await setUp(h);
+    const { attach } = await setUp(h);
+    // Two agents attached to the same folder (Claude Code and Codex in one repo).
+    const a = await attach('shared', 'claude-code');
+    const b = await attach('shared', 'codex');
     const root = h.folder('shared');
     const register = (token: string) =>
       h.request('POST', '/v1/sessions', { token, body: { vendor_session_id: ulid(), root } });
@@ -768,5 +771,65 @@ describe('web UI sign-in: quorum ui → one-time link → session cookie (ARCHIT
       headers: { host: 'evil.example:51234' },
     });
     expect(evil.status).not.toBe(303);
+  });
+});
+
+describe('sessions stay inside their attachment (INV-28, MESSAGE_SPEC §1.1)', () => {
+  it('refuses a session outside the agent’s attached folder', async () => {
+    const h = await start();
+    const { a } = await setUp(h); // a is attached to "api"
+    const register = (root: string, extra: Record<string, unknown> = {}) =>
+      h.request('POST', '/v1/sessions', {
+        token: a.token,
+        body: { vendor_session_id: ulid(), root, ...extra },
+      });
+    expect((await register(h.folder('web'))).status).toBe(400);
+    expect((await register(h.folder('web'))).body).toMatchObject({
+      error: { code: 'session.outside_attachment' },
+    });
+    expect((await register(h.folder('api'))).status).toBe(201);
+    expect((await register(join(h.folder('api'), 'src'))).status).toBe(201); // a subfolder is fine
+  });
+
+  it('shows the real folder when a client claims another one', async () => {
+    const h = await start();
+    const { a, b, workspace } = await setUp(h);
+    const created = await h.request('POST', '/v1/sessions', {
+      token: a.token,
+      body: { vendor_session_id: ulid(), root: h.folder('api'), display_root: '~/somewhere/web' },
+    });
+    const session = (created.body as { session_id: string }).session_id;
+    await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      headers: { 'quorum-session': session },
+      body: note(workspace, a.address, [b.address], 'hi'),
+    });
+    const inbox = await h.request('GET', `/v1/workspaces/${workspace}/inbox`, { token: b.token });
+    const shown = (inbox.body as { messages: { from_session?: { path?: string } }[] }).messages[0];
+    expect(shown?.from_session?.path).toMatch(/api$/);
+  });
+});
+
+describe('window labels respect workspace membership (INV-12)', () => {
+  it('cannot reach a window of an agent outside the workspace', async () => {
+    const h = await start();
+    const { human, a, workspace, attach } = await setUp(h);
+    const other = await h.request('POST', '/v1/workspaces', {
+      token: human.token,
+      body: { name: 'elsewhere' },
+    });
+    const outsider = await attach('secret', 'codex', [(other.body as { id: string }).id]);
+    const opened = await h.request('POST', '/v1/sessions', {
+      token: outsider.token,
+      body: { vendor_session_id: ulid(), root: h.folder('secret') },
+    });
+    const label = (opened.body as { label: string }).label;
+    expect(label).toBe('codex@secret-1');
+    const reply = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, [label], 'can you hear me?'),
+    });
+    expect(reply.status).toBe(400);
+    expect(reply.text).not.toContain('can you hear me');
   });
 });

@@ -124,7 +124,21 @@ const writeJsonFile = async (file: string, value: unknown): Promise<void> => {
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 };
 
-/** Merge this attachment's hooks into a vendor hooks file. */
+/**
+ * Claude Code permission rules that keep the agent's own file tools out of the Quorum data
+ * directory (THREAT_MODEL §6 item 7(b), defence in depth: the data directory holds the hook state,
+ * the outbox and, briefly, the bootstrap code). Absolute paths are written `//<path>`, with Windows
+ * paths in POSIX form (`C:\Users\x` → `//c/Users/x`).
+ */
+export const dataDirDenyRules = (dataDir: string): string[] => {
+  const posix = dataDir
+    .replace(/^([A-Za-z]):[\\/]?/, (_m, drive: string) => `/${drive.toLowerCase()}/`)
+    .replaceAll('\\', '/')
+    .replace(/\/+$/, '');
+  const anchored = `/${posix.startsWith('/') ? posix : `/${posix}`}`;
+  return [`Read(${anchored}/**)`, `Edit(${anchored}/**)`];
+};
+
 /** Claude Code's list of pre-approved `.mcp.json` servers (a settings key). */
 const APPROVED_KEY = 'enabledMcpjsonServers';
 const MCP_NAME = 'quorum';
@@ -136,6 +150,8 @@ const mergeHooks = async (
   approveMcp = false,
   /** Further hooks for this attachment, by vendor event name. */
   extra: readonly { event: string; entry: Record<string, unknown> }[] = [],
+  /** `permissions.deny` rules to add (kept if already there). */
+  deny: readonly string[] = [],
 ): Promise<ConfigChange> => {
   const existed = await exists(file);
   const settings = await readJsonFile(file);
@@ -155,6 +171,11 @@ const mergeHooks = async (
       : [];
     if (!approved.includes(MCP_NAME)) settings[APPROVED_KEY] = [...approved, MCP_NAME];
   }
+  if (deny.length > 0) {
+    const permissions = (settings.permissions ??= {}) as { deny?: unknown };
+    const current = Array.isArray(permissions.deny) ? (permissions.deny as unknown[]) : [];
+    permissions.deny = [...current, ...deny.filter((rule) => !current.includes(rule))];
+  }
   await writeJsonFile(file, settings);
   return { file, action: existed ? 'updated' : 'created' };
 };
@@ -163,6 +184,8 @@ const removeHooks = async (
   file: string,
   attachment: string,
   unapproveMcp = false,
+  /** `permissions.deny` rules to take out again. */
+  deny: readonly string[] = [],
 ): Promise<ConfigChange | undefined> => {
   if (!(await exists(file))) return undefined;
   const settings = await readJsonFile(file);
@@ -174,6 +197,16 @@ const removeHooks = async (
     if (rest.length > 0) settings[APPROVED_KEY] = rest;
     else Reflect.deleteProperty(settings, APPROVED_KEY);
     changed = true;
+  }
+  const permissions = settings.permissions as { deny?: unknown } | undefined;
+  if (deny.length > 0 && Array.isArray(permissions?.deny)) {
+    const rest = (permissions.deny as unknown[]).filter((rule) => !deny.includes(rule as string));
+    if (rest.length !== permissions.deny.length) {
+      if (rest.length > 0) permissions.deny = rest;
+      else Reflect.deleteProperty(permissions, 'deny');
+      if (Object.keys(permissions).length === 0) Reflect.deleteProperty(settings, 'permissions');
+      changed = true;
+    }
   }
   if (!changed) return undefined;
   await writeJsonFile(file, settings);
@@ -272,6 +305,8 @@ export const writeVendorConfig = async (
   root: string,
   attachment: string,
   command: QuorumCommand,
+  /** The Quorum data directory: Claude Code's own file tools are kept out of it. */
+  dataDir?: string,
 ): Promise<VendorConfigResult> => {
   const mcpArgs = ['mcp', '--attachment', attachment];
   const hookArgs = (v: string, event: HookEvent) => ['hook', v, event, '--attachment', attachment];
@@ -307,6 +342,7 @@ export const writeVendorConfig = async (
           asyncRewake: true,
         },
       })),
+      dataDir ? dataDirDenyRules(dataDir) : [],
     );
     const changes = [mcpChange, change];
     const written = [mcpWritten ? [mcpFile] : [], change.action === 'skipped' ? [] : [settings]];
@@ -387,6 +423,7 @@ export const removeVendorConfig = async (
   vendor: string,
   root: string,
   attachment: string,
+  dataDir?: string,
 ): Promise<ConfigChange[]> => {
   const changes: ConfigChange[] = [];
   if (vendor === 'claude-code') {
@@ -396,6 +433,7 @@ export const removeVendorConfig = async (
       join(root, '.claude', 'settings.local.json'),
       attachment,
       mcp !== undefined,
+      mcp !== undefined && dataDir ? dataDirDenyRules(dataDir) : [],
     );
     if (change) changes.push(change);
   }

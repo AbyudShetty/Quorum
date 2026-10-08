@@ -34,6 +34,7 @@ beforeAll(async () => {
     out: (t) => out.push(t),
     err: (t) => err.push(t),
     store: new MemoryCredentialStore(),
+    confirm: () => Promise.resolve(true), // the person at the terminal says yes (INV-30)
     dataDir: server.dataDir,
     killServer: () => void server.close(),
   };
@@ -122,12 +123,18 @@ describe('IC2: CLI and adapter against the real local server', () => {
         credentialKey: attachment,
         store: env.store,
       });
+    // Codex attached to the same folder as Claude Code: one working tree, two agents.
+    const codexInApi = await run('attach', api, '--vendor', 'codex');
+    const attachmentC = /\((at_[0-9A-Z]{26})\)/.exec(codexInApi.out)?.[1] ?? '';
     const clientA = await connect(attachmentA);
-    const clientB = await connect(attachmentB);
+    const clientC = await connect(attachmentC);
     const first = await startSession({ client: clientA, root: api });
-    const second = await startSession({ client: clientB, root: api });
+    const second = await startSession({ client: clientC, root: api });
     expect(first?.sharedWorktreeWith).toEqual([]);
     expect(second?.sharedWorktreeWith).toEqual([agentA]);
+    // A window outside its own attached folder is refused: no warnings for other people's trees.
+    const clientB = await connect(attachmentB);
+    expect(await startSession({ client: clientB, root: api })).toBeUndefined();
     const [workspace] = await clientA.workspaces();
     const page = await clientA.inbox(workspace?.id ?? '', { after: 0 });
     expect(
@@ -200,9 +207,11 @@ describe('IC2: CLI and adapter against the real local server', () => {
     // Without --attachment: the attachment of the current folder (or its nearest attached parent).
     const saved = env.cwd;
     try {
-      env.cwd = join(api, 'src'); // a subfolder of the Claude Code folder
+      env.cwd = join(web, 'src'); // a subfolder of the Codex folder
       await mkdir(env.cwd, { recursive: true });
       expect((await run('worktree')).err).toContain('not in a git repository'); // found it
+      env.cwd = api; // Claude Code and Codex are both attached here: it asks which one
+      expect((await run('worktree')).err).toContain('Several agents are attached here');
       env.cwd = root; // attached nowhere
       expect((await run('worktree')).err).toContain('This folder is not attached');
     } finally {

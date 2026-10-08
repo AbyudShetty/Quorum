@@ -40,6 +40,33 @@ describe('INV-10: no way to run things (static)', () => {
   });
 });
 
+describe('INV-10: the only places that can start a process (static)', () => {
+  /** Each starts one fixed program, never anything from a message (THREAT_MODEL INV-10). */
+  const ALLOWED: Record<string, string> = {
+    'packages/server/src/local/spawn.ts': "Quorum's own local server (auto-start)",
+    'packages/local/src/git-worktree.ts': '`git worktree add` for `quorum worktree`',
+    'packages/local/src/windows-acl.ts': 'whoami, icacls, PowerShell: the data-directory ACL',
+    'packages/codex-bridge/src/daemon.ts': '`codex app-server proxy` for Codex idle wake',
+  };
+
+  it('is exactly the reviewed list', () => {
+    const everywhere = readdirSync(join(root, 'packages'), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .flatMap((e) => {
+        try {
+          return sources(join('packages', e.name, 'src'));
+        } catch {
+          return [];
+        }
+      });
+    const spawning = everywhere
+      .filter((f) => /\b(child_process|worker_threads)\b/.test(readFileSync(f, 'utf8')))
+      .map((f) => f.slice(root.length + 1).replaceAll('\\', '/'))
+      .sort();
+    expect(spawning).toEqual(Object.keys(ALLOWED).sort());
+  });
+});
+
 describe('INV-10: messages that ask for execution stay text', () => {
   let world: World | undefined;
   let mcp: Client | undefined;

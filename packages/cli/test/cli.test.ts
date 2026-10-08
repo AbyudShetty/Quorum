@@ -48,6 +48,7 @@ const setup = async () => {
     out: (t) => out.push(t),
     err: (t) => err.push(t),
     store: w.store,
+    confirm: () => Promise.resolve(true),
     dataDir: w.dataDir,
   };
   return { w, env, out, err, text: () => out.join(''), errText: () => err.join('') };

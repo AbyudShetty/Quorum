@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  dataDirDenyRules,
   type QuorumCommand,
   quorumOnPath,
   removeVendorConfig,
@@ -247,5 +248,33 @@ describe('quorumOnPath', () => {
     expect(await quorumOnPath(dir)).toBe(false);
     await writeFile(join(dir, process.platform === 'win32' ? 'quorum.cmd' : 'quorum'), '');
     expect(await quorumOnPath(dir)).toBe(true);
+  });
+});
+
+describe('Claude Code: the agent keeps out of the Quorum data directory (THREAT_MODEL §6 item 7)', () => {
+  it('writes the absolute path the way Claude Code reads it, on Windows and elsewhere', () => {
+    expect(dataDirDenyRules('C:\\Users\\abyud\\AppData\\Local\\Quorum')).toEqual([
+      'Read(//c/Users/abyud/AppData/Local/Quorum/**)',
+      'Edit(//c/Users/abyud/AppData/Local/Quorum/**)',
+    ]);
+    expect(dataDirDenyRules('/home/abyud/.quorum/')).toEqual([
+      'Read(//home/abyud/.quorum/**)',
+      'Edit(//home/abyud/.quorum/**)',
+    ]);
+  });
+
+  it('adds deny rules next to the person’s own, and detach takes back only ours', async () => {
+    const root = await project();
+    const file = join(root, '.claude', 'settings.local.json');
+    await mkdir(join(root, '.claude'));
+    await writeFile(file, JSON.stringify({ permissions: { deny: ['Read(./.env)'] } }));
+    const dataDir = 'C:\\Users\\abyud\\AppData\\Local\\Quorum';
+    await writeVendorConfig('claude-code', root, ID, absolute, dataDir);
+    await writeVendorConfig('claude-code', root, ID, absolute, dataDir); // idempotent
+    expect((await json(file)).permissions).toMatchObject({
+      deny: ['Read(./.env)', ...dataDirDenyRules(dataDir)],
+    });
+    await removeVendorConfig('claude-code', root, ID, dataDir);
+    expect((await json(file)).permissions).toEqual({ deny: ['Read(./.env)'] });
   });
 });
