@@ -5,7 +5,7 @@
 // Everything is a function of (argv, env) so tests can run it against the fake server without
 // spawning processes. Output that contains other participants' messages is always framed as
 // untrusted data (INV-9), because a person may paste it to an agent.
-import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createIdFactory, parseJsonl, verifyChain } from '@quorum/core';
@@ -133,8 +133,8 @@ Usage: quorum <command> [options]
                                              Show new messages (framed as untrusted data)
   send   --attachment <at_id> --to <address> [--to ...] --text <text> [--workspace <ws>]
                                              Send a note as that agent
-  export --workspace <ws>                    Print the workspace event log (JSON Lines); humans only
-  verify <file.jsonl> --workspace <ws>       Check an exported log's hash chain
+  export [--workspace <ws>] [--out <file>]   The workspace event log (JSON Lines, UTF-8); humans only
+  verify <file.jsonl> [--workspace <ws>]     Check an exported log's hash chain
   mcp    --attachment <at_id>                Run the MCP server for an agent (used by Claude Code / Codex)
   hook   <claude-code|codex> <session-start|prompt|post-tool|stop|session-end> --attachment <at_id>
                                              Run one vendor hook (reads its JSON on stdin; used by
@@ -383,12 +383,50 @@ const send = async (args: string[], env: CliEnv): Promise<number> => {
   }
 };
 
+/** The workspace a human command is about: the one given, else the human's only one. */
+const humanWorkspace = async (client: QuorumClient, given: string | undefined): Promise<string> => {
+  if (given) return given;
+  const mine = await client.workspaces();
+  if (mine.length === 1 && mine[0]) return mine[0].id;
+  throw new UsageError(
+    mine.length === 0
+      ? 'You have no workspace yet.'
+      : `Pass --workspace <ws_id>; yours are: ${mine.map((w) => `${w.id} (${w.name})`).join(', ')}.`,
+  );
+};
+
 const exportLog = async (args: string[], env: CliEnv): Promise<number> => {
-  const { values } = parseArgs({ args, options: { workspace: { type: 'string' } }, strict: true });
-  const workspace = need(values.workspace, 'Pass --workspace <ws_id>.');
+  const { values } = parseArgs({
+    args,
+    options: { workspace: { type: 'string' }, out: { type: 'string' } },
+    strict: true,
+  });
   const client = await connect(env, HUMAN_CREDENTIAL_KEY);
-  env.out(await client.exportEvents(workspace));
+  const workspace = await humanWorkspace(client, values.workspace);
+  const log = await client.exportEvents(workspace);
+  if (!values.out) {
+    env.out(log);
+    return 0;
+  }
+  // Written as UTF-8 by us: a shell redirect may re-encode it (Windows PowerShell 5.1 writes UTF-16).
+  const file = resolve(env.cwd ?? process.cwd(), values.out);
+  await writeFile(file, log, 'utf8');
+  const events = log.split('\n').filter((line) => line.trim()).length;
+  env.out(`Wrote ${String(events)} events of ${workspace} to ${file}.\n`);
   return 0;
+};
+
+/** A text file as written by us or re-encoded by a shell: UTF-8 (with or without BOM) or UTF-16. */
+const readText = async (file: string): Promise<string> => {
+  const bytes = await readFile(file);
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const swapped = Buffer.from(bytes.subarray(2));
+    swapped.swap16();
+    return swapped.toString('utf16le');
+  }
+  const text = bytes.toString('utf8');
+  return text.startsWith('\uFEFF') ? text.slice(1) : text;
 };
 
 const verify = async (args: string[], env: CliEnv): Promise<number> => {
@@ -398,12 +436,14 @@ const verify = async (args: string[], env: CliEnv): Promise<number> => {
     allowPositionals: true,
     strict: true,
   });
-  const file = need(
+  const named = need(
     positionals[0],
-    'Pass the exported file: quorum verify <file.jsonl> --workspace <ws_id>.',
+    'Pass the exported file: quorum verify <file.jsonl> [--workspace <ws_id>].',
   );
-  const workspace = need(values.workspace, 'Pass --workspace <ws_id>.');
-  const parsed = parseJsonl(await readFile(file, 'utf8'));
+  const file = resolve(env.cwd ?? process.cwd(), named);
+  const workspace =
+    values.workspace ?? (await humanWorkspace(await connect(env, HUMAN_CREDENTIAL_KEY), undefined));
+  const parsed = parseJsonl(await readText(file));
   if (parsed.problem) {
     env.err(`${file} is not valid JSON Lines: ${JSON.stringify(parsed.problem)}\n`);
     return 1;

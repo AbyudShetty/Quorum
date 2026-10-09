@@ -8,9 +8,10 @@
 //
 // Migration seam: the message projections are rebuilt in memory from the log on start. Moving them
 // to SQL tables (or Postgres) changes this file only; the API and the log stay the same.
+import { realpathSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   acceptMessage,
   ackEvent,
@@ -128,6 +129,24 @@ export interface QuorumOptions {
 
 const notFound = (code: string, message: string, fix: string) =>
   new DomainError('not_found', code, message, fix);
+
+/**
+ * A folder's real path (symlinks, junctions and 8.3 short names resolved). A folder that does not
+ * exist (yet) keeps its own name under its nearest existing parent's real path.
+ */
+const resolvedPath = (path: string): string => {
+  const missing: string[] = [];
+  for (let current = path; ;) {
+    try {
+      return join(realpathSync.native(current), ...missing.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return path;
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+};
 
 /** `quorum ui` login links live 60 s; the web sessions they open, 12 hours. */
 const UI_LINK_MS = 60_000;
@@ -974,7 +993,11 @@ export class Quorum {
     // A window works inside its agent's attached folder: a session elsewhere could raise or dodge
     // shared-working-tree warnings for folders the agent was never attached to (INV-28).
     const attached = this.#registry.attachmentOfAgent(caller.id);
-    const rootKey = pathKey(body.root, platform);
+    // Compare real paths: the same folder can be spelled as a Windows 8.3 short name
+    // (C:\Users\RUNNER~1), through a symlink or a junction, and attachment roots are stored
+    // resolved. Only local mode can resolve: the folder is on this machine.
+    const realRoot = this.#options.mode === 'local' ? resolvedPath(body.root) : body.root;
+    const rootKey = pathKey(realRoot, platform);
     if (
       attached &&
       rootKey !== attached.root_key &&
@@ -1023,9 +1046,9 @@ export class Quorum {
     const claimed = body.display_root;
     const lastPart = (p: string) => labelSlug(p.split(/[\\/]/).filter(Boolean).at(-1) ?? '');
     const displayRoot =
-      claimed && lastPart(claimed) === lastPart(body.root)
+      claimed && lastPart(claimed) === lastPart(realRoot)
         ? claimed
-        : homeShortened(body.root, homedir());
+        : homeShortened(realRoot, homedir());
     return this.#commit(() => {
       // Windows that went away without saying so give their numbers back.
       for (const old of stale) this.#registry.endSession(old.id, now);

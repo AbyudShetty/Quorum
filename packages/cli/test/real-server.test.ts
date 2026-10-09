@@ -1,7 +1,7 @@
 // IC2 (TEAM_PLAN §3): the CLI and the adapter client against the REAL local server, not the fake.
 // Same process, real HTTP, real SQLite, real data directory; only the keychain is in memory.
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -175,6 +175,28 @@ describe('IC2: CLI and adapter against the real local server', () => {
     );
   });
 
+  it('writes the log itself, reads shell re-encodings, and catches tampering (INV-8)', async () => {
+    const file = join(root, 'out.jsonl');
+    const written = await run('export', '--out', file); // the only workspace: no --workspace needed
+    expect(written.out).toMatch(/^Wrote \d+ events of ws_/);
+    expect((await run('verify', file)).out).toContain('hash chain intact');
+    // What `quorum export > log.jsonl` produces in Windows PowerShell 5.1: UTF-16 with a BOM.
+    const text = await readFile(file, 'utf8');
+    const utf16 = join(root, 'utf16.jsonl');
+    await writeFile(
+      utf16,
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]),
+    );
+    expect((await run('verify', utf16)).out).toContain('hash chain intact');
+    // One changed word in one message: the chain no longer holds.
+    const tampered = join(root, 'tampered.jsonl');
+    expect(text).toContain('Hook delivery.');
+    await writeFile(tampered, text.replace('Hook delivery.', 'Hook DELIVERY.'));
+    const caught = await run('verify', tampered);
+    expect(caught.code).toBe(1);
+    expect(caught.err).toContain('VERIFICATION FAILED');
+  });
+
   it('moves an agent into its own git worktree, keeping its name (quorum worktree, §13)', async () => {
     const repo = await folder('mono');
     const git = (cwd: string, ...args: string[]) =>
@@ -191,7 +213,8 @@ describe('IC2: CLI and adapter against the real local server', () => {
 
     const moved = await run('worktree', '--attachment', id);
     expect(moved.code).toBe(0);
-    const dir = join(root, 'projects', 'mono-codex-mono');
+    // The CLI prints real paths; the test folder may be spelled with an 8.3 short name (CI runners).
+    const dir = join(await realpath(root), 'projects', 'mono-codex-mono');
     expect(moved.out).toContain(`Created ${dir} on branch quorum/codex-mono`);
     expect(moved.out).toMatch(/Attached .*mono-codex-mono as agent:codex-mono@/); // same name
     expect(git(dir, 'branch', '--show-current').toString().trim()).toBe('quorum/codex-mono');
