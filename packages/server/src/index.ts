@@ -22,7 +22,13 @@ export {
 } from '@quorum/local';
 export { LocalBootstrap, type LocalBootstrapOptions } from './local/bootstrap.js';
 export { loadOrCreateInstance, type ServerInstance } from './local/instance.js';
-export { checkLocalRequest, localHosts, type RequestFacts } from './local/request-guard.js';
+export {
+  checkLocalRequest,
+  classifyRequest,
+  localHosts,
+  type RequestFacts,
+  type RequestOrigin,
+} from './local/request-guard.js';
 export { type Db, openDatabase, SCHEMA_VERSION } from './storage/database.js';
 export { SqliteEventStore } from './storage/sqlite-event-store.js';
 export { type AppOptions, buildApp, MAX_REQUEST_BYTES } from './http/app.js';

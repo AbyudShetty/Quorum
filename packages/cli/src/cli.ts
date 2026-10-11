@@ -11,7 +11,11 @@ import { parseArgs } from 'node:util';
 import { createIdFactory, parseJsonl, verifyChain } from '@quorum/core';
 import {
   addGitWorktree,
+  checkPublicUrl,
   defaultDataDir,
+  readRemoteConfig,
+  removeRemoteConfig,
+  writeRemoteConfig,
   GitWorktreeError,
   isProcessAlive,
   readBootstrapCode,
@@ -125,6 +129,9 @@ Usage: quorum <command> [options]
                                              its vendor hooks and MCP config to this version
   detach <at_id>                             Disconnect an attachment and forget its credentials
   ui                                         A one-time link to the read-only web timeline
+  remote enable --public-url https://… [--port <n>] | disable | status
+                                             Let other machines reach this server through an
+                                             HTTPS front end (tailscale serve, cloudflared)
   worktree [--attachment <at_id>] [--agent <name>]
                                              Give the agent its own git worktree (../<repo>-<agent>,
                                              branch quorum/<agent>) and move its attachment there
@@ -179,6 +186,8 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
         return await worktree(rest, env);
       case 'ui':
         return await ui(rest, env);
+      case 'remote':
+        return await remote(rest, env);
       case 'status':
         return await status(rest, env);
       case 'inbox':
@@ -541,6 +550,80 @@ const stop = async (args: string[], env: CliEnv): Promise<number> => {
   // On Windows the signal ends the process at once, before it can tidy up.
   await removeStaleFiles(dataDir, found.instance_id);
   env.out(`Stopped the local server (pid ${String(found.pid)}).\n`);
+  return 0;
+};
+
+/** The loopback port remote access uses unless another is given (the front end forwards here). */
+export const DEFAULT_REMOTE_PORT = 7420;
+
+/**
+ * `quorum remote enable --public-url https://… [--port <n>]`, `remote disable`, `remote status`
+ * (Phase 1b, ARCHITECTURE §8.3). Lets other machines reach this server through an HTTPS front end
+ * on this machine (`tailscale serve`, or `cloudflared` for Cloudflare Tunnel). The server itself
+ * keeps listening on loopback only (INV-22); every request still needs a token (INV-23). Enabling
+ * is confirmed at a terminal, like attaching (an agent cannot open the server to other machines).
+ */
+const remote = async (args: string[], env: CliEnv): Promise<number> => {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { 'public-url': { type: 'string' }, port: { type: 'string' } },
+    allowPositionals: true,
+    strict: true,
+  });
+  const dataDir = dataDirOf(env);
+  const action = positionals[0] ?? 'status';
+  const current = await readRemoteConfig(dataDir);
+  const running = async () => (await readDiscovery(dataDir)) !== undefined;
+  /** Apply a change: restart a running server (clients reconnect by themselves). */
+  const restart = async () => {
+    if (!(await running())) return;
+    await stop([], env);
+    await humanClient(env); // starts it again with the new settings
+  };
+
+  if (action === 'status') {
+    env.out(
+      current
+        ? `Remote access is on: ${current.public_url} → http://127.0.0.1:${String(current.port)}.\n`
+        : 'Remote access is off: only this machine can reach the server.\n',
+    );
+    return 0;
+  }
+  if (action === 'disable') {
+    await removeRemoteConfig(dataDir);
+    await restart();
+    env.out(
+      'Remote access is off. Also stop the front end: `tailscale serve reset`, or stop cloudflared.\n',
+    );
+    return 0;
+  }
+  if (action !== 'enable') {
+    throw new UsageError('Use: quorum remote enable --public-url https://… | disable | status');
+  }
+  const checked = checkPublicUrl(
+    need(
+      values['public-url'],
+      'Pass --public-url https://<host>: the HTTPS address of this machine that other machines use (e.g. https://my-laptop.tail1234.ts.net).',
+    ),
+  );
+  if ('problem' in checked) throw new UsageError(`--public-url ${checked.problem}.`);
+  const port = values.port === undefined ? DEFAULT_REMOTE_PORT : Number(values.port);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new UsageError('--port must be a number from 1024 to 65535.');
+  }
+  await confirmBinding(
+    env,
+    `Let other machines reach this Quorum server through ${checked.url}? It listens on 127.0.0.1:${String(port)}; everything still needs a token.`,
+  );
+  await writeRemoteConfig(dataDir, { public_url: checked.url, port });
+  await restart();
+  env.out(
+    `Remote access is on: ${checked.url} → http://127.0.0.1:${String(port)}.\n\n` +
+      'Now let the front end forward to it (one of these, on this machine):\n' +
+      `  Tailscale:          tailscale serve --bg ${String(port)}\n` +
+      `  Cloudflare Tunnel:  cloudflared tunnel --url http://127.0.0.1:${String(port)}\n\n` +
+      'The server stays on while remote access is on (no idle shutdown). After a reboot, start it with any quorum command.\n',
+  );
   return 0;
 };
 

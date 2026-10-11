@@ -4,8 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added (Phase 1b)
+
+- Remote access through an HTTPS front end (ARCHITECTURE §8.3, step 1 of Phase 1b): `quorum remote enable --public-url https://… [--port <n>]`, `disable`, `status`. The server keeps listening on loopback only; `tailscale serve --bg <port>` or `cloudflared tunnel --url http://127.0.0.1:<port>` carries other machines' requests to it, so traffic between machines is always encrypted (INV-22). Settings live in `<data>/local/remote.json` (`@quorum/local`); with remote access on the server listens on the fixed port (default 7420) and never shuts down when idle. Requests to the public name or forwarded by the front end count as remote: tokens required (INV-23), rate limits per forwarded client, no local bootstrap sign-in; the public name is accepted by the Host and Origin checks (INV-26). Enabling is confirmed at a terminal.
+
 ### Added (Phase 1)
 
+- `docs/PHASE_1.md`: Phase 1 exit criteria met on 2026-10-11 (exit run by abyud; abhijna to confirm), with the evidence for each criterion and what is carried forward.
 - Phase 1 security review fixes:
   - INV-30: `quorum attach` and `quorum worktree` ask the person to confirm at a terminal; without one (an agent's shell, a pipe) they refuse, and there is no flag to skip it.
   - THREAT_MODEL §6 item 7(b) is now true: `attach` adds `Read`/`Edit` deny rules for the Quorum data directory to Claude Code's `.claude/settings.local.json`; `detach` removes them.

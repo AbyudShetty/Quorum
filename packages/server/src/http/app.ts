@@ -14,7 +14,7 @@ import {
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { LocalBootstrap } from '../local/bootstrap.js';
 import type { ServerInstance } from '../local/instance.js';
-import { checkLocalRequest } from '../local/request-guard.js';
+import { classifyRequest } from '../local/request-guard.js';
 import type { Caller, Quorum } from '../service/quorum.js';
 import { RateLimiter, RateLimitError } from '../service/rate-limit.js';
 
@@ -41,6 +41,11 @@ export interface AppOptions {
   bootstrap?: LocalBootstrap;
   /** The port being listened on, for the local Host check (INV-26). */
   port: () => number;
+  /**
+   * Remote access (Phase 1b): the HTTPS address of the front end on this machine that forwards
+   * other machines' requests to our loopback port (`tailscale serve`, `cloudflared`).
+   */
+  publicUrl?: string;
   /** Called on every request, e.g. for idle shutdown. */
   onActivity?: () => void;
   /** Requests per minute per client address on routes that need no token (INV-23). */
@@ -164,6 +169,19 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
     onConstructorPoisoning: 'error',
     return503OnClosing: true,
   });
+  /** Requests that came through the remote front end (Phase 1b). */
+  const remoteRequests = new WeakMap<FastifyRequest, boolean>();
+  const isRemote = (request: FastifyRequest) => remoteRequests.get(request) === true;
+  /**
+   * Who to rate-limit: behind the front end every request comes from 127.0.0.1, so remote ones are
+   * counted by the address the front end reports (forging it only moves a caller to another bucket).
+   */
+  const clientOf = (request: FastifyRequest): string => {
+    if (!isRemote(request)) return request.ip;
+    const forwarded = request.headers['cf-connecting-ip'] ?? request.headers['x-forwarded-for'];
+    const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
+    return `remote:${first ?? 'unknown'}`;
+  };
   const openLimit = new RateLimiter(options.openRequestsPerMinute ?? 120, 60_000);
   const authFailureLimit = new RateLimiter(30, 60_000);
   const bootstrapLimit = new RateLimiter(10, 60_000);
@@ -181,7 +199,7 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
       );
     } catch (error) {
       // Guessing tokens costs: repeated failures from one address are throttled (INV-23).
-      authFailureLimit.take(request.ip, 'failed sign-ins');
+      authFailureLimit.take(clientOf(request), 'failed sign-ins');
       throw error;
     }
   };
@@ -210,13 +228,26 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
     void reply.header('cache-control', 'no-store');
     void reply.header('x-content-type-options', 'nosniff');
     if (options.mode === 'local') {
-      const refused = checkLocalRequest(
-        { method: request.method, host: request.headers.host, origin: request.headers.origin },
+      const headers = request.headers;
+      const result = classifyRequest(
+        {
+          method: request.method,
+          host: headers.host,
+          origin: headers.origin,
+          forwarded:
+            headers['x-forwarded-for'] !== undefined ||
+            headers['cf-connecting-ip'] !== undefined ||
+            headers['tailscale-user-login'] !== undefined,
+        },
         options.port(),
+        options.publicUrl,
       );
-      if (refused) throw refused;
+      if ('refused' in result) throw result.refused;
+      remoteRequests.set(request, result.remote);
     }
-    if (!request.headers.authorization) openLimit.take(request.ip, 'requests without a token');
+    if (!request.headers.authorization) {
+      openLimit.take(clientOf(request), 'requests without a token');
+    }
     return Promise.resolve();
   });
 
@@ -255,6 +286,15 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
         'Sign in with a join code from the server owner.',
       );
     }
+    if (isRemote(request)) {
+      // The bootstrap code proves you can read this machine's data folder: never from elsewhere.
+      throw new DomainError(
+        'not_found',
+        'auth.bootstrap_unavailable',
+        'Local sign-in only works on the machine that runs the server.',
+        'From another machine, join with a join code from the server owner (`quorum join`).',
+      );
+    }
     bootstrapLimit.take(request.ip, 'bootstrap attempts');
     const checked = validateApiPayload('localBootstrapRequest', request.body);
     if (!checked.ok) {
@@ -288,7 +328,7 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
   // Host check above already ran (INV-26); the cookie is HttpOnly, Secure (localhost is a secure
   // context) and SameSite=Strict (INV-21).
   app.get('/login', async (request, reply) => {
-    uiLoginLimit.take(request.ip, 'web sign-in attempts');
+    uiLoginLimit.take(clientOf(request), 'web sign-in attempts');
     const code = (request.query as Record<string, unknown>).code;
     let opened: { session: string; maxAgeSeconds: number };
     try {
@@ -316,7 +356,7 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
       try {
         viewer = quorum.authenticateUi(cookie(request, UI_COOKIE));
       } catch {
-        authFailureLimit.take(request.ip, 'failed sign-ins');
+        authFailureLimit.take(clientOf(request), 'failed sign-ins');
         return uiPage(
           reply,
           401,

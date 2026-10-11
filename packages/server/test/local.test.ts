@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createIdFactory, newHelloNonce, verifyHello } from '@quorum/core';
 import { afterAll, describe, expect, it } from 'vitest';
-import { checkLocalRequest, loadOrCreateInstance } from '../src/index.js';
+import {
+  checkLocalRequest,
+  classifyRequest,
+  loadOrCreateInstance,
+  type RequestFacts,
+} from '../src/index.js';
 
 const dirs: string[] = [];
 const tempDir = () => {
@@ -86,5 +91,41 @@ describe('local request guard (INV-26)', () => {
 
   it('does not block reads by Origin (they still need a token)', () => {
     expect(check('GET', 'localhost:51234', 'https://attacker.example')).toBeUndefined();
+  });
+});
+
+describe('remote access through an HTTPS front end (Phase 1b, ARCHITECTURE §8.3)', () => {
+  const port = 51234;
+  const publicUrl = 'https://my-laptop.tail1234.ts.net';
+  const classify = (facts: Partial<RequestFacts>) =>
+    classifyRequest(
+      { method: 'GET', host: undefined, origin: undefined, ...facts },
+      port,
+      publicUrl,
+    );
+
+  it('accepts the public name as remote, loopback as local, and nothing else', () => {
+    expect(classify({ host: 'my-laptop.tail1234.ts.net' })).toEqual({ remote: true });
+    expect(classify({ host: 'localhost:51234' })).toEqual({ remote: false });
+    expect(classify({ host: 'evil.example' })).toHaveProperty('refused');
+    // Without remote access the public name is foreign (DNS rebinding stays refused).
+    expect(
+      classifyRequest(
+        { method: 'GET', host: 'my-laptop.tail1234.ts.net', origin: undefined },
+        port,
+      ),
+    ).toHaveProperty('refused');
+  });
+
+  it('counts anything the front end forwarded as remote, even addressed to loopback', () => {
+    expect(classify({ host: '127.0.0.1:51234', forwarded: true })).toEqual({ remote: true });
+  });
+
+  it('takes writes only from our own origins', () => {
+    const write = (origin: string) =>
+      classify({ method: 'POST', host: 'my-laptop.tail1234.ts.net', origin });
+    expect(write('https://my-laptop.tail1234.ts.net')).toEqual({ remote: true });
+    expect(write('https://attacker.example')).toHaveProperty('refused');
+    expect(write('http://my-laptop.tail1234.ts.net')).toHaveProperty('refused'); // not https
   });
 });

@@ -1,11 +1,11 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listAttachments, loadAttachment, MemoryCredentialStore } from '@quorum/adapter-mcp';
-import { bootstrapPath } from '@quorum/local';
+import { bootstrapPath, readRemoteConfig } from '@quorum/local';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type FakeServer, startFakeServer } from '../../../tests/fakes/fake-server/fake-server.js';
 import { type CliEnv, HUMAN_CREDENTIAL_KEY, main } from '../src/index.js';
@@ -284,5 +284,29 @@ describe('quorum attach / detach', () => {
     expect(
       await main(['send', '--attachment', id, '--to', peer.address, '--text', 'hi'], env),
     ).toBe(0);
+  });
+});
+
+describe('quorum remote (Phase 1b, ARCHITECTURE §8.3)', () => {
+  it('turns remote access on only for an https address, and only when the person confirms', async () => {
+    const { env, dataDir, text, errText } = await setup();
+    await rm(join(dataDir, 'local', 'server.json')); // no server running: nothing to restart
+    expect(await main(['remote', 'status'], env)).toBe(0);
+    expect(text()).toContain('Remote access is off');
+
+    const url = 'https://my-laptop.tail1234.ts.net';
+    expect(await main(['remote', 'enable', '--public-url', 'http://my-laptop'], env)).toBe(64);
+    expect(errText()).toContain('https://');
+    const no: CliEnv = { ...env, confirm: () => Promise.resolve(false) };
+    expect(await main(['remote', 'enable', '--public-url', url], no)).toBe(64);
+    expect(await readRemoteConfig(dataDir)).toBeUndefined();
+
+    expect(await main(['remote', 'enable', '--public-url', url, '--port', '7431'], env)).toBe(0);
+    expect(await readRemoteConfig(dataDir)).toEqual({ public_url: url, port: 7431 });
+    expect(text()).toContain('tailscale serve --bg 7431');
+    expect(text()).toContain('cloudflared tunnel --url http://127.0.0.1:7431');
+
+    expect(await main(['remote', 'disable'], env)).toBe(0);
+    expect(await readRemoteConfig(dataDir)).toBeUndefined();
   });
 });

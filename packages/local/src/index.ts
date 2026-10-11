@@ -26,3 +26,11 @@ export {
   type GitWorktreeOptions,
   QUORUM_BRANCH,
 } from './git-worktree.js';
+export {
+  checkPublicUrl,
+  readRemoteConfig,
+  type RemoteConfig,
+  remoteConfigPath,
+  removeRemoteConfig,
+  writeRemoteConfig,
+} from './remote.js';

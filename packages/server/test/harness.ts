@@ -50,7 +50,7 @@ export interface Harness {
 export const HOST = 'localhost:51234';
 
 export const startHarness = async (
-  overrides: Partial<Pick<AppOptions, 'openRequestsPerMinute'>> & {
+  overrides: Partial<Pick<AppOptions, 'openRequestsPerMinute' | 'publicUrl'>> & {
     messagesPerMinute?: number;
     wakesPerHour?: number;
     agentOnlyMessagesBeforePause?: number;
@@ -91,6 +91,7 @@ export const startHarness = async (
     mode: 'local',
     bootstrap,
     port: () => 51234,
+    ...(overrides.publicUrl ? { publicUrl: overrides.publicUrl } : {}),
     ...(overrides.openRequestsPerMinute
       ? { openRequestsPerMinute: overrides.openRequestsPerMinute }
       : {}),

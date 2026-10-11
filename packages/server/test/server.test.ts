@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { type EventRecord, parseJsonl, verifyChain } from '@quorum/core';
+import { readBootstrapCode } from '@quorum/local';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type Harness, note, setUp, startHarness, ulid } from './harness.js';
 
@@ -831,5 +832,31 @@ describe('window labels respect workspace membership (INV-12)', () => {
     });
     expect(reply.status).toBe(400);
     expect(reply.text).not.toContain('can you hear me');
+  });
+});
+
+describe('requests from other machines (Phase 1b, INV-23)', () => {
+  const PUBLIC = 'https://my-laptop.tail1234.ts.net';
+  const remoteHeaders = {
+    host: 'my-laptop.tail1234.ts.net',
+    'tailscale-user-login': 'abyud@example.com',
+  };
+
+  it('serves remote requests with a token, and never the local sign-in', async () => {
+    const h = await start({ publicUrl: PUBLIC });
+    const { human } = await setUp(h);
+    const withToken = await h.request('GET', '/v1/workspaces', {
+      token: human.token,
+      headers: remoteHeaders,
+    });
+    expect(withToken.status).toBe(200);
+    expect((await h.request('GET', '/v1/workspaces', { headers: remoteHeaders })).status).toBe(401);
+    const code = (await readBootstrapCode(h.dataDir))?.code ?? `qrm_bc_${'b'.repeat(43)}`;
+    const bootstrap = await h.request('POST', '/v1/auth/local-bootstrap', {
+      headers: remoteHeaders,
+      body: { code },
+    });
+    expect(bootstrap.status).toBe(404);
+    expect(bootstrap.body).toMatchObject({ error: { code: 'auth.bootstrap_unavailable' } });
   });
 });

@@ -17,6 +17,7 @@ import {
   acquireStartLock,
   addGitWorktree,
   bootstrapPath,
+  checkPublicUrl,
   checkPrivate,
   defaultDataDir,
   discoveryPath,
@@ -26,10 +27,14 @@ import {
   lockPath,
   readBootstrapCode,
   readDiscovery,
+  readRemoteConfig,
+  remoteConfigPath,
+  removeRemoteConfig,
   removeBootstrapCode,
   removeDiscovery,
   writeBootstrapCode,
   writeDiscovery,
+  writeRemoteConfig,
   writePrivateFile,
 } from '../src/index.js';
 
@@ -282,5 +287,42 @@ describe('addGitWorktree (the one git command `quorum worktree` runs, INV-10)', 
     await expect(
       addGitWorktree({ repo: notARepo, dir: join(notARepo, 'x'), branch: 'quorum/a' }),
     ).rejects.toThrow(/git worktree add failed/);
+  });
+});
+
+describe('remote access settings (Phase 1b, INV-22)', () => {
+  it('accepts only an https address other machines can use', () => {
+    expect(checkPublicUrl('https://my-laptop.tail1234.ts.net')).toEqual({
+      url: 'https://my-laptop.tail1234.ts.net',
+    });
+    expect(checkPublicUrl('https://quorum.example.com:8443/')).toEqual({
+      url: 'https://quorum.example.com:8443',
+    });
+    for (const bad of [
+      'http://my-laptop.tail1234.ts.net', // not encrypted
+      'https://localhost',
+      'https://127.0.0.1',
+      'https://host.example/quorum', // a path
+      'https://user:pw@host.example',
+      'my-laptop',
+    ]) {
+      expect(checkPublicUrl(bad)).toHaveProperty('problem');
+    }
+  });
+
+  it('round-trips the file, and treats a broken or tampered one as off', async () => {
+    const dir = tempDir();
+    mkdirSync(join(dir, 'local'));
+    expect(await readRemoteConfig(dir)).toBeUndefined();
+    await writeRemoteConfig(dir, { public_url: 'https://a.example', port: 7420 });
+    expect(await readRemoteConfig(dir)).toEqual({ public_url: 'https://a.example', port: 7420 });
+    writeFileSync(remoteConfigPath(dir), '{"public_url":"http://a.example","port":7420}');
+    expect(await readRemoteConfig(dir)).toBeUndefined(); // http is never accepted
+    writeFileSync(remoteConfigPath(dir), '{"public_url":"https://a.example","port":80}');
+    expect(await readRemoteConfig(dir)).toBeUndefined();
+    writeFileSync(remoteConfigPath(dir), 'not json');
+    expect(await readRemoteConfig(dir)).toBeUndefined();
+    await removeRemoteConfig(dir);
+    expect(await readRemoteConfig(dir)).toBeUndefined();
   });
 });

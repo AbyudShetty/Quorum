@@ -19,14 +19,14 @@ When two people each run an AI coding agent on separate machines, the humans bec
 
 ## Status
 
-| Phase                                                                  | State                                          |
-| ---------------------------------------------------------------------- | ---------------------------------------------- |
-| 0. Foundations: specs, threat model, repo setup                        | ✅ closed ([docs/PHASE_0.md](docs/PHASE_0.md)) |
-| 1. Claude Code ↔ Codex on one machine                                  | 🚧 in progress                                 |
-| 1b. Cross-machine                                                      | planned                                        |
-| 2–7. Approvals, evidence and artifacts, more vendors, release, interop | planned                                        |
+| Phase                                                                  | State                                                     |
+| ---------------------------------------------------------------------- | --------------------------------------------------------- |
+| 0. Foundations: specs, threat model, repo setup                        | ✅ closed ([docs/PHASE_0.md](docs/PHASE_0.md))            |
+| 1. Claude Code ↔ Codex on one machine                                  | ✅ exit criteria met ([docs/PHASE_1.md](docs/PHASE_1.md)) |
+| 1b. Cross-machine                                                      | next                                                      |
+| 2–7. Approvals, evidence and artifacts, more vendors, release, interop | planned                                                   |
 
-Phase 1 so far:
+Phase 1:
 
 | Part                                                                                                                                                                                   | State                            |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
@@ -36,11 +36,11 @@ Phase 1 so far:
 | `packages/local`: local-mode files shared with adapters and CLI (private data folder, discovery file, bootstrap code, start lock)                                                      | ✅                               |
 | `packages/server`: the `/v1` API on SQLite (crash-tested), local mode (`serve --local`, auto-start, idle shutdown), tokens, presence, shared-folder notices                            | ✅                               |
 | `packages/adapter-mcp` and `packages/cli`: client library, MCP tools, `login`/`attach`/`send`/`inbox`/`verify`, presence, shared-folder warnings                                       | ✅ against the real server (IC2) |
-| `packages/web`: read-only timeline (strict CSP)                                                                                                                                        | ✅ against the fake server       |
+| `packages/web`: read-only timeline (strict CSP), served by the local server through `quorum ui`                                                                                        | ✅ against the real server       |
 | `packages/fleet`, `deploy/fleet`: simulated fleet incl. outage runs (50 containers, none lost)                                                                                         | ✅ against the fake server       |
 | `serve`/`stop`/`workspace` commands and auto-start                                                                                                                                     | ✅                               |
 | `packages/adapter-hooks`: Claude Code and Codex hooks (mail at session start, on prompts and after tool calls; turn continuation the server allows); `attach` writes the vendor config | ✅ against the real server       |
-| Waking an idle Claude Code session (spikes S1/S2), `worktree`, `ui`                                                                                                                    | next                             |
+| Idle wake both ways (Claude Code watcher, Codex daemon), addressable windows, `worktree`, `ui`, security review, exit run                                                              | ✅                               |
 
 ## Repository layout
 
@@ -53,8 +53,7 @@ packages/
   adapter-hooks/ Claude Code and Codex hooks
   cli/         the quorum command
   server/      the /v1 HTTP API on SQLite, and local mode
-  adapter-mcp/ client library and MCP server for agents (Track B)
-  cli/         the `quorum` command (Track B)
+  codex-bridge/ client for the local Codex daemon (Codex idle wake)
   web/         read-only web timeline (Track B)
   fleet/       simulated agents for scale and outage runs (Track B)
 tests/

@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readBootstrapCode, readDiscovery } from '@quorum/local';
+import { readBootstrapCode, readDiscovery, writeRemoteConfig } from '@quorum/local';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   AlreadyRunningError,
@@ -97,5 +98,33 @@ describe('auto-start command (INV-10)', () => {
     expect(command).toBe(process.execPath);
     expect(args).toHaveLength(1);
     expect(args[0]).toMatch(/[\\/]local[\\/]serve-main\.js$/);
+  });
+});
+
+describe('remote access settings on start (Phase 1b)', { timeout: 60_000 }, () => {
+  it('listens on the pinned loopback port, knows its public name, and stays up', async () => {
+    const free = await new Promise<number>((done) => {
+      const probe = createServer().listen(0, '127.0.0.1', () => {
+        const { port } = probe.address() as AddressInfo;
+        probe.close(() => {
+          done(port);
+        });
+      });
+    });
+    const dir = dataDir();
+    mkdirSync(join(dir, 'local'), { recursive: true });
+    await writeRemoteConfig(dir, { public_url: 'https://my-laptop.tail1234.ts.net', port: free });
+    const server = await startLocalServer({ dataDir: dir });
+    try {
+      expect(server.port).toBe(free);
+      expect(server.publicUrl).toBe('https://my-laptop.tail1234.ts.net');
+      // Still loopback only (INV-22): the front end on this machine forwards to it.
+      const reply = await fetch(`http://127.0.0.1:${String(free)}/v1/health`, {
+        headers: { host: 'my-laptop.tail1234.ts.net' },
+      });
+      expect(reply.status).toBe(200);
+    } finally {
+      await server.close();
+    }
   });
 });

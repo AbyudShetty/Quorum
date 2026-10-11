@@ -11,6 +11,7 @@ import {
   defaultDataDir,
   ensurePrivateDir,
   readDiscovery,
+  readRemoteConfig,
   removeDiscovery,
   writeDiscovery,
 } from '@quorum/local';
@@ -29,7 +30,10 @@ export interface LocalServerOptions {
   dataDir?: string;
   /** Default: any free port. */
   port?: number;
-  /** Shut down after this long with no requests and no open streams. Default 30 min; 0 = never. */
+  /**
+   * Shut down after this long with no requests and no open streams. Default 30 min; 0 = never.
+   * With remote access on, the default is never: other machines cannot start the server again.
+   */
   idleShutdownMs?: number;
   /** Agent address host part. Default: this computer's name. */
   machine?: string;
@@ -43,6 +47,8 @@ export interface LocalServerOptions {
 export interface LocalServer {
   dataDir: string;
   port: number;
+  /** The HTTPS front end's address when remote access is on (`quorum remote enable`). */
+  publicUrl?: string;
   baseUrl: string;
   instanceId: string;
   publicKey: string;
@@ -129,6 +135,8 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
       ...(options.clock ? { clock: options.clock } : {}),
     });
     const bootstrap = new LocalBootstrap(dataDir, options.clock ? { now: options.clock } : {});
+    // Remote access (Phase 1b): still loopback only, on the fixed port the front end forwards to.
+    const remote = await readRemoteConfig(dataDir);
     let lastActivity = Date.now();
     let port = 0;
     const app = buildApp({
@@ -138,12 +146,13 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
       mode: 'local',
       bootstrap,
       port: () => port,
+      ...(remote ? { publicUrl: remote.public_url } : {}),
       onActivity: () => {
         lastActivity = Date.now();
       },
     });
     // Loopback only, never configurable in local mode (INV-22).
-    await app.listen({ host: '127.0.0.1', port: options.port ?? 0 });
+    await app.listen({ host: '127.0.0.1', port: options.port ?? remote?.port ?? 0 });
     cleanups.push(() => app.close());
     cleanups.push(() => {
       quorum.close(); // ends open streams, so closing the HTTP server does not wait on them
@@ -175,7 +184,7 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
         quorum.pruneTokens();
       }, 3_600_000),
     ];
-    const idleMs = options.idleShutdownMs ?? 30 * 60_000;
+    const idleMs = options.idleShutdownMs ?? (remote ? 0 : 30 * 60_000);
     let resolveClosed: () => void = () => undefined;
     const closed = new Promise<void>((done) => {
       resolveClosed = done;
@@ -204,6 +213,7 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
     return {
       dataDir,
       port,
+      ...(remote ? { publicUrl: remote.public_url } : {}),
       baseUrl: `http://localhost:${String(port)}`,
       instanceId: instance.instanceId,
       publicKey: instance.publicKey,
