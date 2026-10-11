@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defaultServerConditions } from 'vite';
 import { defineConfig } from 'vitest/config';
 
@@ -6,6 +7,8 @@ import { defineConfig } from 'vitest/config';
 const conditions = ['quorum-source', ...defaultServerConditions];
 
 export default defineConfig({
+  // This file lives in config/; tests and paths are relative to the repository root.
+  root: fileURLToPath(new URL('..', import.meta.url)),
   resolve: { conditions },
   ssr: { resolve: { conditions } },
   test: {

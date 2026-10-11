@@ -30,7 +30,7 @@ The local server mounts the handler at its root (`/`, `/fragment/timeline`, `/st
 
 `TimelineSource` is the only dependency. `fromApi(client)` builds one from the public `/v1` API (workspace list plus the human's event-log export), so the UI also works against the fake server. The real server may implement `TimelineSource` directly on its message projection.
 
-## Known gaps (first part)
+## Known gaps
 
 - The timeline refreshes by polling, not by the SSE extension named in ARCHITECTURE §7; switching later needs the HTMX SSE extension vendored too.
 - No approval queue yet (Phase 2), no Playwright phone/desktop runs yet.

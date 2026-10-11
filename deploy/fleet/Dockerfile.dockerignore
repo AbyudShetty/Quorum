@@ -1,0 +1,9 @@
+# Next to the Dockerfile, so BuildKit (Docker Compose v2) uses it for builds from the repo root.
+**/node_modules
+**/dist
+.git
+.claude
+docs
+*.log
+.env
+.env.*

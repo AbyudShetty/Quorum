@@ -5,7 +5,7 @@ Keep it boring: proven, free, widely used dependencies only.
 
 ## Project context for AI agents
 
-- **Source of truth:** `docs/QUORUM_PLAN.md`. Current phase and exit-criteria status: `docs/PHASE_0.md` (later phases get their own file).
+- **Source of truth:** `docs/QUORUM_PLAN.md`. Current phase and exit-criteria status: the latest `docs/PHASE_*.md` (now `docs/PHASE_1B.md`; Phase 0 and 1 are closed).
 - **Open decisions:** never decide anything in plan §17, marked "open" in `docs/DECISIONS.md`, or any plan change yourself — ask; these are decided jointly by both maintainers (abyud and abhijna).
 - **Track boundaries:** work is split into Track A (core, server, security tests) and Track B (adapters, CLI, web, conformance/e2e, fleet, bench) — see `docs/TEAM_PLAN.md` §2. Edit only your human's track. Shared contract paths (`packages/schemas`, `tests/contract`, specs, this file) change only through the RFC flow in TEAM_PLAN §5.3. If the other track needs a change, draft an issue for your human instead of editing it.
 - **Security:** the numbered invariants (INV-n) in `docs/THREAT_MODEL.md` are the concrete form of plan §8. Name the invariants a change touches in the PR description. Never weaken one; ask instead.
@@ -20,6 +20,7 @@ Keep it boring: proven, free, widely used dependencies only.
 npm ci              # install (Node 22.12+ or 24 LTS; see .nvmrc)
 npm run check       # format:check + lint + typecheck + build + test — must pass before any commit
 npm run format      # auto-format
+npm test -- <path>  # run some tests (vitest; config in config/vitest.config.ts)
 ```
 
 ## Definition of done (plan §19)

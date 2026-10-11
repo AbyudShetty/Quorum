@@ -24,7 +24,7 @@ Rules:
 - If the identity check fails (something else answers on Quorum's port), Claude Code shows the human a `systemMessage`; the model gets nothing and no credential is sent (INV-24). Codex hooks stay silent.
 - Small per-attachment state (vendor session → Quorum session, last heartbeat) lives in `<data>/hooks/<at_id>.json`, never in the project folder.
 
-Pending: a live run of the idle watcher in an interactive Claude Code session on Windows (spike S1); channels (S2) stay an alternative. Codex `Stop` continuation is documented by OpenAI but not yet seen live.
+Tried live on Windows (Phase 1 exit run, 2026-10-11): the Claude Code idle watcher and the Codex idle wake, both ways. Claude Code channels (S2) stay deferred until they need no development flag. Codex `Stop` continuation is documented by OpenAI but not yet seen live.
 
 ## Tests
 

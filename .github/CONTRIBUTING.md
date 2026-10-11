@@ -19,7 +19,7 @@ Thanks for helping. Quorum is a security-sensitive tool, so the bar is "boring a
 ```sh
 nvm use            # Node 24 LTS (22.12+ also supported)
 npm ci
-npm run check      # format:check, lint, typecheck, test
+npm run check      # format:check, lint, typecheck, build, test
 ```
 
 On Windows, Git is configured by `.gitattributes` to use LF line endings; please don't override it.

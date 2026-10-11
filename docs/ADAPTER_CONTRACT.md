@@ -1,6 +1,6 @@
 # Adapter contract
 
-Status: **frozen as `contract-v1` (IC1), with additive changes since** · Track B (abhijna; abyud while abhijna is away) · Last updated: 2026-10-04: real server, auto-start, hooks, server-decided wakes, `attach` writes vendor config
+Status: **frozen as `contract-v1` (IC1), with additive changes since** · Track B (abhijna; abyud while abhijna is away) · Last updated: 2026-10-11: attachments on another machine (`quorum join`, pinned server key) for Phase 1b
 
 Track B's half of the contract: what the adapters, the CLI and the client library promise, how Claude Code and Codex receive messages, and how the wake modes work. Track A's half is `packages/schemas` (messages, `/v1` API, `localDiscovery`) and `tests/contract`. Changes follow TEAM_PLAN §5.3.
 

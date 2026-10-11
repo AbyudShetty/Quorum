@@ -17,8 +17,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -b config/tsconfig.build.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --config config/vitest.config.ts",
+    "test:watch": "vitest --config config/vitest.config.ts",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test",
     "generate": "npm run build && npm run generate -w @quorum/schemas"
   },
