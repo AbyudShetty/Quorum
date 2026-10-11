@@ -63,6 +63,8 @@ An adapter is started with `--attachment <at_id>` and loads this record plus the
 
 **Vendor config (built):** `attach` writes the hooks (Claude Code: `.claude/settings.local.json`, exec form; Codex: `.codex/hooks.json`) and the MCP server (Claude Code: `.mcp.json`, pre-approved through `enabledMcpjsonServers` in the untracked `settings.local.json`; Codex: the table in `.codex/config.toml`). An existing `.mcp.json` without our entry is treated as the team's and left alone; then `attach` prints `claude mcp add …`, on Windows wrapped in `cmd /c "…"` because PowerShell and the `claude.ps1` shim drop a bare `--`. It merges with existing settings, adds each file to `.git/info/exclude` (never `.gitignore`), lists every file it changed and prints what is left (for Codex, the one-time `/hooks` review). The CLI runs no programs (INV-10). `detach` removes exactly those entries. `--no-config` only prints the setup. Commands use `quorum` when it is on the PATH, else Node plus the CLI's absolute path. **[pending]** the interactive wake prompt, vendor auto-detection (`--vendor` is required), and `permissions.deny` rules for the data directory.
 
+**Phase 1b:** an attachment record may carry `server: { url, instance_id, public_key }` (written by `quorum join`): the adapters then connect to that server with that key pinned (INV-24), without discovery or auto-start. `@quorum/adapter-mcp` exports `pinServer`, `joinServer`, `startDeviceLogin`, `collectDeviceLogin` and the human's remote-server record (`<data>/remote-server.json`).
+
 ## 5. Tools
 
 All tools return text. Errors come back as tool errors containing the server's `code`, `message` and `fix`.

@@ -117,6 +117,89 @@ export const apiSchemas = {
     },
   }),
 
+  /**
+   * Phase 1b: a join code lets an agent on another machine attach to this server (ARCHITECTURE §6).
+   * Created by a human (who becomes the agent's owner); single use, 10 minutes.
+   */
+  joinCodeCreate: schema('join-code-create', {
+    type: 'object',
+    required: ['workspaces'],
+    properties: {
+      workspaces: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 32,
+        uniqueItems: true,
+        items: common('workspaceId'),
+      },
+      wake: { enum: ['off', 'direct', 'all'], default: 'off' },
+      wake_types: { type: 'array', uniqueItems: true, items: { enum: [...MESSAGE_TYPES] } },
+      lease_enforcement: { enum: ['warn', 'block'], default: 'warn' },
+    },
+  }),
+  joinCode: schema('join-code', {
+    type: 'object',
+    required: ['code', 'link', 'expires_in'],
+    properties: {
+      code: { type: 'string', pattern: '^qrm_jc_[A-Za-z0-9_-]{43}$' },
+      /** What to copy to the other machine: https://host#k=<key fingerprint>&j=<code> (INV-24). */
+      link: { type: 'string', minLength: 1, maxLength: 512 },
+      expires_in: { type: 'integer', minimum: 1, maximum: 3600 },
+    },
+  }),
+  /** Spend a join code from another machine: attach a folder there (answered like attachmentCreate). */
+  joinRequest: schema('join-request', {
+    type: 'object',
+    required: ['code', 'root', 'vendor', 'machine'],
+    properties: {
+      code: { type: 'string', pattern: '^qrm_jc_[A-Za-z0-9_-]{43}$' },
+      /** The folder on the joining machine (its own canonical path; this server never opens it). */
+      root: absolutePath,
+      vendor: { enum: [...VENDORS] },
+      /** The joining machine's name: the host part of the new agent's address. */
+      machine: common('name'),
+      agent_name: common('name'),
+      new_identity: { type: 'boolean', default: false },
+    },
+  }),
+
+  /** Phase 1b: sign a human in on another machine (device code, ARCHITECTURE §6). */
+  deviceStart: schema('device-start', {
+    type: 'object',
+    required: ['machine'],
+    properties: { machine: common('name') },
+  }),
+  deviceStarted: schema('device-started', {
+    type: 'object',
+    required: ['device_code', 'user_code', 'expires_in', 'interval'],
+    properties: {
+      /** Kept by the waiting machine; it collects the tokens with it. */
+      device_code: { type: 'string', pattern: '^qrm_dc_[A-Za-z0-9_-]{43}$' },
+      /** Shown to the person, who approves it where they are already signed in. */
+      user_code: { type: 'string', pattern: '^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$' },
+      expires_in: { type: 'integer', minimum: 1, maximum: 3600 },
+      /** Seconds between polls. */
+      interval: { type: 'integer', minimum: 1, maximum: 60 },
+    },
+  }),
+  deviceApprove: schema('device-approve', {
+    type: 'object',
+    required: ['user_code'],
+    properties: {
+      user_code: { type: 'string', pattern: '^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$' },
+    },
+  }),
+  deviceApproved: schema('device-approved', {
+    type: 'object',
+    required: ['machine'],
+    properties: { machine: common('name') },
+  }),
+  deviceToken: schema('device-token', {
+    type: 'object',
+    required: ['device_code'],
+    properties: { device_code: { type: 'string', pattern: '^qrm_dc_[A-Za-z0-9_-]{43}$' } },
+  }),
+
   workspaceCreate: schema('workspace-create', {
     type: 'object',
     required: ['name'],

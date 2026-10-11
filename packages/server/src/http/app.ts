@@ -1,7 +1,7 @@
 // The /v1 HTTP API on Fastify (ARCHITECTURE §5). Only translation lives here: requests to service
 // calls, DomainErrors to ErrorResponses (MESSAGE_SPEC §6). Every rule is in the service or core.
 import { homedir } from 'node:os';
-import { DomainError } from '@quorum/core';
+import { DomainError, formatServerLink, serverFingerprint } from '@quorum/core';
 import { type DeliveredEnvelope, validateApiPayload } from '@quorum/schemas';
 import {
   CONTENT_SECURITY_POLICY,
@@ -186,6 +186,9 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
   const authFailureLimit = new RateLimiter(30, 60_000);
   const bootstrapLimit = new RateLimiter(10, 60_000);
   const uiLoginLimit = new RateLimiter(20, 60_000);
+  /** Join and device sign-in need no token: guessing costs (INV-23). Polls come every 3 s. */
+  const joinLimit = new RateLimiter(10, 60_000);
+  const deviceLimit = new RateLimiter(40, 60_000);
 
   const caller = (request: FastifyRequest): Caller => {
     try {
@@ -319,6 +322,46 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
   });
 
   // --- web UI (ARCHITECTURE §7): `quorum ui` → one-time link → session cookie → timeline -------
+
+  // --- other machines (Phase 1b, ARCHITECTURE §6) --------------------------------------------
+
+  app.post('/v1/join-codes', async (request, reply) => {
+    const human = caller(request);
+    if (!options.publicUrl) {
+      throw new DomainError(
+        'conflict',
+        'remote.off',
+        'Other machines cannot reach this server yet, so a join code would not work.',
+        'Turn on remote access first: quorum remote enable --public-url https://<this machine>',
+      );
+    }
+    const created = quorum.createJoinCode(human, request.body);
+    const link = formatServerLink({
+      url: options.publicUrl,
+      fingerprint: serverFingerprint(options.instance.publicKey),
+      secret: created.code,
+    });
+    return reply.code(201).send({ ...created, link });
+  });
+
+  app.post('/v1/join', async (request, reply) => {
+    joinLimit.take(clientOf(request), 'join attempts');
+    return reply.code(201).send(quorum.join(request.body));
+  });
+
+  app.post('/v1/auth/device', async (request, reply) => {
+    deviceLimit.take(clientOf(request), 'device sign-ins');
+    return reply.code(201).send(quorum.startDeviceLogin(request.body));
+  });
+
+  app.post('/v1/auth/device/approve', (request) =>
+    quorum.approveDeviceLogin(caller(request), request.body),
+  );
+
+  app.post('/v1/auth/device/token', (request) => {
+    deviceLimit.take(clientOf(request), 'device sign-ins');
+    return quorum.collectDeviceLogin(request.body);
+  });
 
   app.post('/v1/auth/ui-link', async (request, reply) =>
     reply.code(201).send(quorum.createUiLink(caller(request))),

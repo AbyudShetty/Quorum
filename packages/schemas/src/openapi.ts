@@ -187,6 +187,97 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/join-codes': {
+      post: {
+        operationId: 'createJoinCode',
+        tags: ['auth'],
+        summary: 'Phase 1b: a join code for an agent on another machine (needs remote access on).',
+        description:
+          "Single use, 10 minutes. `link` is `https://host#k=<key fingerprint>&j=<code>`: the other machine checks the server key against the fingerprint before sending anything (INV-24), then spends the code at `POST /v1/join`. The human who creates it becomes the agent's owner.",
+        security: human,
+        requestBody: { required: true, content: json('JoinCodeCreate') },
+        responses: {
+          '201': { description: 'The join code.', content: json('JoinCode') },
+          '400': errorRef('BadRequest'),
+          '401': errorRef('Unauthorized'),
+          '403': errorRef('Forbidden'),
+          '409': errorRef('Conflict'),
+        },
+      },
+    },
+    '/v1/join': {
+      post: {
+        operationId: 'join',
+        tags: ['auth'],
+        summary: 'Phase 1b: spend a join code: attach a folder on another machine as an agent.',
+        security: none,
+        requestBody: { required: true, content: json('JoinRequest') },
+        responses: {
+          '201': {
+            description: 'The attachment, its agent and credentials (shown once).',
+            content: json('AttachmentCreated'),
+          },
+          '400': errorRef('BadRequest'),
+          '401': errorRef('Unauthorized'),
+          '429': errorRef('TooManyRequests'),
+        },
+      },
+    },
+    '/v1/auth/device': {
+      post: {
+        operationId: 'startDeviceLogin',
+        tags: ['auth'],
+        summary: 'Phase 1b: start signing a human in on another machine (device code).',
+        security: none,
+        requestBody: { required: true, content: json('DeviceStart') },
+        responses: {
+          '201': {
+            description: 'Show user_code to the person; poll with device_code.',
+            content: json('DeviceStarted'),
+          },
+          '400': errorRef('BadRequest'),
+          '429': errorRef('TooManyRequests'),
+        },
+      },
+    },
+    '/v1/auth/device/approve': {
+      post: {
+        operationId: 'approveDeviceLogin',
+        tags: ['auth'],
+        summary: 'Approve a waiting device sign-in as yourself (`quorum login approve <code>`).',
+        security: human,
+        requestBody: { required: true, content: json('DeviceApprove') },
+        responses: {
+          '200': {
+            description: 'Approved: the waiting machine can now collect tokens.',
+            content: json('DeviceApproved'),
+          },
+          '400': errorRef('BadRequest'),
+          '401': errorRef('Unauthorized'),
+          '403': errorRef('Forbidden'),
+          '404': errorRef('NotFound'),
+        },
+      },
+    },
+    '/v1/auth/device/token': {
+      post: {
+        operationId: 'collectDeviceLogin',
+        tags: ['auth'],
+        summary:
+          'The waiting machine collects its tokens once the sign-in is approved (single use).',
+        security: none,
+        requestBody: { required: true, content: json('DeviceToken') },
+        responses: {
+          '200': {
+            description: 'The human and their tokens.',
+            content: json('LocalBootstrapResponse'),
+          },
+          '401': errorRef('Unauthorized'),
+          '409': errorRef('Conflict'),
+          '429': errorRef('TooManyRequests'),
+        },
+      },
+    },
     '/v1/workspaces': {
       get: {
         operationId: 'listWorkspaces',
@@ -539,6 +630,14 @@ export const openApiDocument = {
       LocalBootstrapRequest: apiSchemas.localBootstrapRequest,
       LocalBootstrapResponse: apiSchemas.localBootstrapResponse,
       UiLink: apiSchemas.uiLink,
+      JoinCodeCreate: apiSchemas.joinCodeCreate,
+      JoinCode: apiSchemas.joinCode,
+      JoinRequest: apiSchemas.joinRequest,
+      DeviceStart: apiSchemas.deviceStart,
+      DeviceStarted: apiSchemas.deviceStarted,
+      DeviceApprove: apiSchemas.deviceApprove,
+      DeviceApproved: apiSchemas.deviceApproved,
+      DeviceToken: apiSchemas.deviceToken,
       WorkspaceCreate: apiSchemas.workspaceCreate,
       Workspace: apiSchemas.workspace,
       WorkspaceList: apiSchemas.workspaceList,

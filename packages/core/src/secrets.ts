@@ -14,7 +14,7 @@ const PATTERNS: readonly { kind: string; pattern: RegExp }[] = [
   { kind: 'private key', pattern: /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/ },
   {
     kind: 'Quorum token',
-    pattern: /\bqrm_(?:at|rt|jc|bc|ul|us)_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/,
+    pattern: /\bqrm_(?:at|rt|jc|bc|ul|us|dc)_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/,
   },
   { kind: 'AWS access key', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
   {

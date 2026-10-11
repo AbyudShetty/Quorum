@@ -8,6 +8,7 @@
 //
 // Migration seam: the message projections are rebuilt in memory from the log on start. Moving them
 // to SQL tables (or Postgres) changes this file only; the API and the log stay the same.
+import { randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -46,6 +47,7 @@ import {
   type InboxPage,
   type LocalBootstrapResponse,
   type UiLink,
+  type DeviceStarted,
   type MessageAccepted,
   type MessageType,
   type SessionCreated,
@@ -151,6 +153,10 @@ const resolvedPath = (path: string): string => {
 /** `quorum ui` login links live 60 s; the web sessions they open, 12 hours. */
 const UI_LINK_MS = 60_000;
 const UI_SESSION_MS = 12 * 60 * 60 * 1000;
+/** Join codes and device sign-ins last 10 minutes; the waiting machine polls every 3 s. */
+const JOIN_CODE_MS = 10 * 60_000;
+const DEVICE_MS = 10 * 60_000;
+const DEVICE_POLL_S = 3;
 
 const unauthorized = (code = 'auth.invalid_token') =>
   new DomainError(
@@ -183,6 +189,15 @@ export class Quorum {
   /** Web sign-in (hashes only): one-time links and the sessions they open. */
   readonly #uiLinks = new Map<string, { principal: string; expiresMs: number }>();
   readonly #uiSessions = new Map<string, { principal: string; expiresMs: number }>();
+  /** Phase 1b (hashes only): join codes and waiting device sign-ins. */
+  readonly #joinCodes = new Map<
+    string,
+    { principal: string; body: ApiPayloads['joinCodeCreate']; expiresMs: number }
+  >();
+  readonly #devices = new Map<
+    string,
+    { userCode: string; machine: string; expiresMs: number; approvedBy?: string }
+  >();
   readonly #messageLimit: RateLimiter;
   readonly #heartbeatLimit: RateLimiter;
   readonly notifier = new Notifier();
@@ -548,9 +563,167 @@ export class Quorum {
   }
 
   #pruneUi(nowMs: number): void {
-    for (const map of [this.#uiLinks, this.#uiSessions]) {
+    for (const map of [this.#uiLinks, this.#uiSessions, this.#joinCodes, this.#devices]) {
       for (const [hash, entry] of map) if (entry.expiresMs <= nowMs) map.delete(hash);
     }
+  }
+
+  // --- other machines (Phase 1b, ARCHITECTURE §6): join codes and device sign-in --------------
+
+  /**
+   * A join code for an agent on another machine: single use, 10 minutes, kept as a hash in memory.
+   * The calling human becomes the agent's owner; the code carries the workspaces and settings.
+   */
+  createJoinCode(caller: Caller, input: unknown): { code: string; expires_in: number } {
+    this.#requireHuman(caller);
+    const body = this.#check('joinCodeCreate', input);
+    for (const workspace of body.workspaces) this.#workspaceFor(caller, workspace);
+    const nowMs = this.#clock().getTime();
+    this.#pruneUi(nowMs);
+    const code = generateToken('join');
+    this.#joinCodes.set(hashToken(code), {
+      principal: caller.id,
+      body,
+      expiresMs: nowMs + JOIN_CODE_MS,
+    });
+    this.#commit(() => ({
+      result: undefined,
+      events: body.workspaces.map((workspace): [string, NewEvent] => [
+        workspace,
+        this.#event(caller.address, 'join_code.created', {
+          workspaces: body.workspaces,
+          expires_at: new Date(nowMs + JOIN_CODE_MS).toISOString(),
+        }),
+      ]),
+    }));
+    return { code, expires_in: JOIN_CODE_MS / 1000 };
+  }
+
+  /** Spend a join code: attach a folder on another machine for the code's owner (INV-30). */
+  join(input: unknown): AttachmentCreated {
+    const body = this.#check('joinRequest', input);
+    const invalid = () =>
+      new DomainError(
+        'unauthorized',
+        'auth.invalid_join_code',
+        'This join code is wrong, expired or already used.',
+        'Ask for a new one (`quorum join-code` on the server machine); codes last 10 minutes and work once.',
+      );
+    const hash = hashToken(body.code);
+    const entry = this.#joinCodes.get(hash);
+    this.#joinCodes.delete(hash); // single use, whatever happens next
+    if (!entry || entry.expiresMs <= this.#clock().getTime()) throw invalid();
+    if (body.machine === this.#options.machine) {
+      throw new DomainError(
+        'invalid',
+        'join.same_machine',
+        'Join codes are for other machines; this one has the same name as the server machine.',
+        'On the server machine, use `quorum attach` instead.',
+        '/machine',
+      );
+    }
+    const owner = this.#principal(entry.principal);
+    if (owner?.kind !== 'human') throw invalid();
+    return this.#attach(
+      owner,
+      {
+        root: body.root,
+        vendor: body.vendor,
+        workspaces: entry.body.workspaces,
+        ...(body.agent_name ? { agent_name: body.agent_name } : {}),
+        ...(body.new_identity ? { new_identity: true } : {}),
+        wake: entry.body.wake ?? 'off',
+        ...(entry.body.wake_types ? { wake_types: entry.body.wake_types } : {}),
+        lease_enforcement: entry.body.lease_enforcement ?? 'warn',
+      },
+      body.root,
+      body.machine,
+      'join',
+    );
+  }
+
+  /** Device sign-in, step 1 (the machine that wants to sign in): codes to show and to poll with. */
+  startDeviceLogin(input: unknown): DeviceStarted {
+    const body = this.#check('deviceStart', input);
+    const nowMs = this.#clock().getTime();
+    this.#pruneUi(nowMs);
+    const deviceCode = generateToken('device');
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const bytes = randomBytes(8);
+    const chars = [...bytes].map((b) => alphabet.charAt(b % alphabet.length)).join('');
+    const userCode = `${chars.slice(0, 4)}-${chars.slice(4)}`;
+    this.#devices.set(hashToken(deviceCode), {
+      userCode,
+      machine: body.machine,
+      expiresMs: nowMs + DEVICE_MS,
+    });
+    return {
+      device_code: deviceCode,
+      user_code: userCode,
+      expires_in: DEVICE_MS / 1000,
+      interval: DEVICE_POLL_S,
+    };
+  }
+
+  /** Device sign-in, step 2 (a signed-in human, on a machine they trust): approve as themselves. */
+  approveDeviceLogin(caller: Caller, input: unknown): { machine: string } {
+    this.#requireHuman(caller);
+    const { user_code } = this.#check('deviceApprove', input);
+    const nowMs = this.#clock().getTime();
+    const waiting = [...this.#devices.values()].find(
+      (d) => d.userCode === user_code && d.expiresMs > nowMs && d.approvedBy === undefined,
+    );
+    if (!waiting) {
+      throw notFound(
+        'auth.device_not_found',
+        'No sign-in is waiting with this code (wrong, expired or already approved).',
+        'Run `quorum login <server link>` on the other machine again and use the code it shows.',
+      );
+    }
+    waiting.approvedBy = caller.id;
+    return { machine: waiting.machine };
+  }
+
+  /** Device sign-in, step 3 (the waiting machine): the human's tokens once approved, once. */
+  collectDeviceLogin(input: unknown): LocalBootstrapResponse {
+    const { device_code } = this.#check('deviceToken', input);
+    const hash = hashToken(device_code);
+    const waiting = this.#devices.get(hash);
+    if (!waiting || waiting.expiresMs <= this.#clock().getTime()) {
+      this.#devices.delete(hash);
+      throw new DomainError(
+        'unauthorized',
+        'auth.device_expired',
+        'This sign-in expired or was already completed.',
+        'Run `quorum login <server link>` again.',
+      );
+    }
+    if (waiting.approvedBy === undefined) {
+      throw new DomainError(
+        'conflict',
+        'auth.device_pending',
+        'Not approved yet.',
+        `On a machine where you are signed in, run: quorum login approve ${waiting.userCode}`,
+      );
+    }
+    this.#devices.delete(hash);
+    const human = this.#registry.human(waiting.approvedBy);
+    if (!human) throw unauthorized('auth.device_expired');
+    return this.#commit(() => ({
+      result: {
+        human: { id: human.id, address: human.address },
+        credentials: this.#issuePair(human.id),
+      },
+      events: [
+        [
+          SYSTEM_CHAIN,
+          this.#event(human.address, 'human.signed_in', {
+            method: 'device',
+            machine: waiting.machine,
+          }),
+        ],
+      ],
+    }));
   }
 
   // --- workspaces ----------------------------------------------------------------------------
@@ -646,8 +819,18 @@ export class Quorum {
     return canonical;
   }
 
-  #takenNames(): Set<string> {
-    const suffix = `@${this.#options.machine}`;
+  /**
+   * A folder's comparison key. Folders on this machine compare by path; folders on other machines
+   * (Phase 1b, `quorum join`) carry the machine name too: two machines can hold the same path.
+   */
+  #folderKey(machine: string, path: string): string {
+    if (machine === this.#options.machine) return pathKey(path, platformOf());
+    const style = /^(?:[A-Za-z]:[\\/]|\\\\)/.test(path) ? 'win32' : 'posix';
+    return `${machine}:${pathKey(path, style)}`;
+  }
+
+  #takenNames(machine: string = this.#options.machine): Set<string> {
+    const suffix = `@${machine}`;
     return new Set(
       [...this.#registry.agentAddresses()]
         .filter((address) => address.endsWith(suffix))
@@ -661,14 +844,28 @@ export class Quorum {
     for (const workspace of body.workspaces) this.#workspaceFor(caller, workspace);
     const root = await this.#canonicalRoot(body.root);
     // Everything after the await re-reads state and runs synchronously up to the commit.
+    return this.#attach(caller, body, root, this.#options.machine, 'attach');
+  }
+
+  /**
+   * Attach a folder for `owner`: on this machine (`quorum attach`, root already canonical and
+   * checked) or on another one (`quorum join`, root as that machine reports it; this server never
+   * opens it). The agent's address names the folder's machine.
+   */
+  #attach(
+    caller: Caller,
+    body: ApiPayloads['attachmentCreate'],
+    root: string,
+    machine: string,
+    via: 'attach' | 'join',
+  ): AttachmentCreated {
     for (const workspace of body.workspaces) this.#workspaceFor(caller, workspace);
-    const rootKey = pathKey(root, platformOf());
+    const rootKey = this.#folderKey(machine, root);
     const previous = this.#registry.attachmentsFor(rootKey, body.vendor, caller.id);
     const live = previous.find((a) => a.detached_at === null);
     if (live && !body.new_identity) return this.#reattach(caller, live, body);
 
     const now = this.#now();
-    const machine = this.#options.machine;
     let agent: AgentRow | undefined;
     if (body.agent_name !== undefined) {
       const existing = this.#registry.agentByAddress(`agent:${body.agent_name}@${machine}`);
@@ -695,7 +892,8 @@ export class Quorum {
         .find((a) => a?.status === 'retired');
     }
     const reused = agent !== undefined;
-    const name = body.agent_name ?? agentName(body.vendor, folderName(root), this.#takenNames());
+    const name =
+      body.agent_name ?? agentName(body.vendor, folderName(root), this.#takenNames(machine));
     const agentRow: AgentRow = agent ?? {
       id: this.#ids.id('agent'),
       address: `agent:${name}@${machine}`,
@@ -734,6 +932,7 @@ export class Quorum {
         ...(body.wake_types ? { wake_types: body.wake_types } : {}),
         lease_enforcement: attachment.lease_enforcement,
         reused_identity: reused,
+        ...(via === 'join' ? { via, machine } : {}),
       };
       return {
         result: {
@@ -989,15 +1188,16 @@ export class Quorum {
       );
     }
     const body = this.#check('sessionCreate', input);
-    const platform = platformOf();
     // A window works inside its agent's attached folder: a session elsewhere could raise or dodge
     // shared-working-tree warnings for folders the agent was never attached to (INV-28).
     const attached = this.#registry.attachmentOfAgent(caller.id);
     // Compare real paths: the same folder can be spelled as a Windows 8.3 short name
     // (C:\Users\RUNNER~1), through a symlink or a junction, and attachment roots are stored
     // resolved. Only local mode can resolve: the folder is on this machine.
-    const realRoot = this.#options.mode === 'local' ? resolvedPath(body.root) : body.root;
-    const rootKey = pathKey(realRoot, platform);
+    const callerMachine = caller.address.split('@')[1] ?? this.#options.machine;
+    const here = callerMachine === this.#options.machine && this.#options.mode === 'local';
+    const realRoot = here ? resolvedPath(body.root) : body.root;
+    const rootKey = this.#folderKey(callerMachine, realRoot);
     if (
       attached &&
       rootKey !== attached.root_key &&
@@ -1013,7 +1213,7 @@ export class Quorum {
         '/root',
       );
     }
-    const worktreeKey = pathKey(body.git?.worktree_root ?? body.root, platform);
+    const worktreeKey = this.#folderKey(callerMachine, body.git?.worktree_root ?? body.root);
     const nowMs = this.#clock().getTime();
     const shared = sharedWorktreeWith(
       { agent: caller.address, worktreeKey },
@@ -1048,13 +1248,17 @@ export class Quorum {
     const displayRoot =
       claimed && lastPart(claimed) === lastPart(realRoot)
         ? claimed
-        : homeShortened(realRoot, homedir());
+        : here
+          ? homeShortened(realRoot, homedir())
+          : realRoot;
     return this.#commit(() => {
       // Windows that went away without saying so give their numbers back.
       for (const old of stale) this.#registry.endSession(old.id, now);
       const repo = body.git
-        ? this.#registry.pathId('repository', pathKey(body.git.common_dir, platform), () =>
-            this.#ids.id('repository'),
+        ? this.#registry.pathId(
+            'repository',
+            this.#folderKey(callerMachine, body.git.common_dir),
+            () => this.#ids.id('repository'),
           )
         : undefined;
       const worktree = body.git

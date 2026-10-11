@@ -14,6 +14,8 @@ export const TOKEN_PREFIXES = {
   uiLink: 'qrm_ul_',
   /** A web UI session (the cookie value). */
   uiSession: 'qrm_us_',
+  /** Device sign-in from another machine: the waiting machine's secret (`quorum login <link>`). */
+  device: 'qrm_dc_',
 } as const;
 
 export type TokenKind = keyof typeof TOKEN_PREFIXES;
@@ -35,7 +37,7 @@ export const tokenMatches = (token: string, storedHash: string): boolean => {
   return presented.length === stored.length && timingSafeEqual(presented, stored);
 };
 
-const TOKEN_SHAPE = /^qrm_(at|rt|jc|bc|ul|us)_[A-Za-z0-9_-]{43}$/;
+const TOKEN_SHAPE = /^qrm_(at|rt|jc|bc|ul|us|dc)_[A-Za-z0-9_-]{43}$/;
 
 /** The kind of a well-formed token, or undefined. Shape only: says nothing about validity. */
 export const tokenKind = (token: string): TokenKind | undefined => {
@@ -49,8 +51,9 @@ export const tokenKind = (token: string): TokenKind | undefined => {
       bc: 'bootstrap',
       ul: 'uiLink',
       us: 'uiSession',
+      dc: 'device',
     } as const
-  )[match[1] as 'at' | 'rt' | 'jc' | 'bc' | 'ul' | 'us'];
+  )[match[1] as 'at' | 'rt' | 'jc' | 'bc' | 'ul' | 'us' | 'dc'];
 };
 
 /** A stored refresh token (only its hash is kept). */

@@ -15,11 +15,19 @@
 | #   | Step                                                                                                          | Status   |
 | --- | ------------------------------------------------------------------------------------------------------------- | -------- |
 | 1   | Remote access: HTTPS front end (`tailscale serve`, `cloudflared`) → loopback server; `quorum remote` (INV-22) | ✅ built |
-| 2   | Join codes: server URL + key fingerprint + single-use secret, 10 min (INV-24 for remote)                      | next     |
-| 3   | `quorum join` on the other machine                                                                            |          |
-| 4   | Human sign-in from another machine (device code)                                                              |          |
-| 5   | Setup guides: Tailscale and Cloudflare Tunnel                                                                 |          |
-| 6   | Two-laptop exit run (abyud's laptops), then the run with abhijna                                              |          |
+| 2   | Join codes: server URL + key fingerprint + single-use secret, 10 min (INV-24 for remote)                      | ✅ built |
+| 3   | `quorum join` on the other machine                                                                            | ✅ built |
+| 4   | Human sign-in from another machine (device code: `quorum login <link>`, `quorum login approve <code>`)        | ✅ built |
+| 5   | Setup guides: Tailscale and Cloudflare Tunnel ([REMOTE_SETUP.md](REMOTE_SETUP.md))                            | ✅ built |
+| 6   | Two-laptop run (abyud's laptops), then the exit run with abhijna                                              | next     |
+
+Automated: `packages/cli/test/two-machines.test.ts` runs both machines in one process (a real server with remote access, a second CLI with its own data folder and keychain behind a stand-in front end): join with a forged fingerprint refused without spending the code, join, messages both ways, device sign-in with confirmation.
+
+## Not built (Phase 1b)
+
+- QR codes for join codes (text only).
+- Binding a LAN address with Quorum's own TLS (the front end on loopback covers Tailscale and Cloudflare).
+- Several remote servers for one machine's human at once (`quorum login <link>` switches; `quorum login` switches back).
 
 ## Open
 

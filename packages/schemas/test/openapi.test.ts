@@ -78,12 +78,21 @@ describe('OpenAPI /v1 document', () => {
     }
   });
 
-  it('only health, hello, token refresh and the local bootstrap exchange work without a token (INV-23)', () => {
+  // Each of the others needs a one-time secret in the body instead (bootstrap, join or device code).
+  it('only health, hello, token refresh and one-time-code exchanges work without a token (INV-23)', () => {
     const open = operations
       .filter(({ op }) => op.security.length === 0)
       .map(({ op }) => op.operationId)
       .sort();
-    expect(open).toEqual(['getHealth', 'hello', 'localBootstrap', 'refreshToken']);
+    expect(open).toEqual([
+      'collectDeviceLogin',
+      'getHealth',
+      'hello',
+      'join',
+      'localBootstrap',
+      'refreshToken',
+      'startDeviceLogin',
+    ]);
   });
 
   it('keeps human-only operations away from agent tokens (INV-1, INV-13, INV-30)', () => {
@@ -92,7 +101,9 @@ describe('OpenAPI /v1 document', () => {
       .map(({ op }) => op.operationId)
       .sort();
     expect(humanOnly).toEqual([
+      'approveDeviceLogin',
       'createAttachment',
+      'createJoinCode',
       'createUiLink',
       'createWorkspace',
       'deleteAttachment',

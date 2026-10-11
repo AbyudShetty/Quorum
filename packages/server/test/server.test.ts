@@ -2,7 +2,13 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { type EventRecord, parseJsonl, verifyChain } from '@quorum/core';
+import {
+  type EventRecord,
+  parseJsonl,
+  parseServerLink,
+  serverFingerprint,
+  verifyChain,
+} from '@quorum/core';
 import { readBootstrapCode } from '@quorum/local';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type Harness, note, setUp, startHarness, ulid } from './harness.js';
@@ -858,5 +864,122 @@ describe('requests from other machines (Phase 1b, INV-23)', () => {
     });
     expect(bootstrap.status).toBe(404);
     expect(bootstrap.body).toMatchObject({ error: { code: 'auth.bootstrap_unavailable' } });
+  });
+});
+
+describe('other machines join with a code (Phase 1b, INV-24, INV-30)', () => {
+  const PUBLIC = 'https://my-laptop.tail1234.ts.net';
+  const ROOT_B = 'C:\\Users\\friend\\proj\\web'; // a folder on the other machine
+  const joinCode = async (h: Harness, token: string, workspace: string) => {
+    const reply = await h.request('POST', '/v1/join-codes', {
+      token,
+      body: { workspaces: [workspace], wake: 'direct' },
+    });
+    return { status: reply.status, body: reply.body as { code: string; link: string } };
+  };
+
+  it('makes a join link only when other machines can reach the server', async () => {
+    const h = await start();
+    const { human, workspace } = await setUp(h);
+    expect((await joinCode(h, human.token, workspace)).status).toBe(409);
+  });
+
+  it('attaches a folder on the other machine once, as an agent named after that machine', async () => {
+    const h = await start({ publicUrl: PUBLIC });
+    const { human, a, workspace } = await setUp(h);
+    expect((await joinCode(h, a.token, workspace)).status).toBe(403); // agents cannot invite
+    const issued = await joinCode(h, human.token, workspace);
+    expect(issued.status).toBe(201);
+    const link = parseServerLink(issued.body.link);
+    expect(link).toMatchObject({ url: PUBLIC, secret: issued.body.code });
+    const hello = await h.request('POST', '/v1/hello', { body: { nonce: 'n'.repeat(43) } });
+    expect(link?.fingerprint).toBe(
+      serverFingerprint((hello.body as { public_key: string }).public_key),
+    );
+
+    const join = (body: Record<string, unknown>) =>
+      h.request('POST', '/v1/join', {
+        body: {
+          code: issued.body.code,
+          root: ROOT_B,
+          vendor: 'codex',
+          machine: 'laptop-b',
+          ...body,
+        },
+      });
+    const joined = await join({});
+    expect(joined.status, joined.text).toBe(201);
+    const created = joined.body as {
+      agent: { address: string };
+      attachment: { wake: string; root: string };
+      credentials: { access_token: string };
+    };
+    expect(created.agent.address).toBe('agent:codex-web@laptop-b');
+    expect(created.attachment).toMatchObject({ wake: 'direct', root: ROOT_B });
+    expect((await join({})).status).toBe(401); // used up
+
+    // Its window works on the other machine's path, which this server never opens.
+    const token = created.credentials.access_token;
+    const session = await h.request('POST', '/v1/sessions', {
+      token,
+      body: { vendor_session_id: ulid(), root: ROOT_B, display_root: '~\\proj\\web' },
+    });
+    expect(session.status).toBe(201);
+    expect(session.body).toMatchObject({ label: 'codex@web-1', machine: 'laptop-b' });
+    // From this machine its window is addressed with the machine name.
+    const reply = await h.request('POST', `/v1/workspaces/${workspace}/messages`, {
+      token: a.token,
+      body: note(workspace, a.address, ['codex@laptop-b-web-1'], 'hello from the other laptop'),
+    });
+    expect(reply.status).toBe(201);
+  });
+
+  it('refuses a join code used on the server machine itself (use attach there)', async () => {
+    const h = await start({ publicUrl: PUBLIC });
+    const { human, workspace } = await setUp(h);
+    const issued = await joinCode(h, human.token, workspace);
+    const reply = await h.request('POST', '/v1/join', {
+      body: { code: issued.body.code, root: h.folder('x'), vendor: 'codex', machine: 'lab' },
+    });
+    expect(reply.status).toBe(400);
+  });
+});
+
+describe('device sign-in from another machine (Phase 1b, ARCHITECTURE §6)', () => {
+  it('needs a signed-in human to approve, and hands out tokens once', async () => {
+    const h = await start();
+    const { human, a } = await setUp(h);
+    const started = await h.request('POST', '/v1/auth/device', { body: { machine: 'laptop-b' } });
+    expect(started.status).toBe(201);
+    const { device_code, user_code } = started.body as { device_code: string; user_code: string };
+    expect(user_code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    const collect = () => h.request('POST', '/v1/auth/device/token', { body: { device_code } });
+    expect((await collect()).status).toBe(409); // not approved yet
+    const approve = (token: string, code = user_code) =>
+      h.request('POST', '/v1/auth/device/approve', { token, body: { user_code: code } });
+    expect((await approve(a.token)).status).toBe(403); // an agent cannot approve
+    expect((await approve(human.token, 'AAAA-2222')).status).toBe(404);
+    const approved = await approve(human.token);
+    expect(approved.body).toEqual({ machine: 'laptop-b' });
+    const got = await collect();
+    expect(got.status).toBe(200);
+    const token = (got.body as { credentials: { access_token: string } }).credentials.access_token;
+    expect((await h.request('GET', '/v1/workspaces', { token })).status).toBe(200);
+    expect((await collect()).status).toBe(401); // once only
+  });
+
+  it('expires a waiting sign-in after 10 minutes', async () => {
+    const h = await start();
+    const { human } = await setUp(h);
+    const started = await h.request('POST', '/v1/auth/device', { body: { machine: 'laptop-b' } });
+    const { device_code, user_code } = started.body as { device_code: string; user_code: string };
+    h.advance(10 * 60_000 + 1);
+    const approve = await h.request('POST', '/v1/auth/device/approve', {
+      token: human.token,
+      body: { user_code },
+    });
+    expect(approve.status).toBe(404);
+    const got = await h.request('POST', '/v1/auth/device/token', { body: { device_code } });
+    expect(got.status).toBe(401);
   });
 });

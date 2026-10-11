@@ -6,9 +6,17 @@
 // spawning processes. Output that contains other participants' messages is always framed as
 // untrusted data (INV-9), because a person may paste it to an agent.
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { createIdFactory, parseJsonl, verifyChain } from '@quorum/core';
+import {
+  createIdFactory,
+  formatServerLink,
+  parseJsonl,
+  parseServerLink,
+  serverFingerprint,
+  verifyChain,
+} from '@quorum/core';
 import {
   addGitWorktree,
   checkPublicUrl,
@@ -24,6 +32,7 @@ import {
   removeDiscovery,
 } from '@quorum/local';
 import {
+  type AttachmentCreated,
   MESSAGE_TYPES,
   type MessageType,
   type SubmittedEnvelope,
@@ -33,8 +42,17 @@ import {
 import {
   ApiError,
   type AttachmentInfo,
+  collectDeviceLogin,
   findGit,
+  joinServer,
   listAttachments,
+  loadRemoteServer,
+  pinServer,
+  type RemoteServer,
+  removeRemoteServer,
+  saveRemoteServer,
+  startDeviceLogin,
+  targetOf,
   type CredentialStore,
   createQuorumMcpServer,
   frameMessages,
@@ -95,6 +113,8 @@ export interface CliEnv {
    * skip it, since an agent could pass a flag.
    */
   confirm?: (question: string) => Promise<boolean>;
+  /** Wait between device sign-in polls (tests make it instant). */
+  sleep?: (ms: number) => Promise<void>;
   /** The hook payload a vendor writes to stdin (`quorum hook`). */
   stdin?: () => Promise<string>;
   /** How vendors start `quorum` (default: by name if on the PATH, else Node + this CLI). */
@@ -120,6 +140,9 @@ Usage: quorum <command> [options]
                                              start it in the background when needed)
   stop                                       Stop the local server
   login                                      Sign in as the owner on this machine (local server)
+  login <server link> | login approve <code> Sign in to a server on another machine (device code)
+  join-code [--workspace <ws>] [--wake <m>]  A one-time code that attaches a folder elsewhere
+  join "<join code>" [dir] --vendor <v>      Attach a folder here to a server on another machine
   workspace create <name> | workspace list   Create or list your workspaces
   attach [dir] --vendor <v> [--workspace <ws>] [--wake off|direct|all] [--name <n>] [--new-identity]
          [--no-config]                       Connect a folder to a workspace as an agent and write
@@ -188,6 +211,10 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
         return await ui(rest, env);
       case 'remote':
         return await remote(rest, env);
+      case 'join-code':
+        return await joinCode(rest, env);
+      case 'join':
+        return await joinCommand(rest, env);
       case 'status':
         return await status(rest, env);
       case 'inbox':
@@ -239,6 +266,22 @@ const connect = async (
   credentialKey: string,
   options: { autoStart?: boolean } = {},
 ): Promise<QuorumClient> => {
+  // Phase 1b: an attachment made with `quorum join`, or a human signed in with `quorum login
+  // <link>`, talks to the server on the other machine with the key pinned then (INV-24).
+  const dataDir = dataDirOf(env);
+  const remote =
+    credentialKey === HUMAN_CREDENTIAL_KEY
+      ? await loadRemoteServer(dataDir)
+      : (await loadAttachment(dataDir, credentialKey))?.server;
+  if (remote) {
+    return QuorumClient.connect({
+      target: targetOf(remote),
+      dataDir,
+      credentialKey,
+      store: env.store,
+      ...(env.fetch ? { fetch: env.fetch } : {}),
+    });
+  }
   if (options.autoStart ?? true) await env.startServer?.(dataDirOf(env));
   const startServer = env.startServer;
   return QuorumClient.connect({
@@ -303,8 +346,9 @@ const status = async (args: string[], env: CliEnv): Promise<number> => {
     autoStart: false,
   });
   const health = await client.health();
+  const local = client.baseUrl.startsWith('http://');
   env.out(
-    `Local server: running, version ${health.version}, instance ${health.instance_id}\n` +
+    `${local ? 'Local server' : 'Server on another machine'}: running, version ${health.version}, instance ${health.instance_id}\n` +
       `Address: ${client.baseUrl}\nIdentity: verified against the pinned key\n`,
   );
   return 0;
@@ -581,10 +625,19 @@ const remote = async (args: string[], env: CliEnv): Promise<number> => {
     await humanClient(env); // starts it again with the new settings
   };
 
+  /** The link other machines use: the public address and the server's key fingerprint (INV-24). */
+  const serverLink = async (publicUrl: string): Promise<string> => {
+    await env.startServer?.(dataDir);
+    const found = await readDiscovery(dataDir);
+    return found
+      ? `\nServer link (for \`quorum login <link>\` on another machine):\n\n  ${formatServerLink({ url: publicUrl, fingerprint: serverFingerprint(found.public_key) })}\n`
+      : '\nStart the server (any quorum command) to see its link.\n';
+  };
+
   if (action === 'status') {
     env.out(
       current
-        ? `Remote access is on: ${current.public_url} → http://127.0.0.1:${String(current.port)}.\n`
+        ? `Remote access is on: ${current.public_url} → http://127.0.0.1:${String(current.port)}.\n${await serverLink(current.public_url)}`
         : 'Remote access is off: only this machine can reach the server.\n',
     );
     return 0;
@@ -624,6 +677,7 @@ const remote = async (args: string[], env: CliEnv): Promise<number> => {
       `  Cloudflare Tunnel:  cloudflared tunnel --url http://127.0.0.1:${String(port)}\n\n` +
       'The server stays on while remote access is on (no idle shutdown). After a reboot, start it with any quorum command.\n',
   );
+  env.out(await serverLink(checked.url));
   return 0;
 };
 
@@ -672,9 +726,22 @@ const oneOf = <T extends string>(
   return value as T;
 };
 
+/** This computer's name as an address part (`DESKTOP-AB12` → `desktop-ab12`), like the server's. */
+const machineName = (): string =>
+  hostname()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^[^a-z]+/, '')
+    .slice(0, 32)
+    .replace(/-+$/, '') || 'machine';
+
 const login = async (args: string[], env: CliEnv): Promise<number> => {
-  parseArgs({ args, options: {}, strict: true });
+  const { positionals } = parseArgs({ args, options: {}, allowPositionals: true, strict: true });
+  if (positionals[0] === 'approve') return loginApprove(positionals[1], env);
+  if (positionals[0] !== undefined) return loginRemote(positionals[0], env);
   const dataDir = dataDirOf(env);
+  // Signing in here makes this machine's server the one the human uses again.
+  await removeRemoteServer(dataDir);
   // A server started now writes a fresh code; one already running keeps its current code.
   await env.startServer?.(dataDir);
   const file = await readBootstrapCode(dataDir);
@@ -688,6 +755,160 @@ const login = async (args: string[], env: CliEnv): Promise<number> => {
   const client = await connect(env, HUMAN_CREDENTIAL_KEY);
   const human = await client.bootstrapLogin(file.code);
   env.out(`Signed in as ${human.address}. Credentials are in your OS keychain.\n`);
+  return 0;
+};
+
+/**
+ * `quorum login <server link>` (Phase 1b): sign in on this machine as a human of a server on
+ * another machine. The server's key is checked against the link first (INV-24); then this machine
+ * shows a code that the person approves where they are already signed in.
+ */
+const loginRemote = async (text: string, env: CliEnv): Promise<number> => {
+  const link = parseServerLink(text);
+  if (!link) {
+    throw new UsageError(
+      'That is not a server link. On the server machine, run `quorum remote status` and copy the link it prints (https://…#k=…).',
+    );
+  }
+  const server = await pinServer(link, env.fetch ?? fetch);
+  const started = await startDeviceLogin(server, machineName(), env.fetch ?? fetch);
+  env.out(
+    `Server checked: ${server.url} holds the key in the link.\n\n` +
+      'To finish, on a machine where you are already signed in to it (e.g. the server machine), run:\n\n' +
+      `  quorum login approve ${started.user_code}\n\n` +
+      `Waiting (up to ${String(Math.round(started.expires_in / 60))} minutes)…\n`,
+  );
+  const sleep = env.sleep ?? ((ms: number) => new Promise((done) => setTimeout(done, ms)));
+  const deadline = Date.now() + started.expires_in * 1000;
+  while (Date.now() < deadline) {
+    await sleep(started.interval * 1000);
+    const result = await collectDeviceLogin(server, started.device_code, env.fetch ?? fetch);
+    if (result === 'pending') continue;
+    await env.store.save(HUMAN_CREDENTIAL_KEY, {
+      access_token: result.credentials.access_token,
+      refresh_token: result.credentials.refresh_token,
+      access_expires_at: Date.now() + result.credentials.expires_in * 1000,
+    });
+    await saveRemoteServer(dataDirOf(env), server);
+    env.out(
+      `Signed in to ${server.url} as ${result.human.address}. Credentials are in your OS keychain.\n` +
+        'Human commands on this machine (join-code, ui, export…) now use that server; `quorum login` alone switches back to this machine.\n',
+    );
+    return 0;
+  }
+  throw new NeedsActionError('The sign-in expired before it was approved. Run the command again.');
+};
+
+/** `quorum login approve <code>`: let a waiting machine sign in as you (confirmed at a terminal). */
+const loginApprove = async (code: string | undefined, env: CliEnv): Promise<number> => {
+  const userCode = need(
+    code,
+    'Pass the code the other machine shows: quorum login approve ABCD-2345.',
+  )
+    .trim()
+    .toUpperCase();
+  const client = await humanClient(env);
+  await confirmBinding(
+    env,
+    `Sign in the machine waiting with code ${userCode} as you? Only approve a code you started yourself, on a machine you trust.`,
+  );
+  const approved = (await client.call('POST', '/v1/auth/device/approve', { user_code: userCode }))
+    .body as { machine: string };
+  env.out(`Approved: ${approved.machine} is now signed in as you.\n`);
+  return 0;
+};
+
+/**
+ * `quorum join-code [--workspace <ws>] [--wake off|direct|all]` (Phase 1b): a single-use code (10
+ * minutes) that attaches a folder on another machine as an agent of yours. Needs remote access on.
+ */
+const joinCode = async (args: string[], env: CliEnv): Promise<number> => {
+  const { values } = parseArgs({
+    args,
+    options: { workspace: { type: 'string' }, wake: { type: 'string' } },
+    strict: true,
+  });
+  const wake = oneOf(values.wake, ['off', 'direct', 'all'] as const, '--wake');
+  const client = await humanClient(env);
+  const workspace = await humanWorkspace(client, values.workspace);
+  const created = (
+    await client.call('POST', '/v1/join-codes', {
+      workspaces: [workspace],
+      ...(wake ? { wake } : {}),
+    })
+  ).body as { link: string; expires_in: number };
+  env.out(
+    `Join code for workspace ${workspace} (works once, for ${String(Math.round(created.expires_in / 60))} minutes):\n\n` +
+      `  ${created.link}\n\n` +
+      'On the other machine, in the folder to attach, run:\n\n' +
+      `  quorum join "${created.link}" --vendor <claude-code|codex>\n`,
+  );
+  return 0;
+};
+
+/** The canonical folder to attach, refusing the Quorum data directory (INV-25). */
+const folderToAttach = async (env: CliEnv, given: string | undefined): Promise<string> => {
+  const root = await realpath(resolve(env.cwd ?? process.cwd(), given ?? '.')).catch(() => {
+    throw new UsageError(`The folder ${given ?? '.'} does not exist.`);
+  });
+  const dataDir = dataDirOf(env);
+  // Compare canonical paths on both sides: the data folder may be spelled as a symlink, a junction
+  // or a Windows 8.3 short name (RUNNER~1). A data folder that does not exist yet falls back to
+  // its absolute path.
+  const canonicalDataDir = await realpath(dataDir).catch(() => resolve(dataDir));
+  if (isInside(root, canonicalDataDir) || isInside(canonicalDataDir, root)) {
+    throw new UsageError(
+      'Refusing to attach the Quorum data directory (or a folder containing it).',
+    );
+  }
+  return root;
+};
+
+/**
+ * `quorum join <join code> [dir] --vendor <v> [--name <n>] [--new-identity] [--no-config]`
+ * (Phase 1b): attach a folder on this machine to a server on another machine. The server's key is
+ * checked against the code before the code is sent (INV-24); the person confirms at a terminal
+ * (INV-30). The attachment remembers the server, so hooks and tools connect there.
+ */
+const joinCommand = async (args: string[], env: CliEnv): Promise<number> => {
+  const { values, positionals } = parseArgs({
+    args,
+    options: {
+      vendor: { type: 'string' },
+      name: { type: 'string' },
+      'new-identity': { type: 'boolean', default: false },
+      'no-config': { type: 'boolean', default: false },
+    },
+    allowPositionals: true,
+    strict: true,
+  });
+  const link = parseServerLink(
+    need(positionals[0], 'Pass the join code: quorum join "<code>" --vendor <v>.'),
+  );
+  if (!link?.secret) {
+    throw new UsageError(
+      'That is not a join code. On the server machine, run `quorum join-code` and copy the whole line it prints (https://…#k=…&j=…).',
+    );
+  }
+  const vendor = oneOf(values.vendor, VENDORS, '--vendor');
+  if (!vendor) throw new UsageError(`Pass --vendor ${VENDORS.join('|')}.`);
+  const root = await folderToAttach(env, positionals[1]);
+  await confirmBinding(
+    env,
+    `Attach ${root} as a ${vendor} agent to the Quorum server at ${link.url}? Agents working in this folder will read and send messages there.`,
+  );
+  const { server, created } = await joinServer(
+    link,
+    {
+      root,
+      vendor,
+      machine: machineName(),
+      ...(values.name ? { agent_name: values.name } : {}),
+      ...(values['new-identity'] ? { new_identity: true } : {}),
+    },
+    env.fetch ?? fetch,
+  );
+  await recordAttachment(env, created, { root, vendor, server, noConfig: values['no-config'] });
   return 0;
 };
 
@@ -775,21 +996,7 @@ const attach = async (args: string[], env: CliEnv): Promise<number> => {
       `Pass --vendor ${VENDORS.join('|')} (automatic detection is not built yet).`,
     );
   }
-  const dataDir = dataDirOf(env);
-  const root = await realpath(resolve(env.cwd ?? process.cwd(), positionals[0] ?? '.')).catch(
-    () => {
-      throw new UsageError(`The folder ${positionals[0] ?? '.'} does not exist.`);
-    },
-  );
-  // Compare canonical paths on both sides: the data folder may be spelled as a symlink, a junction
-  // or a Windows 8.3 short name (RUNNER~1), and `root` was already canonicalised (INV-25). A data
-  // folder that does not exist yet falls back to its absolute path.
-  const canonicalDataDir = await realpath(dataDir).catch(() => resolve(dataDir));
-  if (isInside(root, canonicalDataDir) || isInside(canonicalDataDir, root)) {
-    throw new UsageError(
-      'Refusing to attach the Quorum data directory (or a folder containing it).',
-    );
-  }
+  const root = await folderToAttach(env, positionals[0]);
 
   const client = await humanClient(env);
   let workspace = values.workspace;
@@ -867,6 +1074,24 @@ const attachFolder = async (
     ...(folder.wakeTypes ? { wake_types: folder.wakeTypes } : {}),
     lease_enforcement: folder.lease,
   });
+  return recordAttachment(env, created, {
+    root,
+    vendor,
+    ...(folder.noConfig ? { noConfig: true } : {}),
+  });
+};
+
+/**
+ * Keep a new attachment's credentials in the keychain (never in a file or the project folder,
+ * INV-25), record it (with its server when it is on another machine), and write the vendor hooks
+ * and MCP config (kept out of git).
+ */
+const recordAttachment = async (
+  env: CliEnv,
+  created: AttachmentCreated,
+  folder: { root: string; vendor: string; server?: RemoteServer; noConfig?: boolean },
+): Promise<{ id: string; agent: string }> => {
+  const { root, vendor } = folder;
   const id = created.attachment.id;
   await env.store.save(id, {
     access_token: created.credentials.access_token,
@@ -882,10 +1107,11 @@ const attachFolder = async (
     wake: created.attachment.wake,
     ...(created.attachment.wake_types ? { wake_types: created.attachment.wake_types } : {}),
     lease_enforcement: created.attachment.lease_enforcement,
+    ...(folder.server ? { server: folder.server } : {}),
   });
 
   env.out(
-    `Attached ${root} as ${created.agent.address} (${id}), wake ${created.attachment.wake}.\n\n`,
+    `Attached ${root} as ${created.agent.address} (${id}), wake ${created.attachment.wake}${folder.server ? `, on ${folder.server.url}` : ''}.\n\n`,
   );
   if (folder.noConfig) {
     env.out(setupInstructions(vendor, id, root));

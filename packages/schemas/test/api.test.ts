@@ -33,6 +33,28 @@ const examples: ApiPayloads = {
     path: `/login?code=qrm_ul_${'u'.repeat(43)}`,
     expires_in: 60,
   },
+  joinCodeCreate: { workspaces: [`ws_${U1}`], wake: 'direct' },
+  joinCode: {
+    code: `qrm_jc_${'j'.repeat(43)}`,
+    link: `https://laptop-a.tail1234.ts.net#k=${'k'.repeat(43)}&j=qrm_jc_${'j'.repeat(43)}`,
+    expires_in: 600,
+  },
+  joinRequest: {
+    code: `qrm_jc_${'j'.repeat(43)}`,
+    root: 'C:\\Users\\friend\\proj\\web',
+    vendor: 'codex',
+    machine: 'laptop-b',
+  },
+  deviceStart: { machine: 'laptop-b' },
+  deviceStarted: {
+    device_code: `qrm_dc_${'d'.repeat(43)}`,
+    user_code: 'KXRT-4M9P',
+    expires_in: 600,
+    interval: 3,
+  },
+  deviceApprove: { user_code: 'KXRT-4M9P' },
+  deviceApproved: { machine: 'laptop-b' },
+  deviceToken: { device_code: `qrm_dc_${'d'.repeat(43)}` },
   attachment: {
     id: `at_${U1}`,
     root: 'C:\\Users\\abyud\\proj\\api',

@@ -56,3 +56,15 @@ export {
   type StartSessionOptions,
 } from './session.js';
 export { type FlushResult, Outbox, type QueuedMessage, type SendFn } from './outbox.js';
+export {
+  collectDeviceLogin,
+  isRemoteServer,
+  joinServer,
+  loadRemoteServer,
+  pinServer,
+  type RemoteServer,
+  removeRemoteServer,
+  saveRemoteServer,
+  startDeviceLogin,
+  targetOf,
+} from './remote.js';

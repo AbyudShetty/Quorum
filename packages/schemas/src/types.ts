@@ -309,6 +309,51 @@ export interface LocalBootstrapResponse {
   credentials: TokenPair;
 }
 
+export interface JoinCodeCreate {
+  workspaces: string[];
+  wake?: 'off' | 'direct' | 'all';
+  wake_types?: MessageType[];
+  lease_enforcement?: 'warn' | 'block';
+}
+
+export interface JoinCode {
+  code: string;
+  link: string;
+  expires_in: number;
+}
+
+export interface JoinRequest {
+  code: string;
+  root: string;
+  vendor: Vendor;
+  machine: string;
+  agent_name?: string;
+  new_identity?: boolean;
+}
+
+export interface DeviceStart {
+  machine: string;
+}
+
+export interface DeviceStarted {
+  device_code: string;
+  user_code: string;
+  expires_in: number;
+  interval: number;
+}
+
+export interface DeviceApprove {
+  user_code: string;
+}
+
+export interface DeviceApproved {
+  machine: string;
+}
+
+export interface DeviceToken {
+  device_code: string;
+}
+
 export interface UiLink {
   code: string;
   path: string;
@@ -432,6 +477,14 @@ export interface ApiPayloads {
   localBootstrapRequest: LocalBootstrapRequest;
   localBootstrapResponse: LocalBootstrapResponse;
   uiLink: UiLink;
+  joinCodeCreate: JoinCodeCreate;
+  joinCode: JoinCode;
+  joinRequest: JoinRequest;
+  deviceStart: DeviceStart;
+  deviceStarted: DeviceStarted;
+  deviceApprove: DeviceApprove;
+  deviceApproved: DeviceApproved;
+  deviceToken: DeviceToken;
   workspaceCreate: WorkspaceCreate;
   workspace: Workspace;
   workspaceList: WorkspaceList;

@@ -56,4 +56,12 @@ export {
   sharedWorktreeWith,
   toolName,
 } from './workspace-members.js';
-export { helloMessage, newHelloNonce, verifyHello } from './hello.js';
+export {
+  formatServerLink,
+  helloMessage,
+  newHelloNonce,
+  parseServerLink,
+  serverFingerprint,
+  type ServerLink,
+  verifyHello,
+} from './hello.js';

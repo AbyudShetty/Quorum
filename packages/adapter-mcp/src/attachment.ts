@@ -18,6 +18,11 @@ export interface AttachmentInfo {
   /** Narrows which message types may wake the agent (POLICY_SPEC `wake_types`). */
   wake_types?: string[];
   lease_enforcement: 'warn' | 'block';
+  /**
+   * Phase 1b: the server on another machine this attachment belongs to (`quorum join`), with the
+   * key pinned when joining (INV-24). Absent: this machine's local server.
+   */
+  server?: { url: string; instance_id: string; public_key: string };
 }
 
 const isInfo = (value: unknown): value is AttachmentInfo => {
@@ -32,7 +37,13 @@ const isInfo = (value: unknown): value is AttachmentInfo => {
     typeof v.vendor === 'string' &&
     typeof v.root === 'string' &&
     (v.wake === 'off' || v.wake === 'direct' || v.wake === 'all') &&
-    (v.lease_enforcement === 'warn' || v.lease_enforcement === 'block')
+    (v.lease_enforcement === 'warn' || v.lease_enforcement === 'block') &&
+    (v.server === undefined ||
+      (typeof v.server === 'object' &&
+        v.server !== null &&
+        typeof (v.server as Record<string, unknown>).url === 'string' &&
+        typeof (v.server as Record<string, unknown>).instance_id === 'string' &&
+        typeof (v.server as Record<string, unknown>).public_key === 'string'))
   );
 };
 
