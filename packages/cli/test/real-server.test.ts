@@ -162,6 +162,22 @@ describe('IC2: CLI and adapter against the real local server', () => {
     env.stdin = () => Promise.resolve('not json');
     expect((await run('hook', 'codex', 'post-tool', '--attachment', attachmentB)).code).toBe(0);
     expect((await run('hook', 'emacs', 'post-tool', '--attachment', attachmentB)).code).toBe(64);
+    // Anything unexpected (here: the vendor closed our stdout) never fails the agent: exit 0, and
+    // the error is kept in <data>/hooks/errors.log for whoever investigates.
+    await run('send', '--attachment', attachmentA, '--to', agentB, '--text', 'Second delivery.');
+    env.stdin = () => Promise.resolve(JSON.stringify({ session_id: 's-1' }));
+    const out = env.out;
+    env.out = () => {
+      throw new Error('EPIPE: stdout closed');
+    };
+    try {
+      expect((await run('hook', 'codex', 'post-tool', '--attachment', attachmentB)).code).toBe(0);
+    } finally {
+      env.out = out;
+    }
+    expect(await readFile(join(server.dataDir, 'hooks', 'errors.log'), 'utf8')).toContain(
+      'quorum hook codex post-tool: Error: EPIPE: stdout closed',
+    );
   });
 
   it('exports a log that verifies', async () => {

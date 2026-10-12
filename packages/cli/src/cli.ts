@@ -5,7 +5,7 @@
 // Everything is a function of (argv, env) so tests can run it against the fake server without
 // spawning processes. Output that contains other participants' messages is always framed as
 // untrusted data (INV-9), because a person may paste it to an agent.
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -228,7 +228,7 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
       case 'mcp':
         return await mcp(rest, env);
       case 'hook':
-        return await hook(rest, env);
+        return await hookNeverFails(rest, env);
       default:
         throw new UsageError(`Unknown command "${command}". Run \`quorum help\`.`);
     }
@@ -1380,6 +1380,28 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
  * `quorum hook <vendor> <event> --attachment <at_id>`: one Claude Code or Codex hook. Prints the
  * vendor's JSON (or nothing) and always exits 0, so a Quorum problem never blocks the agent.
  */
+/**
+ * A hook must never break the agent (ADAPTER_CONTRACT §6): whatever goes wrong, exit 0 with no
+ * output, and note the error in `<data>/hooks/errors.log` so it can be found. Usage errors (a
+ * wrong hook line in the vendor config) still exit 64, so a broken setup shows up.
+ */
+const hookNeverFails = async (args: string[], env: CliEnv): Promise<number> => {
+  try {
+    return await hook(args, env);
+  } catch (error) {
+    if (error instanceof UsageError) throw error;
+    const line = `${new Date().toISOString()} quorum hook ${args.slice(0, 2).join(' ')}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`;
+    try {
+      const dir = join(dataDirOf(env), 'hooks');
+      await mkdir(dir, { recursive: true });
+      await appendFile(join(dir, 'errors.log'), line);
+    } catch {
+      // Nowhere to write: still never fail the agent.
+    }
+    return 0;
+  }
+};
+
 const hook = async (args: string[], env: CliEnv): Promise<number> => {
   const { values, positionals } = parseArgs({
     args,
