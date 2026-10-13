@@ -17,7 +17,7 @@ import {
   IDLE_WAKE_INTRO,
   MAX_CONTEXT_CHARS,
 } from './hooks.js';
-import { loadHookState, saveHookState } from './state.js';
+import { isMailHeld, loadHookState, saveHookState } from './state.js';
 
 export type WatchClient = HookClient & {
   stream(
@@ -117,6 +117,10 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     await findWindow();
     // Not as the whole agent: that could wake this window with mail for (or read by) another.
     if (!client.session) return undefined;
+    // Held until the person says yes (D-18): no wake, and the mail stays unread.
+    if (await isMailHeld(context.dataDir, context.attachment.attachment, client.session)) {
+      return undefined;
+    }
     for (const workspace of context.attachment.workspaces) {
       const decision = await client.requestWake(workspace);
       if (decision.reason === 'mode_off') return STAND_DOWN;

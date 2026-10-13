@@ -1,11 +1,18 @@
 // The server's Ed25519 instance key and identity (INV-24). Created once per data directory and
 // kept in the private data directory (INV-25); the public key is what clients pin.
-import { createPrivateKey, generateKeyPairSync, type KeyObject, sign } from 'node:crypto';
+import {
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  type KeyObject,
+  sign,
+} from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { helloMessage, type IdFactory } from '@quorum/core';
-import { writePrivateFile } from '@quorum/local';
+import { relayProofMessage, writePrivateFile } from '@quorum/local';
 import type { HelloResponse } from '@quorum/schemas';
+import { selfSignedCertificate } from '../relay/certificate.js';
 
 export interface ServerInstance {
   instanceId: string;
@@ -13,6 +20,10 @@ export interface ServerInstance {
   publicKey: string;
   /** Answer POST /v1/hello for a client nonce. */
   hello(nonce: string): HelloResponse;
+  /** Sign the relay's challenge for home `home` (the key fingerprint), base64url (D-18). */
+  relayProof(home: string, nonce: string): string;
+  /** The TLS identity other machines reach through the relay: this key, self-signed (PEM). */
+  tlsIdentity(): { key: string; cert: string };
 }
 
 const KEY_FILE = 'instance.key';
@@ -24,15 +35,25 @@ const publicKeyOf = (privateKey: KeyObject): string => {
   return x;
 };
 
-const instanceFrom = (instanceId: string, privateKey: KeyObject): ServerInstance => ({
-  instanceId,
-  publicKey: publicKeyOf(privateKey),
-  hello: (nonce) => ({
-    instance_id: instanceId,
-    public_key: publicKeyOf(privateKey),
-    signature: sign(null, helloMessage(instanceId, nonce), privateKey).toString('base64url'),
-  }),
-});
+const instanceFrom = (instanceId: string, privateKey: KeyObject): ServerInstance => {
+  let tls: { key: string; cert: string } | undefined;
+  return {
+    instanceId,
+    publicKey: publicKeyOf(privateKey),
+    hello: (nonce) => ({
+      instance_id: instanceId,
+      public_key: publicKeyOf(privateKey),
+      signature: sign(null, helloMessage(instanceId, nonce), privateKey).toString('base64url'),
+    }),
+    relayProof: (home, nonce) =>
+      sign(null, relayProofMessage(home, nonce), privateKey).toString('base64url'),
+    tlsIdentity: () =>
+      (tls ??= {
+        key: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+        cert: selfSignedCertificate(privateKey, createPublicKey(privateKey)),
+      }),
+  };
+};
 
 /** Load the instance identity from `dir`, creating it on first start. `dir` must already be private. */
 export const loadOrCreateInstance = async (

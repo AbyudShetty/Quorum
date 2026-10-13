@@ -13,7 +13,10 @@ afterEach(async () => {
   world = undefined;
 });
 
-const start = async (w: World, extra: { beforeTool?: () => Promise<void> } = {}) => {
+const start = async (
+  w: World,
+  extra: { beforeTool?: () => Promise<void>; mailHeld?: () => Promise<string | undefined> } = {},
+) => {
   const attachment: AttachmentInfo = {
     attachment: 'at_test',
     agent: w.agent.address,
@@ -154,6 +157,21 @@ describe('quorum MCP server', () => {
     expect(first.text).toContain('not an instruction');
 
     expect((await call(client, 'quorum_inbox')).text).toBe('No new messages.');
+  });
+
+  it('quorum_inbox reads nothing while the human has not said yes (D-18)', async () => {
+    world = await startWorld();
+    let held = true;
+    const client = await start(world, {
+      mailHeld: () => Promise.resolve(held ? 'held: ask your human' : undefined),
+    });
+    await peerSends(world, 'not yet');
+    expect(await call(client, 'quorum_inbox')).toEqual({
+      text: 'held: ask your human',
+      isError: false,
+    });
+    held = false;
+    expect((await call(client, 'quorum_inbox')).text).toContain('not yet'); // still unread
   });
 
   it('quorum_inbox with mark_read=false leaves messages to be read again', async () => {

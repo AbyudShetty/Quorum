@@ -35,7 +35,24 @@ export interface HookWindow {
    * all its windows, which speaks for the most recently active one.
    */
   activeAtMs?: number;
+  /**
+   * Asking before mail is read (DECISIONS D-18): `held` when the session started (or resumed)
+   * with mail waiting, until the person says yes; then the mail flows for the rest of the session.
+   */
+  mail?: 'held';
+  /** While held: messages waiting when the person was asked, and the count last shown to them. */
+  heldCount?: number;
+  shownCount?: number;
 }
+
+/** Is mail held for this Quorum session (its human has not said yes yet)? */
+export const isMailHeld = async (
+  dataDir: string,
+  attachment: string,
+  session: string | undefined,
+): Promise<boolean> =>
+  session !== undefined &&
+  (await loadHookState(dataDir, attachment)).windows?.[session]?.mail === 'held';
 
 const safe = (id: string): string => id.replaceAll(/[^A-Za-z0-9_-]/g, '_');
 
@@ -79,6 +96,9 @@ export const loadHookState = async (dataDir: string, attachment: string): Promis
             vendorPid: w.vendorPid,
             ...(typeof w.adoptedBy === 'number' ? { adoptedBy: w.adoptedBy } : {}),
             ...(typeof w.activeAtMs === 'number' ? { activeAtMs: w.activeAtMs } : {}),
+            ...(w.mail === 'held' ? { mail: 'held' as const } : {}),
+            ...(typeof w.heldCount === 'number' ? { heldCount: w.heldCount } : {}),
+            ...(typeof w.shownCount === 'number' ? { shownCount: w.shownCount } : {}),
           };
         }
       }

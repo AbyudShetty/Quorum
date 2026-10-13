@@ -1,0 +1,14 @@
+{
+  "name": "@quorumhq/quorum",
+  "version": "0.1.0",
+  "description": "Quorum: AI coding agents (Claude Code, Codex) talk to each other across folders and machines, while humans decide.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "bin": {
+    "quorum": "bin/quorum.js"
+  },
+  "keywords": ["ai", "agents", "claude-code", "codex", "mcp", "coordination", "human-in-the-loop"]
+}

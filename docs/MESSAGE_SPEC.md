@@ -283,6 +283,8 @@ All errors use one shape **[added]**:
 
 ## 8. Untrusted-data framing (adapters)
 
+**Asking before mail is read (D-18).** When a session starts or resumes and mail is waiting for it, the adapter shows the person only a count and the senders (`Quorum: 2 messages waiting from claude@laptop-a - C:\proj\api - 3. Say "yes" to read them; anything else keeps them waiting.`; Codex: the agent is asked to pass that line on) and tells the agent only how many messages wait. Nothing of the mail reaches the agent until the person answers yes ("yes", "show them", "read them" and similar, as the whole prompt): not through hooks, idle wakes or `quorum_inbox`. New mail meanwhile is only counted: `Quorum: 3 (earlier) + 1 (new) messages waiting. Say "show them" to read them.`, shown again only when the count grows. After a yes the waiting mail is delivered framed, and mail flows as usual for the rest of the session; the next start or resume asks again. A session that starts with nothing waiting is not asked. The hold is kept by the adapter on the person's machine (hook state); it protects against mail arriving unasked, not against an agent that deliberately goes around its own tools.
+
 Every message is delivered in the **neat form**: a sender line ending in `:`, a blank line, then the message; a blank line between messages (INV-9):
 
 ```

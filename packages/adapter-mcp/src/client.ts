@@ -22,6 +22,7 @@ import {
 import { newHelloNonce, verifyHello } from '@quorum/core';
 import { defaultDataDir, readDiscovery, withFileLock } from '@quorum/local';
 import type { CredentialStore, StoredCredentials } from './credentials.js';
+import { quorumFetch } from './relay-fetch.js';
 
 export class IdentityError extends Error {
   constructor(message: string) {
@@ -164,7 +165,7 @@ export class QuorumClient {
       target,
       options.credentialKey,
       options.store,
-      options.fetch ?? fetch,
+      options.fetch ?? quorumFetch,
       options.now ?? Date.now,
       options.requestTimeoutMs ?? 15_000,
     );

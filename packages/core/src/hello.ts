@@ -47,7 +47,10 @@ export const serverFingerprint = (publicKey: string): string =>
 
 /** What a server link or join code says: where the server is, its key, maybe a one-time secret. */
 export interface ServerLink {
-  /** https://host[:port] (http only for this machine's loopback, for tests and trials). */
+  /**
+   * https://host[:port] (http only for this machine's loopback, for tests and trials), or
+   * quorum://<relay host>/<fingerprint> for a server reached through the relay (D-18).
+   */
   url: string;
   fingerprint: string;
   /** A join code's secret (`qrm_jc_…`); absent in a plain server link. */
@@ -57,7 +60,10 @@ export interface ServerLink {
 const FINGERPRINT = /^[A-Za-z0-9_-]{43}$/;
 const JOIN_SECRET = /^qrm_jc_[A-Za-z0-9_-]{43}$/;
 
-/** `https://host#k=<fingerprint>[&j=<join secret>]`: the text people copy between machines. */
+/**
+ * `https://host#k=<fingerprint>[&j=<join secret>]` (or `quorum://relay/<fingerprint>#k=…`): the
+ * text people copy between machines.
+ */
 export const formatServerLink = (link: ServerLink): string =>
   `${link.url}#k=${link.fingerprint}${link.secret ? `&j=${link.secret}` : ''}`;
 
@@ -70,14 +76,19 @@ export const parseServerLink = (text: string): ServerLink | undefined => {
     return undefined;
   }
   const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) return undefined;
-  if (url.username || url.password || url.search || (url.pathname !== '/' && url.pathname !== '')) {
+  const relayed = url.protocol === 'quorum:' && url.host !== '';
+  if (!relayed && url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
     return undefined;
   }
+  if (url.username || url.password || url.search) return undefined;
+  const path = url.pathname.replace(/\/$/, '');
   const params = new URLSearchParams(url.hash.slice(1));
   const fingerprint = params.get('k') ?? '';
   const secret = params.get('j') ?? undefined;
   if (!FINGERPRINT.test(fingerprint)) return undefined;
   if (secret !== undefined && !JOIN_SECRET.test(secret)) return undefined;
-  return { url: url.origin, fingerprint, ...(secret ? { secret } : {}) };
+  // Through the relay, the path names the server: it must be the key the link pins.
+  if (relayed ? path !== `/${fingerprint}` : path !== '') return undefined;
+  const base = relayed ? `quorum://${url.host}/${fingerprint}` : url.origin;
+  return { url: base, fingerprint, ...(secret ? { secret } : {}) };
 };

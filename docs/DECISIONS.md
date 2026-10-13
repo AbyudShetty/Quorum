@@ -1,31 +1,37 @@
 # Decision log
 
-Lightweight ADRs. Each records the decision, why, how to undo it, and what would make us revisit it. Decisions listed in plan §17 "Open decisions", anything marked **open** here, and any plan change are made **jointly by both maintainers (abyud and abhijna)**. AI agents never decide them.
+Lightweight ADRs. Each records the decision, why, how to undo it, and what would make us revisit it. Decisions listed in plan §17 "Open decisions", anything marked **open** here, and any plan change are made **jointly by both maintainers (abyud and abhijna)**; while abhijna is away, abyud decides them and abhijna reviews on return (D-19). AI agents never decide them.
 
-| #    | Decision                                                                                         | Status                                                                      | Date       |
-| ---- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ---------- |
-| D-1  | Working name "Quorum"; final name deferred                                                       | open (§17.1)                                                                | 2026-10-01 |
-| D-2  | TypeScript on Node.js for the core                                                               | accepted (§17.2)                                                            | 2026-10-01 |
-| D-3  | Apache-2.0 licence                                                                               | accepted (§17.3)                                                            | 2026-10-01 |
-| D-4  | Server-rendered UI with HTMX                                                                     | accepted (§17.4)                                                            | 2026-10-01 |
-| D-5  | Tailscale as default cross-network recommendation                                                | accepted (§17.5) — **revisit requested** (Cloudflare Tunnel proposed), open | 2026-10-01 |
-| D-6  | A2A interop stays in Phase 6                                                                     | open (§17.6) — revisit if users ask                                         | 2026-10-01 |
-| D-7  | Toolchain: Node 22/24 LTS, TypeScript 6.0, ESLint + typescript-eslint, Prettier, Vitest          | accepted                                                                    | 2026-10-01 |
-| D-8  | Re-sequence: Phase 1 = Claude Code ↔ Codex on one machine (local mode); Phase 1b = cross-machine | accepted provisionally — revisit at Phase 0 spec review                     | 2026-10-01 |
-| D-9  | Wake-on-message is a per-attachment user choice                                                  | accepted                                                                    | 2026-10-01 |
-| D-10 | Passkey (WebAuthn user verification) for high/critical approvals                                 | accepted                                                                    | 2026-10-01 |
-| D-11 | Client credentials in the OS keychain via `@napi-rs/keyring`                                     | accepted                                                                    | 2026-10-01 |
-| D-12 | Agent identity: stable per attachment by default, changeable on demand                           | accepted                                                                    | 2026-10-01 |
-| D-13 | Local-mode transport: loopback TCP + tokens + server identity pinning                            | accepted (outline approved)                                                 | 2026-10-01 |
-| D-14 | Answers to the spec open questions                                                               | decided (abyud and abhijna, 2026-10-02)                                     | 2026-10-01 |
-| D-15 | No branch protection on main for now; no agent runs git — agents hand humans the commands        | accepted by abyud — abhijna to confirm                                      | 2026-10-02 |
-| D-16 | Phase 0 closed with E1/E2 and E4 waived (specs accepted on trust; simulated interviews)          | accepted (both); specs stay changeable                                      | 2026-10-02 |
+| #    | Decision                                                                                          | Status                                                   | Date       |
+| ---- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ---------- |
+| D-1  | Name: command `quorum`, npm package `@quorumhq/quorum`                                            | decided (abyud, 2026-10-13) — abhijna to review          | 2026-10-01 |
+| D-2  | TypeScript on Node.js for the core                                                                | accepted (§17.2)                                         | 2026-10-01 |
+| D-3  | Apache-2.0 licence                                                                                | accepted (§17.3)                                         | 2026-10-01 |
+| D-4  | Server-rendered UI with HTMX                                                                      | accepted (§17.4)                                         | 2026-10-01 |
+| D-5  | Default cross-network connection: the Quorum relay (Tailscale, Cloudflare Tunnel as alternatives) | decided (abyud, 2026-10-13, by D-18) — abhijna to review | 2026-10-01 |
+| D-6  | A2A interop stays in Phase 6                                                                      | open (§17.6) — revisit if users ask                      | 2026-10-01 |
+| D-7  | Toolchain: Node 22/24 LTS, TypeScript 6.0, ESLint + typescript-eslint, Prettier, Vitest           | accepted                                                 | 2026-10-01 |
+| D-8  | Re-sequence: Phase 1 = Claude Code ↔ Codex on one machine (local mode); Phase 1b = cross-machine  | accepted provisionally — revisit at Phase 0 spec review  | 2026-10-01 |
+| D-9  | Wake-on-message is a per-attachment user choice                                                   | accepted                                                 | 2026-10-01 |
+| D-10 | Passkey (WebAuthn user verification) for high/critical approvals                                  | accepted                                                 | 2026-10-01 |
+| D-11 | Client credentials in the OS keychain via `@napi-rs/keyring`                                      | accepted                                                 | 2026-10-01 |
+| D-12 | Agent identity: stable per attachment by default, changeable on demand                            | accepted                                                 | 2026-10-01 |
+| D-13 | Local-mode transport: loopback TCP + tokens + server identity pinning                             | accepted (outline approved)                              | 2026-10-01 |
+| D-14 | Answers to the spec open questions                                                                | decided (abyud and abhijna, 2026-10-02)                  | 2026-10-01 |
+| D-15 | No branch protection on main for now; no agent runs git — agents hand humans the commands         | accepted by abyud — abhijna to confirm                   | 2026-10-02 |
+| D-16 | Phase 0 closed with E1/E2 and E4 waived (specs accepted on trust; simulated interviews)           | accepted (both); specs stay changeable                   | 2026-10-02 |
+| D-17 | Windows are addressable: numbered session labels                                                  | accepted by abyud — abhijna to confirm                   | 2026-10-06 |
+| D-18 | Easy setup: npm install, a free end-to-end-encrypted relay, asking before mail is read            | decided (abyud) — abhijna to review                      | 2026-10-13 |
+| D-19 | While abhijna is away, abyud decides alone; track split and RFC step on hold                      | decided (abyud) — until abhijna returns                  | 2026-10-13 |
 
 ---
 
-## D-1 Name (open)
+## D-1 Name
 
-"Quorum" is a working name used in docs; nothing has been published under it. **Before the first public release**, check npm, PyPI and GitHub for clashes (plan header) and decide jointly. Renaming is cheap until a package is published: package names, CLI binary name and docs.
+- **Decision (abyud, 2026-10-13; abhijna to review):** the command people type stays `quorum`. The npm package is `@quorumhq/quorum` under a free npm organisation (public packages in an organisation are free); if `quorumhq` is taken, `getquorum`, then `quorum-hq`.
+- **Why:** `quorum`, `quorum-cli` and `quorum-agents` are taken on npm, and nearly every one-word synonym too (conclave, caucus, parley, huddle, agora, concord, assembly, plenum…). A scope keeps the name that fits the idea ("enough humans present to decide") for the command.
+- **Before:** "Quorum" was a working name; nothing has been published under it. Renaming stays cheap until the first public publish.
+- **Revisit if:** the organisation name cannot be had, or a trademark clash appears before the first public release.
 
 ## D-2 TypeScript on Node.js
 
@@ -45,7 +51,11 @@ Lightweight ADRs. Each records the decision, why, how to undo it, and what would
 - **Migration path:** HTML routes contain no business logic and call the same core commands as `/v1`; an SPA could consume `/v1` unchanged (ARCHITECTURE §7, §9).
 - **Revisit if:** the planner view (Phase 7) or heavy client-side interaction outgrows HTMX fragments.
 
-## D-5 Tailscale as default network recommendation (revisit requested)
+## D-5 Default cross-network connection
+
+**Settled 2026-10-13 by D-18 (abyud; abhijna to review):** the default is the Quorum relay; Tailscale and Cloudflare Tunnel stay documented alternatives (both built and tried once in Phase 1b). The history below is kept.
+
+### Before: Tailscale as default network recommendation (revisit requested)
 
 - **Why (original):** the server stays private (not internet-reachable), WireGuard encryption, free personal tier, no router ports; smaller attack surface than a public tunnel.
 - **Revisit requested 2026-10-01:** abhijna proposed Cloudflare Tunnel. Trade-off to settle jointly:
@@ -148,3 +158,30 @@ Decisions are joint, so abhijna confirms or challenges these during the E2 revie
   - **Numbers count up** and are never handed out twice: `/clear` gives the next number, a resumed conversation gets its own number back. (Before, the lowest free number was reused, so a new conversation could look like the old one.)
   - **The prompt box is the human's (abyud, 2026-10-07):** mail never shows as the person's own message, in Claude Code or Codex. A Codex wake injects the framed mail into the thread's history (role `user`) and starts a turn with no input; the agent then shows the person the mail in its reply, as on Claude Code.
   - **INV-9 amended:** where the person sees a delivery too (wakes), only the neat lines are shown; the frame moves to what the agent alone reads (hook context, and the framed copy given to a woken Codex turn by its prompt hook), and every session is told at start that such lines are data from others. The protections against forged lines stay (indented later lines, control characters removed). Chosen by abyud ("neat only").
+
+## D-18 Easy setup: npm install, a free relay, asking before mail is read
+
+- **Decision (abyud, 2026-10-13; abhijna to review):** after the first two-laptop run (Tailscale), abyud found the setup "wayy too annoying" (clone, build, link, Tailscale on both machines, `tailscale serve`, `remote enable`, join codes, a Codex daemon restart) and asked for something as simple as WhatsApp. Agreed, point by point:
+  1. **The workspace stays on a home machine** (as built). A relay connects the other machines; if the home machine is off, they queue outgoing messages. Mail for a closed session waits on the home machine.
+  2. **End-to-end encryption between machines.** The relay cannot read or alter traffic; it sees only who talks to whom, when and how much. The home server still reads mail (it is the human's own machine), so secret scanning stays there.
+  3. **Self-hostable relay.** Open source; `quorum relay` runs one; ours is the default. Self-hosting keeps even the metadata private.
+  4. **Everything free.** The relay forwards only and stores nothing, so it fits a free hosting tier; no custom domain. Current free-tier terms are checked before choosing a host.
+  5. **Invite-only use** of our relay, tight size and rate limits.
+  6. **No accounts.** Identity is a key on each device, set up by the invite code; a lost laptop is invited again.
+  7. **Private until ready:** package files (`npm pack`) for testers; the repository and npm package go public once the relay and encryption pass Phase 1b. Private npm packages cost money, so they are out.
+  8. **Name:** see D-1.
+  9. **Install with `npm install -g`**, not `npx` (agent configs point at installed files; the npx cache moves). abyud publishes; agents give the commands.
+  10. **Phase 1b's exit** becomes "through the default relay, from `npm install -g` on a clean machine"; Tailscale and Cloudflare Tunnel become documented alternatives (settles D-5).
+  11. **Plan amended** (§2, §4.8, §5, §7, §9, §10, §13, §14, §16), with targeted edits.
+  12. **Order:** plan, then packaging, then removing setup friction, then the relay, then encryption. Each step ships on its own.
+  13. **Files across machines** (including code through GitHub) are being designed; Phase 3 for now.
+  14. **Session numbers** stay as D-17: never handed out twice.
+- **Asking before mail is read:** mail is addressed to a session. When that session starts or resumes with mail waiting, Quorum shows a count and the senders and asks. Yes: mail flows both ways for the rest of that session. No: nothing reaches the agent; new mail is only counted ("3 (earlier) + 1 new messages waiting via Quorum"), and Quorum asks again when the human asks to see them or the session is resumed.
+- **Security:** the relay is a new internet-facing component, but it holds no keys, no state and no plaintext; INV-24 pinning of the home server's key is what makes the encryption end to end. Threat-model rows are added with the relay.
+- **Revisit if:** free hosting for the relay disappears (fall back to Tailscale/Cloudflare, or self-hosted relays), or users need delivery while the home machine is off (a relay that stores encrypted mail).
+
+## D-19 While abhijna is away
+
+- **Decision (abyud, 2026-10-13):** abhijna is away with no return date. Until then abyud's decisions on open items and plan changes are final, recorded here as "abhijna to review"; abyud builds both tracks, so the Track A / Track B split (TEAM_PLAN §2) and the RFC step for shared contracts (TEAM_PLAN §5.3) are on hold. Protocol changes are still written down (schemas versioned, MESSAGE_SPEC, CHANGELOG) so they can be reviewed.
+- **Unchanged:** the invariants (INV-n), no git work by agents (D-15), never deciding for a human.
+- **Ends when:** abhijna returns; anything decided meanwhile can be reopened then.

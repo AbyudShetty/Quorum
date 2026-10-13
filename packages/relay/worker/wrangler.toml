@@ -1,0 +1,14 @@
+# The hosted Quorum relay on Cloudflare Workers (free plan). Deploy: see README.md in this folder.
+name = "quorum-relay"
+main = "index.js"
+compatibility_date = "2026-10-01"
+
+# One Durable Object per home server. The free plan offers only SQLite-backed Durable Objects;
+# the relay stores nothing in it.
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

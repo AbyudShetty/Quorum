@@ -15,6 +15,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import type { LocalBootstrap } from '../local/bootstrap.js';
 import type { ServerInstance } from '../local/instance.js';
 import { classifyRequest } from '../local/request-guard.js';
+import type { RelayHome } from '../relay/home.js';
 import type { Caller, Quorum } from '../service/quorum.js';
 import { RateLimiter, RateLimitError } from '../service/rate-limit.js';
 
@@ -46,6 +47,11 @@ export interface AppOptions {
    * other machines' requests to our loopback port (`tailscale serve`, `cloudflared`).
    */
   publicUrl?: string;
+  /**
+   * The relay link (ARCHITECTURE §8.4), when remote access goes through the relay: requests on its
+   * connections are remote, and its address goes into join codes.
+   */
+  relay?: () => Pick<RelayHome, 'linkUrl' | 'clientOf'> | undefined;
   /** Called on every request, e.g. for idle shutdown. */
   onActivity?: () => void;
   /** Requests per minute per client address on routes that need no token (INV-23). */
@@ -176,8 +182,12 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
    * Who to rate-limit: behind the front end every request comes from 127.0.0.1, so remote ones are
    * counted by the address the front end reports (forging it only moves a caller to another bucket).
    */
+  const relayClientOf = (request: FastifyRequest): string | undefined =>
+    options.relay?.()?.clientOf(request.raw.socket);
   const clientOf = (request: FastifyRequest): string => {
     if (!isRemote(request)) return request.ip;
+    const relayed = relayClientOf(request);
+    if (relayed !== undefined) return `relay:${relayed}`;
     const forwarded = request.headers['cf-connecting-ip'] ?? request.headers['x-forwarded-for'];
     const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
     return `remote:${first ?? 'unknown'}`;
@@ -230,7 +240,10 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
     options.onActivity?.();
     void reply.header('cache-control', 'no-store');
     void reply.header('x-content-type-options', 'nosniff');
-    if (options.mode === 'local') {
+    if (options.mode === 'local' && relayClientOf(request) !== undefined) {
+      // Through the relay: TLS to this server's own key, so it is another machine (never local).
+      remoteRequests.set(request, true);
+    } else if (options.mode === 'local') {
       const headers = request.headers;
       const result = classifyRequest(
         {
@@ -327,17 +340,18 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
 
   app.post('/v1/join-codes', async (request, reply) => {
     const human = caller(request);
-    if (!options.publicUrl) {
+    const linkUrl = options.publicUrl ?? options.relay?.()?.linkUrl;
+    if (!linkUrl) {
       throw new DomainError(
         'conflict',
         'remote.off',
         'Other machines cannot reach this server yet, so a join code would not work.',
-        'Turn on remote access first: quorum remote enable --public-url https://<this machine>',
+        'Turn on remote access first: quorum remote enable',
       );
     }
     const created = quorum.createJoinCode(human, request.body);
     const link = formatServerLink({
-      url: options.publicUrl,
+      url: linkUrl,
       fingerprint: serverFingerprint(options.instance.publicKey),
       secret: created.code,
     });

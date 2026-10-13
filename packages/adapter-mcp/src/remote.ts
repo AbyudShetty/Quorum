@@ -15,6 +15,7 @@ import {
 } from '@quorum/schemas';
 import { writePrivateFile } from '@quorum/local';
 import { ApiError, IdentityError, type Target, UnreachableError } from './client.js';
+import { quorumFetch } from './relay-fetch.js';
 
 /** A server on another machine, with the key this machine pinned for it. */
 export interface RemoteServer {
@@ -75,7 +76,7 @@ const refused = (status: number, body: unknown): ApiError => {
  */
 export const pinServer = async (
   link: ServerLink,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = quorumFetch,
 ): Promise<RemoteServer> => {
   const nonce = newHelloNonce();
   const reply = await post(fetchImpl, `${link.url}/v1/hello`, { nonce });
@@ -101,7 +102,7 @@ export const pinServer = async (
 export const joinServer = async (
   link: ServerLink,
   request: Omit<JoinRequest, 'code'>,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = quorumFetch,
 ): Promise<{ server: RemoteServer; created: AttachmentCreated }> => {
   if (!link.secret) throw new Error('This link has no join code (j=…).');
   const server = await pinServer(link, fetchImpl);
@@ -114,7 +115,7 @@ export const joinServer = async (
 export const startDeviceLogin = async (
   server: RemoteServer,
   machine: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = quorumFetch,
 ): Promise<DeviceStarted> => {
   const reply = await post(fetchImpl, `${server.url}/v1/auth/device`, { machine });
   if (reply.status !== 201) throw refused(reply.status, reply.body);
@@ -125,7 +126,7 @@ export const startDeviceLogin = async (
 export const collectDeviceLogin = async (
   server: RemoteServer,
   deviceCode: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = quorumFetch,
 ): Promise<LocalBootstrapResponse | 'pending'> => {
   const reply = await post(fetchImpl, `${server.url}/v1/auth/device/token`, {
     device_code: deviceCode,

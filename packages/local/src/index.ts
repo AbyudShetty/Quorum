@@ -28,9 +28,20 @@ export {
 } from './git-worktree.js';
 export {
   checkPublicUrl,
+  type FrontEndConfig,
   readRemoteConfig,
+  type RelayConfig,
   type RemoteConfig,
   remoteConfigPath,
   removeRemoteConfig,
   writeRemoteConfig,
 } from './remote.js';
+export {
+  checkRelayUrl,
+  connectThroughRelay,
+  RELAY_PROTOCOL,
+  RelayError,
+  relayLinkUrl,
+  relayProofMessage,
+  webSocketStream,
+} from './relay-link.js';

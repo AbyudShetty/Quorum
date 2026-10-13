@@ -26,6 +26,8 @@ Rules:
 
 Tried live on Windows (Phase 1 exit run, 2026-10-11): the Claude Code idle watcher and the Codex idle wake, both ways. Claude Code channels (S2) stay deferred until they need no development flag. Codex `Stop` continuation is documented by OpenAI but not yet seen live.
 
+**Asking before mail is read (D-18).** A session that starts or resumes with mail waiting gets only the count; the person is shown who wrote and asked (Claude Code `systemMessage`; Codex: the agent passes the line on). Until a yes-like prompt (`MAIL_YES`), prompt and tool hooks deliver nothing, `stop` asks for no wake, the idle watcher and the Codex waker skip the window, and `quorum_inbox` refuses (`isMailHeld`); new mail is counted (`heldMailCount`). Kept per window in the hook state (`mail: "held"`).
+
 ## Tests
 
 `hooks.test.ts` runs every hook against the real local server: introduction and session registration, framed mail delivered once, both vendors' event names, turn continuation only on a server grant and never twice in a row, wake mode `off` and broadcasts under `direct`, session end, the heartbeat throttle, long mail in parts, and identity or connection failures.

@@ -27,3 +27,10 @@ Thumbs.db
 
 # Repomix
 repomix-output.md
+
+# Release package files built by npm run pack:release
+/deploy/npm/out/
+
+
+# Cloudflare wrangler state (relay worker)
+.wrangler/

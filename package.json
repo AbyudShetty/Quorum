@@ -20,7 +20,8 @@
     "test": "vitest run --config config/vitest.config.ts",
     "test:watch": "vitest --config config/vitest.config.ts",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test",
-    "generate": "npm run build && npm run generate -w @quorum/schemas"
+    "generate": "npm run build && npm run generate -w @quorum/schemas",
+    "pack:release": "npm run build && node deploy/npm/pack.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

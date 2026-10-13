@@ -1,19 +1,30 @@
-// Remote access settings `<data dir>/local/remote.json` (ARCHITECTURE §8.3, Phase 1b). The server
-// itself keeps listening on loopback only; an HTTPS front end on the same machine (`tailscale
-// serve`, or `cloudflared` for Cloudflare Tunnel) carries other machines' requests to it. This file
-// tells the server that front end's public address (to accept it as Host) and the fixed port it
-// forwards to. Written by `quorum remote enable`, read on every server start (auto-start too). No
-// secrets. A malformed file is ignored, so remote access is off rather than half on.
-import { readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+// Remote access settings `<data dir>/local/remote.json` (ARCHITECTURE §8.3, §8.4, Phase 1b). The
+// server itself keeps listening on loopback only. Other machines reach it one of two ways:
+//  - the relay (the default, D-18): the server connects out to a relay, and other machines reach
+//    it there through TLS keyed by its identity; the file names the relay;
+//  - an HTTPS front end on the same machine (`tailscale serve`, or `cloudflared` for Cloudflare
+//    Tunnel): the file holds that front end's public address (accepted as Host) and the fixed port
+//    it forwards to.
+// Written by `quorum remote enable`, read on every server start (auto-start too). No secrets. A
+// malformed file is ignored, so remote access is off rather than half on.
+import { mkdir, readFile, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { writePrivateFile } from './data-dir.js';
+import { checkRelayUrl } from './relay-link.js';
 
-export interface RemoteConfig {
+export interface FrontEndConfig {
   /** The front end's address: https://<host>[:port], no path. TLS ends there (INV-22). */
   public_url: string;
   /** The loopback port the server listens on and the front end forwards to. */
   port: number;
 }
+
+export interface RelayConfig {
+  /** The relay: wss://<host>[:port] (ws:// only on this machine). TLS ends at this server. */
+  relay: string;
+}
+
+export type RemoteConfig = FrontEndConfig | RelayConfig;
 
 export const remoteConfigPath = (dataDir: string): string => join(dataDir, 'local', 'remote.json');
 
@@ -51,6 +62,7 @@ export const checkPublicUrl = (text: string): { url: string } | { problem: strin
 const valid = (value: unknown): value is RemoteConfig => {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
+  if ('relay' in v) return typeof v.relay === 'string' && 'url' in checkRelayUrl(v.relay);
   return (
     typeof v.public_url === 'string' &&
     'url' in checkPublicUrl(v.public_url) &&
@@ -61,14 +73,19 @@ const valid = (value: unknown): value is RemoteConfig => {
   );
 };
 
-export const writeRemoteConfig = (dataDir: string, config: RemoteConfig): Promise<void> =>
-  writePrivateFile(remoteConfigPath(dataDir), `${JSON.stringify(config, null, 2)}\n`);
+export const writeRemoteConfig = async (dataDir: string, config: RemoteConfig): Promise<void> => {
+  await mkdir(dirname(remoteConfigPath(dataDir)), { recursive: true, mode: 0o700 });
+  await writePrivateFile(remoteConfigPath(dataDir), `${JSON.stringify(config, null, 2)}\n`);
+};
 
 /** The settings, or undefined when remote access is off (no file, or a malformed one). */
 export const readRemoteConfig = async (dataDir: string): Promise<RemoteConfig | undefined> => {
   try {
     const parsed: unknown = JSON.parse(await readFile(remoteConfigPath(dataDir), 'utf8'));
-    return valid(parsed) ? { public_url: parsed.public_url, port: parsed.port } : undefined;
+    if (!valid(parsed)) return undefined;
+    return 'relay' in parsed
+      ? { relay: parsed.relay }
+      : { public_url: parsed.public_url, port: parsed.port };
   } catch {
     return undefined;
   }

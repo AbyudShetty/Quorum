@@ -140,6 +140,23 @@ One server can serve local and remote clients at the same time; local clients al
 
 Refusing an insecure public bind is enforced by INV-22. Being on the tailnet is never treated as authentication. With Cloudflare Tunnel the server is internet-reachable, so authentication, rate limits and INV-24 pinning carry all of the protection.
 
+### 8.4 The relay (default for T3, D-18)
+
+The default way to connect machines on different networks: nobody installs a VPN, opens a port or runs a tunnel. Built in Phase 1b.
+
+```
+laptop B (CLI, hooks, MCP)                relay (stores nothing)               laptop A (home server)
+  quorum://relay/<fp>  ── wss ──►  /v1/connect/<fp>   pairs   /v1/accept/<fp>/<conn> ◄── wss ── server (outbound)
+        └──────────────── TLS 1.3, server certificate = A's instance key (pinned: <fp>) ────────────────┘
+```
+
+- **Home machine.** The workspace stays on one machine (its server, event log, inboxes, policy). `quorum remote enable [--relay wss://…]` or `quorum invite` (confirmed at a terminal, INV-30) saves `{"relay": "wss://…"}` in `<data>/local/remote.json`. The server keeps listening on loopback only (INV-22), opens an outbound WebSocket to the relay (`/v1/home/<fp>`, where `<fp>` is its key fingerprint) and proves it holds that key by signing the relay's challenge (`quorum-relay/1 home\n<fp>\n<nonce>`). It reconnects with backoff and pings every 25 s; idle shutdown is off.
+- **Other machines.** The invite (`quorum invite` on A) is the usual join code with a relay address: `quorum://<relay host>/<fp>#k=<fp>&j=qrm_jc_…`. Clients reach a `quorum://` address with `quorumFetch` (`@quorum/adapter-mcp`): a WebSocket to `/v1/connect/<fp>`; the relay tells the home (`open`, with a random connection id and the client's address); the home opens `/v1/accept/<fp>/<conn>`; the relay answers `paired`. From then on binary frames pass both ways, and the two ends run **TLS 1.3** over them: the home is the TLS server with a self-signed certificate for its instance key; the client accepts it only if the key's fingerprint is the `<fp>` in the address (INV-33), before it sends a byte of the request. Plain HTTP/1.1 runs inside, with keep-alive, so a process pays the setup once; the identity handshake (INV-24) and tokens work as everywhere else.
+- **What the relay sees**: who connects to which home, when, and how many bytes; the client's IP address. Not the requests, tokens, join codes or messages (tested: a recording proxy in front of the relay never sees them; a relay that pretends to be the home gets no byte of the request).
+- **On the home server**, connections from the relay are remote (no local sign-in, tokens required, INV-23) and rate-limited per client address the relay reports; at most 64 at once and 60 new ones per address per minute.
+- **The relay** (`@quorum/relay`): one room per home; a home must prove its key before connections are routed to it, and a newer proven home replaces an older one; frames up to 1 MiB; 64 open connections per home. It runs on Node (`quorum relay`, self-hosting, behind HTTPS) or as a Cloudflare Worker with a Durable Object per home (`packages/relay/worker`, free plan, WebSocket Hibernation so idle homes cost nothing). The hosted default is not deployed yet (`HOSTED_RELAY` in the CLI is empty; `--relay` or `QUORUM_RELAY` until then).
+- **When the home machine is off**, other machines cannot reach the workspace; their outgoing messages wait in the local outbox (INV-20). A relay that keeps encrypted mail is a later decision (D-18).
+
 ## 9. Migration seams (keep every decision reversible)
 
 | Decision                                   | Seam                                                                           | Cost to switch later                                     |

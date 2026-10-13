@@ -22,6 +22,7 @@ import { Registry } from '../storage/registry.js';
 import { SqliteEventStore } from '../storage/sqlite-event-store.js';
 import { LocalBootstrap } from './bootstrap.js';
 import { loadOrCreateInstance } from './instance.js';
+import { connectRelayHome, type RelayHome } from '../relay/home.js';
 
 export const SERVER_VERSION = '0.1.0-dev';
 
@@ -47,8 +48,13 @@ export interface LocalServerOptions {
 export interface LocalServer {
   dataDir: string;
   port: number;
-  /** The HTTPS front end's address when remote access is on (`quorum remote enable`). */
+  /**
+   * The address other machines use when remote access is on (`quorum remote enable`): the HTTPS
+   * front end's, or quorum://<relay>/<fingerprint> through the relay.
+   */
   publicUrl?: string;
+  /** Through the relay: whether it has accepted this server (`connecting`, `ready`, `down`). */
+  relayState?: () => string;
   baseUrl: string;
   instanceId: string;
   publicKey: string;
@@ -135,8 +141,11 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
       ...(options.clock ? { clock: options.clock } : {}),
     });
     const bootstrap = new LocalBootstrap(dataDir, options.clock ? { now: options.clock } : {});
-    // Remote access (Phase 1b): still loopback only, on the fixed port the front end forwards to.
+    // Remote access (Phase 1b): still loopback only. With a front end, on the fixed port it
+    // forwards to; with the relay, through an outbound connection (ARCHITECTURE §8.4).
     const remote = await readRemoteConfig(dataDir);
+    const frontEnd = remote && 'public_url' in remote ? remote : undefined;
+    let relayHome: RelayHome | undefined;
     let lastActivity = Date.now();
     let port = 0;
     const app = buildApp({
@@ -146,18 +155,26 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
       mode: 'local',
       bootstrap,
       port: () => port,
-      ...(remote ? { publicUrl: remote.public_url } : {}),
+      ...(frontEnd ? { publicUrl: frontEnd.public_url } : {}),
+      relay: () => relayHome,
       onActivity: () => {
         lastActivity = Date.now();
       },
     });
     // Loopback only, never configurable in local mode (INV-22).
-    await app.listen({ host: '127.0.0.1', port: options.port ?? remote?.port ?? 0 });
+    await app.listen({ host: '127.0.0.1', port: options.port ?? frontEnd?.port ?? 0 });
     cleanups.push(() => app.close());
     cleanups.push(() => {
       quorum.close(); // ends open streams, so closing the HTTP server does not wait on them
     });
     port = (app.server.address() as AddressInfo).port;
+    if (remote && 'relay' in remote) {
+      const link = connectRelayHome({ relay: remote.relay, instance, server: app.server });
+      relayHome = link;
+      cleanups.push(() => {
+        link.close();
+      });
+    }
 
     await writeDiscovery(dataDir, {
       instance_id: instance.instanceId,
@@ -209,11 +226,16 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
       );
     }
     for (const timer of timers) timer.unref();
+    const relayLink = relayHome;
+    const relayFields = relayLink
+      ? { publicUrl: relayLink.linkUrl, relayState: () => relayLink.state() }
+      : {};
 
     return {
       dataDir,
       port,
-      ...(remote ? { publicUrl: remote.public_url } : {}),
+      ...(frontEnd ? { publicUrl: frontEnd.public_url } : {}),
+      ...relayFields,
       baseUrl: `http://localhost:${String(port)}`,
       instanceId: instance.instanceId,
       publicKey: instance.publicKey,

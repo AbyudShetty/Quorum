@@ -8,6 +8,10 @@ The Quorum server: the `/v1` HTTP API on SQLite, and local mode (`quorum serve -
 
 The server never binds a network address itself: with `quorum remote enable` it keeps listening on `127.0.0.1` (fixed port, default 7420) and an HTTPS front end on the same machine (`tailscale serve`, `cloudflared`) forwards other machines' requests (INV-22). Requests addressed to the public name, or carrying the front end's forwarding headers, count as remote: tokens required, rate limits per forwarded client, no local bootstrap sign-in (`local/request-guard`). Other machines join with single-use join codes (`POST /v1/join-codes`, `/v1/join`), and humans sign in there with a device code (`/v1/auth/device…`); folders on other machines are keyed with the machine name and never opened here. See [docs/REMOTE_SETUP.md](../../docs/REMOTE_SETUP.md).
 
+## The relay (Phase 1b, D-18)
+
+With `{"relay": "wss://…"}` in `remote.json` the server connects out to the relay (`relay/home.ts`): it proves its instance key, and for each connection the relay announces it runs TLS 1.3 as the server with a self-signed certificate for that key (`relay/certificate.ts`) and hands the decrypted connection to the HTTP server. Those requests are remote (no local sign-in, tokens required) and rate-limited per client address; join codes then carry `quorum://<relay>/<fingerprint>`. See ARCHITECTURE §8.4.
+
 ## How a request flows
 
 1. **HTTP** (`http/app`, Fastify): Host/Origin check in local mode (INV-26), rate limits for requests without a token (INV-23), token → caller.

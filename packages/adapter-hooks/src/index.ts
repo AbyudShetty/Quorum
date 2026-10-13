@@ -8,7 +8,11 @@ export {
   IDLE_WAKE_INTRO,
   deliverMail,
   framedMail,
+  heldMailCount,
+  heldMailQuestion,
+  MAIL_YES,
   neatMail,
+  RELEASED_INTRO,
   MCP_WINDOW_PREFIX,
   type HookClient,
   type HookContext,
@@ -18,7 +22,7 @@ export {
   MAX_CONTEXT_CHARS,
   runHook,
 } from './hooks.js';
-export { type HookState, loadHookState, saveHookState } from './state.js';
+export { type HookState, isMailHeld, loadHookState, saveHookState } from './state.js';
 export { type WatchClient, type WatchContext, type WatchResult, watchForMail } from './watch.js';
 export {
   type CodexSessions,

@@ -68,3 +68,9 @@ export {
   startDeviceLogin,
   targetOf,
 } from './remote.js';
+export {
+  closeRelayConnections,
+  createQuorumFetch,
+  parseRelayUrl,
+  quorumFetch,
+} from './relay-fetch.js';

@@ -1,6 +1,7 @@
 # Quorum — a human-governed coordination layer for AI coding agents
 
 > Working name: **Quorum** (agents propose, humans decide). Rename freely; check npm, PyPI and GitHub for clashes before the first public release.
+> _Decided 2026-10-13 (D-1): the command stays `quorum`; the npm package is `@quorumhq/quorum` (fallbacks `getquorum`, then `quorum-hq`)._
 
 This document is the complete plan: what to build, why, how, and in what order. It is written to be handed to a fresh AI coding session as the single source of truth. There are no deadlines; each phase has **exit criteria** instead. Move on only when they are met.
 
@@ -35,7 +36,9 @@ Most waiting time was spent on the relay, not on actual work. At the same time, 
 
 ## 2. The product in one sentence
 
-**A self-hosted workspace where AI coding agents from any vendor — in different folders on one machine, or across any number of machines — coordinate work — messages, findings with evidence, files, resource leases — while every consequential action waits for a human's approval.**
+**A workspace that lives on your own machine — reached from your other machines through a free, end-to-end-encrypted relay (ours, or one you run) — where AI coding agents from any vendor — in different folders on one machine, or across any number of machines — coordinate work — messages, findings with evidence, files, resource leases — while every consequential action waits for a human's approval.**
+
+_Amended 2026-10-13 (D-18): was "A self-hosted workspace where…". The workspace is still on the users' own machines; only the connection between machines changed._
 
 ## 3. What already exists, and where Quorum fits
 
@@ -59,7 +62,7 @@ Checked October 2026; re-check before Phase 1 because this space moves monthly.
 5. **Fail safe, not fail open.** If the server is unreachable, agents keep working alone and queue outgoing messages; nothing auto-approves on timeout.
 6. **Least privilege.** Each agent token has a scope (project, allowed message types, artifact access). Defaults are restrictive.
 7. **Five-minute setup.** If two agents on two machines aren't talking within 5 minutes of install, that's a bug. On **one machine**, two agents in two folders must be talking within **1 minute** of `quorum attach`, with **zero network setup**.
-8. **Free to build and run.** Open-source dependencies only, self-hosted, no required paid service.
+8. **Free to build and run.** Open-source dependencies only, no required paid service. Workspaces live on the users' own machines; the default relay that connects machines is free, stores nothing and cannot read messages (end-to-end encrypted), and anyone can run their own (D-18).
 9. **Vendor-neutral.** One thin adapter per agent; the core never depends on one vendor.
 
 ## 5. Core concepts (the vocabulary)
@@ -73,6 +76,8 @@ Checked October 2026; re-check before Phase 1 because this space moves monthly.
 | **Attachment** | A folder on a machine that a human has bound to a workspace for a given vendor (`quorum attach <dir>`). An agent sees only the workspaces its attachment grants. |
 | **Session** | One live run of a vendor tool (e.g. one Claude Code session). Sessions come and go; by default they map to the attachment's stable agent identity. |
 | **Local mode** | The server running on the same machine as its agents, bound to loopback and auto-started — no network setup. Same security invariants as remote mode. |
+| **Home machine** | The machine whose server holds a workspace (its event log, inboxes and policy). Other machines reach it through the relay. |
+| **Relay** | A small forwarding service that connects machines on different networks: every machine connects *out* to it, so nobody installs a VPN or opens a port. It stores nothing and cannot read what it forwards (end-to-end encrypted). Quorum runs a free default; anyone can run their own (`quorum relay`). |
 | **Message** | Typed communication between agents/humans (see §6). |
 | **Thread** | A conversation grouped by topic or task. |
 | **Task** | A unit of work requested by one party, accepted/declined by another, with status. |
@@ -139,13 +144,14 @@ Rules:
 ```
 
 Components:
-1. **Server.** One process. Starts with `npx quorum serve` or one Docker image. SQLite by default (zero setup); Postgres optional for bigger teams. In **local mode** it binds loopback only and is auto-started by the first agent that needs it.
+1. **Server.** One process, installed with `npm install -g @quorumhq/quorum` (D-18). Starts with `quorum serve` or one Docker image. SQLite by default (zero setup); Postgres optional for bigger teams. In **local mode** it binds loopback only and is auto-started by the first agent that needs it.
 2. **Event log.** Every state change is an event; tables are projections of the log. Each event stores the hash of the previous event (tamper evidence). Export/import as JSONL.
 3. **Artifact store.** Content-addressed (`sha256`) files on disk; versions point at blobs. Resumable chunked upload for large files. Dedup for free.
 4. **Policy engine.** Evaluates "is this action gated? who may approve? how many approvals?" from a small, readable policy file (`quorum.policy.yaml`).
 5. **Adapters.** One per agent family. Prefer **MCP** (an MCP server exposing Quorum tools) because most coding agents support it; add vendor hooks for push delivery (e.g. inbox check between turns). The adapter is thin: it never decides anything, it only connects.
 6. **Web UI.** Server-rendered or a small SPA. Works well on a phone, because approvals often happen away from the desk.
-7. **CLI.** `quorum init`, `quorum join`, `quorum send`, `quorum inbox`, `quorum upload`, `quorum approve`, `quorum lease`, `quorum export`.
+7. **CLI.** `quorum init`, `quorum invite`, `quorum join`, `quorum send`, `quorum inbox`, `quorum upload`, `quorum approve`, `quorum lease`, `quorum export`, `quorum relay`.
+8. **Relay (D-18).** Forwards end-to-end-encrypted traffic between the home machine and other machines; both sides connect out to it. Stateless (stores nothing), invite-only use, tight size and rate limits. Quorum runs a free one as the default; `quorum relay` runs your own.
 
 ### Recommended stack (all free and open source)
 - Language: **TypeScript on Node.js** (one language for server, CLI, MCP adapter, web UI; easy `npx` distribution). Alternative: Python + FastAPI if you strongly prefer Python — pick one and keep it.
@@ -159,6 +165,7 @@ Components:
 - Packaging: npm package + Docker image; GitHub Actions for CI (free for public repos).
 
 ### Networking across machines (free options)
+- **Default: the Quorum relay (D-18).** No network setup: `quorum invite` on the home machine, `quorum join <code>` on the other. The invite code carries the home server's key, so traffic is encrypted end to end and the relay only sees who talks to whom, when and how much.
 - **Same LAN / hotspot:** server on one machine, others connect by IP. Simplest.
 - **Different networks:** **Tailscale** (free personal tier) or **WireGuard** (free) to create a private network; or a **Cloudflare Tunnel** (free) to expose the server with HTTPS.
 - Always TLS when leaving the LAN. Never require opening router ports.
@@ -166,7 +173,7 @@ Components:
 ### Topologies (all three are first-class)
 - **T1 — same machine, different folders:** e.g. Claude Code in `~/proj/api` and another Claude Code in `~/proj/web`. Local mode; no network setup.
 - **T2 — same machine, different vendors, same or different folders:** e.g. Claude Code and Codex in one repo. Local mode; Quorum detects a shared working tree, warns both agents and the humans, and offers one git worktree per agent.
-- **T3 — different machines:** one machine runs the server in remote mode (Tailscale by default, Cloudflare Tunnel or LAN as alternatives); its own local agents still connect over loopback.
+- **T3 — different machines:** one machine (the home machine) runs the server; other machines reach it through the relay by default (Tailscale, Cloudflare Tunnel or LAN as alternatives); its own local agents still connect over loopback. If the home machine is off, other machines queue their outgoing messages (§4.5).
 
 Details: `docs/ARCHITECTURE.md` §8 and §12–§15.
 
@@ -190,11 +197,13 @@ Security deliverables: adversarial test suite (§11), `SECURITY.md` with a discl
 
 ## 9. User experience goals
 
-- **Same machine, first message in < 1 minute:** run `npx quorum attach .` in each folder (it detects Claude Code / Codex, writes their config outside version control, auto-starts the local server and asks how eagerly the agent should be woken by new messages). Nothing else.
+- **Install once:** `npm install -g @quorumhq/quorum`. No cloning or building (D-18).
+- **Same machine, first message in < 1 minute:** run `quorum attach .` in each folder (it detects Claude Code / Codex, writes their config outside version control, auto-starts the local server and asks how eagerly the agent should be woken by new messages). Nothing else.
 - **Install to first message in < 5 minutes (across machines):**
-  1. `npx quorum serve` on machine A shows a join code and QR.
-  2. On machine B: `npx quorum join <code>`, which registers the agent and installs the MCP adapter config for the detected agent (Claude Code / Codex / Gemini CLI / OpenCode).
+  1. `quorum invite` on machine A shows an invite code (and QR). No VPN, tunnel or port: the relay connects the machines (D-18).
+  2. On machine B: `quorum join <code>`, which registers the agent and installs the MCP adapter config for the detected agent (Claude Code / Codex / Gemini CLI / OpenCode).
   3. Each agent gets simple tools: `quorum_send`, `quorum_inbox`, `quorum_finding`, `quorum_upload`, `quorum_download`, `quorum_lease`, `quorum_request_approval`, `quorum_status`.
+- **You decide when mail is read (D-18):** mail is addressed to a session. When that session starts or resumes with mail waiting, Quorum shows only a count and the senders ("2 messages waiting from claude@laptop-a - 3") and asks. After a yes, messages flow both ways for the rest of that session. After a no, nothing reaches the agent; new mail is only counted ("3 (earlier) + 1 new messages waiting via Quorum"), and Quorum asks again when the human asks to see them or the session is resumed.
 - **Agents don't need training:** tool descriptions explain when to use each; adapter ships a short instructions snippet for `CLAUDE.md` / `AGENTS.md`.
 - **Humans see one timeline:** colour by agent, filter by thread/type, big visible "Needs your decision" section, retractions highlighted.
 - **Approvals on a phone:** one tap with the full context visible (summary, evidence, preview/diff, rollback plan).
@@ -213,6 +222,7 @@ Order of support (verify each tool's current extension points when you get there
 Adapter contract (same for every vendor):
 - Exposes the same tool set and message formats.
 - Delivers incoming messages as untrusted, delimited text with sender + type + refs.
+- Delivers mail waiting for a starting or resumed session only after its human allows it (§9).
 - Never auto-executes; never stores secrets in plain text; respects the human's own permission settings in that agent.
 - Conformance test suite every adapter must pass (§11).
 
@@ -264,10 +274,17 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 - Minimal web timeline (read-only).
 - **Exit:** a Claude Code session in folder A and a Codex session in folder B on **one machine** exchange messages within 1 minute of running `quorum attach` in each folder, with no network configuration; two agents attached to the same working tree are both warned; offline queueing works when the local server is killed; `quorum verify` detects a tampered log; integration, conformance (framing, no-exec) and local-mode adversarial basics (other local process without a token, port squatting, DNS rebinding, path traversal) pass.
 
+> Phase 1b was widened on 2026-10-13 (D-18, abyud) after the first two-laptop run showed the setup was too fiddly: npm packaging, a free default relay, end-to-end encryption between machines and asking before reading mail. Previously the exit was "tested over both Tailscale and Cloudflare Tunnel"; those stay as documented alternatives.
+
 ### Phase 1b — Cross-machine
 - Remote mode: TLS, bind rules, join codes carrying the server's key fingerprint, human device-code login.
-- CLI: `join`; setup guides for Tailscale (default) and Cloudflare Tunnel.
-- **Exit:** a Claude Code session on machine A and a Codex session on machine B exchange messages in < 5 minutes from a clean install, tested over both Tailscale and Cloudflare Tunnel; all Phase 1 exit criteria still hold.
+- CLI: `join`; setup guides for Tailscale and Cloudflare Tunnel (alternatives to the relay).
+- **Packaging:** one npm package, installed with `npm install -g`. Private package files (`npm pack`) until the relay and encryption pass this phase's exit; then the repository goes public and the package is published as `@quorumhq/quorum`.
+- **Setup without friction:** no step the human has to remember (daemon restarts, separate sign-ins) beyond `invite` and `join`.
+- **Relay:** free default, outbound connections only, stores nothing, invite-only use with size and rate limits; self-hostable (`quorum relay`). `quorum invite` / `quorum join <code>`.
+- **End-to-end encryption between machines:** keyed by the home server's identity in the invite code (INV-24); the relay cannot read or alter traffic.
+- **Asking before reading mail** when a session starts or resumes (§9).
+- **Exit:** a Claude Code session on machine A and a Codex session on machine B, on different networks, exchange messages in < 5 minutes from `npm install -g` on a clean machine, through the default relay with no network setup; a test shows the relay cannot read or alter the messages; mail waiting for a session is held until its human allows it; all Phase 1 exit criteria still hold.
 
 ### Phase 2 — Governance: approvals and policy
 - Approval requests/decisions, policy file, gated action types, quorum (number of approvers set per action), expiry, rollback plan field.
@@ -281,6 +298,7 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 - Artifact store: content hashing, versions, lineage, resumable upload, quotas; **local artifacts** shared by path + hash without copying (`local_ref`), with an explicit `quorum artifact copy`.
 - Leases: GPU/RAM/file-path/worktree/dataset/"submission slot" with expiry and renewal; machine resource advertisement; edit-time lease warnings via agent hooks for agents sharing a working tree.
 - Message signing (ed25519) per agent.
+- File sharing across machines is **being designed** (D-18): candidates include sending code as a pushed branch plus a commit reference (the push is a gated action) and large files through Quorum itself.
 - **Exit:** the benchmark scenario runs end-to-end on 2–3 machines **and** in its one-machine variant with no manual file transfer; a retraction visibly flags every dependent item; a lease conflict is shown before it happens.
 
 ### Phase 4 — Multi-vendor
@@ -292,7 +310,7 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 - Full adversarial + chaos suites, performance test with the simulated fleet (50 agents), backup/restore, upgrade migrations.
 - Documentation site: quickstart, concepts, security model, adapter guides, FAQ, troubleshooting.
 - Benchmark results published; 2-minute demo video.
-- Versioned release (semver), changelog, Docker image, npm package.
+- Versioned release (semver), changelog, Docker image, npm package (first published publicly when Phase 1b passes, D-18).
 - Real user interviews (deferred from Phase 0, D-16): at least 5 people who use multiple coding agents.
 - **Exit:** a stranger follows the quickstart and succeeds without help (watch 3 people try); no open high-severity security issues; real interview notes saved.
 
@@ -306,9 +324,9 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 ### Phase 7 — Advanced (only after real users ask)
 - Policy templates (ML competition, web app, data pipeline).
 - "Planner" view: tasks and dependencies across agents with critical path.
-- End-to-end encryption of message bodies within a workspace.
+- End-to-end encryption of message bodies within a workspace, so that even the home machine's server cannot read them. (Encryption between machines through the relay moved to Phase 1b, D-18.)
 - Federation between Quorum servers.
-- Analytics: time saved, relay eliminated, decisions per day.
+- Analytics: time saved, relay eliminated, decisions per day; an opt-in, metadata-only yearly summary ("Quorum Wrapped").
 
 ## 14. What makes it the best (the differentiators to protect)
 
@@ -316,7 +334,7 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 2. **Evidence-carrying findings and retractions** — no other tool treats "is this claim measured?" as a protocol feature.
 3. **Artifacts with lineage** — "which version, produced by which task, validated by which finding".
 4. **Compute and resource leases** across machines — no more silent GPU collisions.
-5. **Vendor-neutral, self-hosted, free**, five-minute setup.
+5. **Vendor-neutral, free, on your own machines** (relay included if you want it), five-minute setup with no network setup.
 6. **Security you can verify**: threat model, adversarial tests, hash-chained log, signed messages.
 7. **Published benchmark** with reproducible numbers.
 
@@ -343,10 +361,12 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 | An agent running as the same OS user acts as its human | Passkey for high-risk approvals; agents denied read access to Quorum's data directory where the vendor supports it; everything logged |
 | Vendor push features are previews or missing (Claude Code channels, no idle wake in Codex) | Turn-boundary hooks + inbox tool always work; wake is optional; spikes re-verify each release |
 | Two agents waking each other in a loop and burning tokens | Wake is a user choice; wake budget and agent-only-loop circuit breaker always on |
+| Our free relay goes down, or its free hosting changes | The relay stores nothing and anyone can run one; Tailscale and Cloudflare Tunnel remain; outgoing messages queue (§4.5) |
+| Strangers abuse our relay | Invite-only use, tight size and rate limits; it cannot read what it forwards |
 
 ## 17. Open decisions (ask before choosing)
 
-Decided jointly by both maintainers (abyud and abhijna). Current status of every decision, including later ones (D-7 onward), is in `docs/DECISIONS.md`.
+Decided jointly by both maintainers (abyud and abhijna); while abhijna is away, abyud decides and abhijna reviews on return (D-19). Current status of every decision, including later ones (D-7 onward), is in `docs/DECISIONS.md`.
 
 1. Final name.
 2. TypeScript vs Python for the core (recommendation: TypeScript).

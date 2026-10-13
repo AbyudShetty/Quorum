@@ -28,6 +28,9 @@
     },
     {
       "path": "../codex-bridge/tsconfig.build.json"
+    },
+    {
+      "path": "../relay/tsconfig.build.json"
     }
   ]
 }

@@ -20,8 +20,11 @@ import {
 import {
   addGitWorktree,
   checkPublicUrl,
+  checkRelayUrl,
   defaultDataDir,
   readRemoteConfig,
+  type RemoteConfig,
+  relayLinkUrl,
   removeRemoteConfig,
   writeRemoteConfig,
   GitWorktreeError,
@@ -48,6 +51,7 @@ import {
   listAttachments,
   loadRemoteServer,
   pinServer,
+  quorumFetch,
   type RemoteServer,
   removeRemoteServer,
   saveRemoteServer,
@@ -79,6 +83,7 @@ import {
   activeWindow,
   adoptWindow,
   forgetMcpWindow,
+  isMailHeld,
   recordMcpWindow,
   startCodexWaker,
   trackWindow,
@@ -141,8 +146,9 @@ Usage: quorum <command> [options]
   stop                                       Stop the local server
   login                                      Sign in as the owner on this machine (local server)
   login <server link> | login approve <code> Sign in to a server on another machine (device code)
-  join-code [--workspace <ws>] [--wake <m>]  A one-time code that attaches a folder elsewhere
-  join "<join code>" [dir] --vendor <v>      Attach a folder here to a server on another machine
+  invite [--workspace <ws>] [--wake <m>]     A one-time code that attaches a folder on another
+                                             machine (turns on remote access through the relay)
+  join "<invite>" [dir] --vendor <v>         Attach a folder here to a server on another machine
   workspace create <name> | workspace list   Create or list your workspaces
   attach [dir] --vendor <v> [--workspace <ws>] [--wake off|direct|all] [--name <n>] [--new-identity]
          [--no-config]                       Connect a folder to a workspace as an agent and write
@@ -152,9 +158,13 @@ Usage: quorum <command> [options]
                                              its vendor hooks and MCP config to this version
   detach <at_id>                             Disconnect an attachment and forget its credentials
   ui                                         A one-time link to the read-only web timeline
-  remote enable --public-url https://… [--port <n>] | disable | status
-                                             Let other machines reach this server through an
-                                             HTTPS front end (tailscale serve, cloudflared)
+  remote enable [--relay wss://…] | disable | status
+                                             Let other machines reach this server through the relay
+  remote enable --public-url https://… [--port <n>]
+                                             ... or through an HTTPS front end on this machine
+                                             (tailscale serve, cloudflared)
+  join-code [--workspace <ws>] [--wake <m>]  Like invite, when remote access is already on
+  relay [--port <n>] [--host <h>]            Run your own relay in this terminal
   worktree [--attachment <at_id>] [--agent <name>]
                                              Give the agent its own git worktree (../<repo>-<agent>,
                                              branch quorum/<agent>) and move its attachment there
@@ -170,8 +180,6 @@ Usage: quorum <command> [options]
                                              Run one vendor hook (reads its JSON on stdin; used by
                                              Claude Code / Codex, never fails the agent)
   help
-
-Not yet available: worktree, ui.
 `;
 
 class UsageError extends Error {}
@@ -213,6 +221,10 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
         return await remote(rest, env);
       case 'join-code':
         return await joinCode(rest, env);
+      case 'invite':
+        return await joinCode(rest, env, true);
+      case 'relay':
+        return await relayCommand(rest, env);
       case 'join':
         return await joinCommand(rest, env);
       case 'status':
@@ -601,64 +613,124 @@ const stop = async (args: string[], env: CliEnv): Promise<number> => {
 export const DEFAULT_REMOTE_PORT = 7420;
 
 /**
- * `quorum remote enable --public-url https://… [--port <n>]`, `remote disable`, `remote status`
- * (Phase 1b, ARCHITECTURE §8.3). Lets other machines reach this server through an HTTPS front end
- * on this machine (`tailscale serve`, or `cloudflared` for Cloudflare Tunnel). The server itself
- * keeps listening on loopback only (INV-22); every request still needs a token (INV-23). Enabling
- * is confirmed at a terminal, like attaching (an agent cannot open the server to other machines).
+ * The relay Quorum runs for everyone (DECISIONS D-18): empty until it is deployed (deploy/relay).
+ * `--relay` or QUORUM_RELAY name another one, e.g. one you run with `quorum relay`.
+ */
+export const HOSTED_RELAY: string = '';
+
+/** The relay to use: the flag, then QUORUM_RELAY, then the hosted one. */
+const relayToUse = (flag: string | undefined): string => {
+  const chosen = flag ?? process.env.QUORUM_RELAY ?? (HOSTED_RELAY || undefined);
+  if (!chosen) {
+    throw new UsageError(
+      'There is no hosted Quorum relay yet. Pass --relay wss://<relay> (one you run with `quorum relay`), or use a front end: --public-url https://<this machine>.',
+    );
+  }
+  const checked = checkRelayUrl(chosen);
+  if ('problem' in checked) throw new UsageError(`The relay ${chosen} ${checked.problem}.`);
+  return checked.url;
+};
+
+/** Where other machines reach this server under these settings. */
+const linkUrlOf = (config: RemoteConfig, publicKey: string): string =>
+  'relay' in config ? relayLinkUrl(config.relay, serverFingerprint(publicKey)) : config.public_url;
+
+/**
+ * Turn remote access on through the relay, after the person confirms at a terminal (INV-30): an
+ * agent cannot open the server to other machines.
+ */
+const enableRelay = async (env: CliEnv, relay: string): Promise<void> => {
+  await confirmBinding(
+    env,
+    `Let other machines reach this Quorum server through the relay at ${relay}? The server connects out to it; the relay passes on encrypted traffic it cannot read, and everything still needs a token.`,
+  );
+  await writeRemoteConfig(dataDirOf(env), { relay });
+};
+
+/** Apply a change: restart a running server (clients reconnect by themselves). */
+const restartIfRunning = async (env: CliEnv): Promise<void> => {
+  if ((await readDiscovery(dataDirOf(env))) === undefined) return;
+  await stop([], env);
+  await humanClient(env); // starts it again with the new settings
+};
+
+/**
+ * `quorum remote enable [--relay wss://…]`, `remote enable --public-url https://… [--port <n>]`,
+ * `remote disable`, `remote status` (Phase 1b, ARCHITECTURE §8.3, §8.4). Lets other machines reach
+ * this server: by default through the relay (the server connects out; TLS runs end to end to this
+ * server's own key), or through an HTTPS front end on this machine (`tailscale serve`, or
+ * `cloudflared` for Cloudflare Tunnel). The server itself keeps listening on loopback only
+ * (INV-22); every request still needs a token (INV-23). Enabling is confirmed at a terminal, like
+ * attaching.
  */
 const remote = async (args: string[], env: CliEnv): Promise<number> => {
   const { values, positionals } = parseArgs({
     args,
-    options: { 'public-url': { type: 'string' }, port: { type: 'string' } },
+    options: {
+      relay: { type: 'string' },
+      'public-url': { type: 'string' },
+      port: { type: 'string' },
+    },
     allowPositionals: true,
     strict: true,
   });
   const dataDir = dataDirOf(env);
   const action = positionals[0] ?? 'status';
   const current = await readRemoteConfig(dataDir);
-  const running = async () => (await readDiscovery(dataDir)) !== undefined;
-  /** Apply a change: restart a running server (clients reconnect by themselves). */
-  const restart = async () => {
-    if (!(await running())) return;
-    await stop([], env);
-    await humanClient(env); // starts it again with the new settings
-  };
 
-  /** The link other machines use: the public address and the server's key fingerprint (INV-24). */
-  const serverLink = async (publicUrl: string): Promise<string> => {
+  /** The link other machines use: their address for this server and its key fingerprint (INV-24). */
+  const serverLink = async (config: RemoteConfig): Promise<string> => {
     await env.startServer?.(dataDir);
     const found = await readDiscovery(dataDir);
     return found
-      ? `\nServer link (for \`quorum login <link>\` on another machine):\n\n  ${formatServerLink({ url: publicUrl, fingerprint: serverFingerprint(found.public_key) })}\n`
+      ? `\nServer link (for \`quorum login <link>\` on another machine):\n\n  ${formatServerLink({ url: linkUrlOf(config, found.public_key), fingerprint: serverFingerprint(found.public_key) })}\n` +
+          '\nTo attach a folder on another machine, run `quorum invite` here.\n'
       : '\nStart the server (any quorum command) to see its link.\n';
   };
 
   if (action === 'status') {
-    env.out(
-      current
-        ? `Remote access is on: ${current.public_url} → http://127.0.0.1:${String(current.port)}.\n${await serverLink(current.public_url)}`
-        : 'Remote access is off: only this machine can reach the server.\n',
-    );
+    if (!current) {
+      env.out('Remote access is off: only this machine can reach the server.\n');
+    } else if ('relay' in current) {
+      env.out(
+        `Remote access is on through the relay ${current.relay}.\n${await serverLink(current)}`,
+      );
+    } else {
+      env.out(
+        `Remote access is on: ${current.public_url} → http://127.0.0.1:${String(current.port)}.\n${await serverLink(current)}`,
+      );
+    }
     return 0;
   }
   if (action === 'disable') {
     await removeRemoteConfig(dataDir);
-    await restart();
+    await restartIfRunning(env);
     env.out(
-      'Remote access is off. Also stop the front end: `tailscale serve reset`, or stop cloudflared.\n',
+      current && 'public_url' in current
+        ? 'Remote access is off. Also stop the front end: `tailscale serve reset`, or stop cloudflared.\n'
+        : 'Remote access is off: only this machine can reach the server.\n',
     );
     return 0;
   }
   if (action !== 'enable') {
-    throw new UsageError('Use: quorum remote enable --public-url https://… | disable | status');
+    throw new UsageError(
+      'Use: quorum remote enable [--relay wss://…] | enable --public-url https://… | disable | status',
+    );
   }
-  const checked = checkPublicUrl(
-    need(
-      values['public-url'],
-      'Pass --public-url https://<host>: the HTTPS address of this machine that other machines use (e.g. https://my-laptop.tail1234.ts.net).',
-    ),
-  );
+  if (values['public-url'] === undefined) {
+    if (values.port !== undefined) throw new UsageError('--port goes with --public-url.');
+    const relay = relayToUse(values.relay);
+    await enableRelay(env, relay);
+    await restartIfRunning(env);
+    env.out(
+      `Remote access is on through the relay ${relay}.\n` +
+        'The server stays on while remote access is on (no idle shutdown). After a reboot, start it with any quorum command.\n',
+    );
+    env.out(await serverLink({ relay }));
+    return 0;
+  }
+  if (values.relay !== undefined) throw new UsageError('Pass either --relay or --public-url.');
+  const checked = checkPublicUrl(values['public-url']);
   if ('problem' in checked) throw new UsageError(`--public-url ${checked.problem}.`);
   const port = values.port === undefined ? DEFAULT_REMOTE_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
@@ -669,7 +741,7 @@ const remote = async (args: string[], env: CliEnv): Promise<number> => {
     `Let other machines reach this Quorum server through ${checked.url}? It listens on 127.0.0.1:${String(port)}; everything still needs a token.`,
   );
   await writeRemoteConfig(dataDir, { public_url: checked.url, port });
-  await restart();
+  await restartIfRunning(env);
   env.out(
     `Remote access is on: ${checked.url} → http://127.0.0.1:${String(port)}.\n\n` +
       'Now let the front end forward to it (one of these, on this machine):\n' +
@@ -677,7 +749,46 @@ const remote = async (args: string[], env: CliEnv): Promise<number> => {
       `  Cloudflare Tunnel:  cloudflared tunnel --url http://127.0.0.1:${String(port)}\n\n` +
       'The server stays on while remote access is on (no idle shutdown). After a reboot, start it with any quorum command.\n',
   );
-  env.out(await serverLink(checked.url));
+  env.out(await serverLink({ public_url: checked.url, port }));
+  return 0;
+};
+
+/**
+ * `quorum relay [--port <n>] [--host <h>] [--trust-proxy]`: run a relay in this terminal, for
+ * people who want their own instead of the hosted one (DECISIONS D-18). It stores nothing and
+ * cannot read what it passes on. Offer it to other machines behind HTTPS (wss://), e.g. a reverse
+ * proxy or tunnel you run.
+ */
+const relayCommand = async (args: string[], env: CliEnv): Promise<number> => {
+  const { values } = parseArgs({
+    args,
+    options: {
+      port: { type: 'string' },
+      host: { type: 'string' },
+      'trust-proxy': { type: 'boolean', default: false },
+    },
+    strict: true,
+  });
+  const port = values.port === undefined ? 7430 : Number(values.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new UsageError('--port must be a number from 0 to 65535.');
+  }
+  const { startRelay } = await import('@quorum/relay');
+  const relay = await startRelay({
+    port,
+    ...(values.host ? { host: values.host } : {}),
+    trustProxy: values['trust-proxy'],
+  });
+  env.out(
+    `Quorum relay on ${relay.url} (stores nothing; cannot read what it passes on).\n` +
+      'Other machines need it over HTTPS: put it behind a reverse proxy or tunnel that gives wss://<host>, then on the home machine:\n\n' +
+      '  quorum remote enable --relay wss://<host>\n\nStop it with Ctrl+C.\n',
+  );
+  await new Promise<void>((resolve) => {
+    process.once('SIGINT', resolve);
+    process.once('SIGTERM', resolve);
+  });
+  await relay.close();
   return 0;
 };
 
@@ -770,8 +881,8 @@ const loginRemote = async (text: string, env: CliEnv): Promise<number> => {
       'That is not a server link. On the server machine, run `quorum remote status` and copy the link it prints (https://…#k=…).',
     );
   }
-  const server = await pinServer(link, env.fetch ?? fetch);
-  const started = await startDeviceLogin(server, machineName(), env.fetch ?? fetch);
+  const server = await pinServer(link, env.fetch ?? quorumFetch);
+  const started = await startDeviceLogin(server, machineName(), env.fetch ?? quorumFetch);
   env.out(
     `Server checked: ${server.url} holds the key in the link.\n\n` +
       'To finish, on a machine where you are already signed in to it (e.g. the server machine), run:\n\n' +
@@ -782,7 +893,7 @@ const loginRemote = async (text: string, env: CliEnv): Promise<number> => {
   const deadline = Date.now() + started.expires_in * 1000;
   while (Date.now() < deadline) {
     await sleep(started.interval * 1000);
-    const result = await collectDeviceLogin(server, started.device_code, env.fetch ?? fetch);
+    const result = await collectDeviceLogin(server, started.device_code, env.fetch ?? quorumFetch);
     if (result === 'pending') continue;
     await env.store.save(HUMAN_CREDENTIAL_KEY, {
       access_token: result.credentials.access_token,
@@ -819,16 +930,31 @@ const loginApprove = async (code: string | undefined, env: CliEnv): Promise<numb
 };
 
 /**
- * `quorum join-code [--workspace <ws>] [--wake off|direct|all]` (Phase 1b): a single-use code (10
- * minutes) that attaches a folder on another machine as an agent of yours. Needs remote access on.
+ * `quorum invite [--workspace <ws>] [--wake off|direct|all] [--relay wss://…]` (D-18), and the
+ * older `quorum join-code`: a single-use code (10 minutes) that attaches a folder on another machine
+ * as an agent of yours. `invite` also turns remote access on through the relay when it is off
+ * (confirmed at a terminal, INV-30); `join-code` needs it on already.
  */
-const joinCode = async (args: string[], env: CliEnv): Promise<number> => {
+const joinCode = async (args: string[], env: CliEnv, asInvite = false): Promise<number> => {
   const { values } = parseArgs({
     args,
-    options: { workspace: { type: 'string' }, wake: { type: 'string' } },
+    options: {
+      workspace: { type: 'string' },
+      wake: { type: 'string' },
+      relay: { type: 'string' },
+    },
     strict: true,
   });
+  if (!asInvite && values.relay !== undefined) {
+    throw new UsageError('--relay goes with `quorum invite` or `quorum remote enable`.');
+  }
   const wake = oneOf(values.wake, ['off', 'direct', 'all'] as const, '--wake');
+  if (asInvite && !(await readRemoteConfig(dataDirOf(env)))) {
+    const relay = relayToUse(values.relay);
+    await enableRelay(env, relay);
+    await restartIfRunning(env);
+    env.out(`Remote access is on through the relay ${relay}.\n\n`);
+  }
   const client = await humanClient(env);
   const workspace = await humanWorkspace(client, values.workspace);
   const created = (
@@ -837,11 +963,15 @@ const joinCode = async (args: string[], env: CliEnv): Promise<number> => {
       ...(wake ? { wake } : {}),
     })
   ).body as { link: string; expires_in: number };
+  const minutes = String(Math.round(created.expires_in / 60));
   env.out(
-    `Join code for workspace ${workspace} (works once, for ${String(Math.round(created.expires_in / 60))} minutes):\n\n` +
-      `  ${created.link}\n\n` +
-      'On the other machine, in the folder to attach, run:\n\n' +
-      `  quorum join "${created.link}" --vendor <claude-code|codex>\n`,
+    asInvite
+      ? `Invite to workspace ${workspace} (works once, for ${minutes} minutes). On the other machine, in the folder to attach, run:\n\n` +
+          `  quorum join "${created.link}" --vendor <claude-code|codex>\n`
+      : `Join code for workspace ${workspace} (works once, for ${minutes} minutes):\n\n` +
+          `  ${created.link}\n\n` +
+          'On the other machine, in the folder to attach, run:\n\n' +
+          `  quorum join "${created.link}" --vendor <claude-code|codex>\n`,
   );
   return 0;
 };
@@ -887,7 +1017,7 @@ const joinCommand = async (args: string[], env: CliEnv): Promise<number> => {
   );
   if (!link?.secret) {
     throw new UsageError(
-      'That is not a join code. On the server machine, run `quorum join-code` and copy the whole line it prints (https://…#k=…&j=…).',
+      'That is not an invite. On the home machine, run `quorum invite` and copy the whole line it prints.',
     );
   }
   const vendor = oneOf(values.vendor, VENDORS, '--vendor');
@@ -906,7 +1036,7 @@ const joinCommand = async (args: string[], env: CliEnv): Promise<number> => {
       ...(values.name ? { agent_name: values.name } : {}),
       ...(values['new-identity'] ? { new_identity: true } : {}),
     },
-    env.fetch ?? fetch,
+    env.fetch ?? quorumFetch,
   );
   await recordAttachment(env, created, { root, vendor, server, noConfig: values['no-config'] });
   return 0;
@@ -1343,6 +1473,10 @@ const mcp = async (args: string[], env: CliEnv): Promise<number> => {
     ...(window.session ? { session: window.session } : {}),
     label: window.label,
     ...(window.beforeTool ? { beforeTool: window.beforeTool } : {}),
+    mailHeld: async () =>
+      (await isMailHeld(dataDir, info.attachment, client.session).catch(() => false))
+        ? 'Your human has not said yes to reading the Quorum mail waiting for this session, so it stays unread. Ask them; they answer in the chat ("yes" or "show them").'
+        : undefined,
   });
   // Presence: a heartbeat every 30 s, and `offline` at once when the session ends (stdin closes
   // when Claude Code or Codex exits).

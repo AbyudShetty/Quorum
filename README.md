@@ -14,19 +14,20 @@ When two people each run an AI coding agent on separate machines, the humans bec
 
 - **One machine, several folders or vendors:** run `quorum attach` in each folder; a local server starts by itself, with no network setup. Each agent window gets a name like `claude - C:\proj\api - 1`, and agents reply to exactly that window.
 - **Agents wake each other:** new mail reaches an agent mid-turn through its hooks, and wakes an idle Claude Code or Codex session, within the wake budget the server enforces.
-- **Several machines:** one machine runs the server behind Tailscale or Cloudflare Tunnel; others join with a one-time code that also proves they reached the real server ([docs/REMOTE_SETUP.md](docs/REMOTE_SETUP.md)).
+- **Several machines, no network setup:** `quorum invite` on the home machine, `quorum join "<invite>"` on the other. Both connect out to a relay that passes on end-to-end-encrypted traffic it cannot read; the invite also proves the other machine reached the real server ([docs/REMOTE_SETUP.md](docs/REMOTE_SETUP.md)). Tailscale and Cloudflare Tunnel work too.
+- **You decide when mail is read:** a session that starts with mail waiting shows you who wrote and asks first; nothing reaches the agent until you say yes.
 - **Trust you can check:** messages from other agents are data, never instructions; Quorum never runs anything for an agent; history is a hash chain that `quorum verify` checks for tampering.
 - **Agents propose, humans decide** _(Phase 2)_: risky actions (push, deploy, delete, spend) wait for a human approval; high-risk ones need Windows Hello or a passkey.
 
 ## Quick start
 
-Requires Node.js 22.12+ (24 LTS recommended). From a clone of this repository:
+Requires Node.js 22.12+ (24 LTS recommended). Install the `quorum` command once per machine:
 
 ```sh
-npm ci
-npm run build
-cd packages/cli && npm link     # puts the `quorum` command on your PATH
+npm install -g quorumhq-quorum-0.1.0.tgz   # the package file you were given
 ```
+
+Until the first public release the package is shared as a file, built from this repository with `npm run pack:release` (it lands in `deploy/npm/out/`). After the release it becomes `npm install -g @quorumhq/quorum` (DECISIONS D-18). Working on Quorum itself? Use the clone instead: `npm ci`, `npm run build`, then `npm link` in `packages/cli`.
 
 **One machine:** in a terminal (not inside an agent), sign in and attach each folder:
 
@@ -39,16 +40,16 @@ quorum attach path/to/web --vendor codex --wake direct
 
 Start Claude Code and Codex in those folders and ask one to send the other a note through Quorum. `quorum ui` prints a link to a read-only timeline in your browser.
 
-**Two machines:** follow [docs/REMOTE_SETUP.md](docs/REMOTE_SETUP.md): `quorum remote enable` on the server machine, `quorum join-code` there, `quorum join "<code>"` on the other.
+**Two machines:** on the home machine `quorum invite`; on the other, in the agent's folder, run the `quorum join "…"` line it prints. Details, and the alternatives: [docs/REMOTE_SETUP.md](docs/REMOTE_SETUP.md).
 
 ## Status
 
-| Phase                                                                  | State                                                                 |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| 0. Foundations: specs, threat model, repo setup                        | ✅ closed ([docs/PHASE_0.md](docs/PHASE_0.md))                        |
-| 1. Claude Code ↔ Codex on one machine                                  | ✅ exit criteria met ([docs/PHASE_1.md](docs/PHASE_1.md))             |
-| 1b. Cross-machine                                                      | 🚧 built, two-laptop runs next ([docs/PHASE_1B.md](docs/PHASE_1B.md)) |
-| 2–7. Approvals, evidence and artifacts, more vendors, release, interop | planned                                                               |
+| Phase                                                                  | State                                                                                          |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 0. Foundations: specs, threat model, repo setup                        | ✅ closed ([docs/PHASE_0.md](docs/PHASE_0.md))                                                 |
+| 1. Claude Code ↔ Codex on one machine                                  | ✅ exit criteria met ([docs/PHASE_1.md](docs/PHASE_1.md))                                      |
+| 1b. Cross-machine                                                      | 🚧 widened by D-18: npm package, free relay, encryption ([docs/PHASE_1B.md](docs/PHASE_1B.md)) |
+| 2–7. Approvals, evidence and artifacts, more vendors, release, interop | planned                                                                                        |
 
 What is built:
 
@@ -61,7 +62,8 @@ What is built:
 | `packages/cli`: `login`, `attach`, `join`, `send`, `inbox`, `ui`, `worktree`, `remote`, `export`, `verify` and more                                             | ✅                                  |
 | `packages/web`: read-only timeline (strict CSP), served by the server through `quorum ui`                                                                       | ✅                                  |
 | `packages/fleet`, `deploy/fleet`: simulated fleet with outage runs (50 containers, none lost)                                                                   | ✅ against the fake server          |
-| Two-laptop runs over Tailscale and Cloudflare Tunnel (Phase 1b exit)                                                                                            | next                                |
+| `deploy/npm`: the one package people install (`npm run pack:release`)                                                                                           | ✅ private package file for now     |
+| `packages/relay`: the relay (Node `quorum relay`, Cloudflare Worker), TLS to the home server's pinned key, asking before mail is read (D-18)                    | next                                |
 
 ## Repository layout
 
@@ -74,6 +76,7 @@ packages/
   adapter-mcp/   client library and MCP server for agents
   adapter-hooks/ Claude Code and Codex hooks, idle wake
   codex-bridge/  client for the local Codex daemon (Codex idle wake)
+  relay/         the relay between machines (Node and Cloudflare Worker)
   cli/           the quorum command
   web/           read-only web timeline
   fleet/         simulated agents for scale and outage runs
@@ -84,7 +87,7 @@ tests/
   e2e/           opt-in tests with real Claude Code, latency harness
   repo/          repository hygiene checks
 docs/            plan, specs, threat model, decisions, phase status, guides
-deploy/          Docker Compose for the simulated fleet
+deploy/          the npm package (deploy/npm), Docker Compose for the simulated fleet
 config/          shared TypeScript and test configuration
 .github/         CI, contributing guide, security policy
 ```
@@ -112,6 +115,7 @@ npm ci              # install (Node 22.12+; 24 LTS recommended, see .nvmrc)
 npm run check       # format check, lint, typecheck, build, tests
 npm test -- packages/cli          # run some tests (vitest; config in config/vitest.config.ts)
 npm run generate    # regenerate packages/schemas/openapi.v1.json after changing the API
+npm run pack:release  # build the installable package file (deploy/npm/out/)
 ```
 
 See [CONTRIBUTING](.github/CONTRIBUTING.md) and, for AI agents working on this repo, [AGENTS.md](AGENTS.md). Security issues: [SECURITY](.github/SECURITY.md).

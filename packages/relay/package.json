@@ -1,0 +1,24 @@
+{
+  "name": "@quorum/relay",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The relay that connects machines on different networks (DECISIONS D-18): it pairs a connection with the home server it asks for and passes encrypted bytes between them. Stores nothing, cannot read what it forwards.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "quorum-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.2"
+  }
+}

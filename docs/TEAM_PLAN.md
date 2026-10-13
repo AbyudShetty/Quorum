@@ -19,6 +19,8 @@ Extra "machines" without new hardware: a WSL2 Ubuntu instance on each laptop (Li
 
 ## 2. Track allocation (by what each machine runs best)
 
+> **On hold while abhijna is away (DECISIONS D-19, 2026-10-13):** abyud builds both tracks and decides alone; the RFC step (§5.3) is skipped, but every contract change is still written down for abhijna to review on return.
+
 | Track                              | Owner            | Why this machine                                                                                                                                                                                                                          |
 | ---------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **A — core & security**            | **abyud (M1)**   | Core, server, storage and security work is CPU-light; its unit, integration, adversarial and small chaos suites (≤ 10 fake agents) fit comfortably in 16 GB.                                                                              |
@@ -87,6 +89,8 @@ HTML route wiring lives in `server` (A) but contains no logic; templates live in
 | Track A (abyud)                                                                                                                              | Track B (abhijna)                                                                                       |
 | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | Remote mode: TLS config, bind rules (INV-22), join codes with key fingerprint (INV-24), human device-code login, public-hostname Host checks | `join` CLI; adapter remote config; Tailscale guide; Cloudflare Tunnel guide; cross-machine test scripts |
+
+> Widened by D-18 (2026-10-13): npm packaging, the default relay, end-to-end encryption between machines, asking before mail is read; see `docs/PHASE_1B.md`. IC4 below now runs through the relay; Tailscale and Cloudflare Tunnel are alternatives.
 
 **IC4:** M1 hosts the server, and M2's agents join over Tailscale. Then switch: M2 hosts and M1 joins over Cloudflare Tunnel. Record setup time and friction for the D-5 decision.
 **Needs both:** every cross-machine run (one person per machine).

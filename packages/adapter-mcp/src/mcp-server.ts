@@ -43,6 +43,11 @@ export interface McpDependencies {
    * window the call is for (the one active last) here.
    */
   beforeTool?: () => Promise<void>;
+  /**
+   * Asking before mail is read (D-18): the reason this window may not read its mail yet (its
+   * human has not said yes), or undefined when it may.
+   */
+  mailHeld?: () => Promise<string | undefined>;
   ids?: IdFactory;
   now?: () => Date;
 }
@@ -204,6 +209,8 @@ export const createQuorumMcpServer = (deps: McpDependencies): McpServer => {
     async (args) => {
       try {
         await deps.beforeTool?.();
+        const held = await deps.mailHeld?.();
+        if (held) return text(held);
         const workspace = workspaceFor(args.workspace);
         const page = await client.inbox(workspace, { limit: args.limit });
         if (page.messages.length === 0) return text('No new messages.');

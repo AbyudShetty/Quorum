@@ -21,7 +21,7 @@ import {
   MCP_WINDOW_PREFIX,
   IDLE_WAKE_INTRO,
 } from './hooks.js';
-import { type HookWindow, loadHookState } from './state.js';
+import { type HookWindow, isMailHeld, loadHookState } from './state.js';
 import type { WatchClient } from './watch.js';
 
 /** What the waker needs from the Codex daemon (the real one is @quorum/codex-bridge). */
@@ -91,6 +91,8 @@ export const startCodexWaker = (options: CodexWakerOptions): Promise<CodexWaker>
     session: string | undefined,
   ): Promise<boolean> =>
     client.asSession(session, async () => {
+      // Held until the person says yes (D-18): no wake, and the mail stays unread.
+      if (await isMailHeld(options.dataDir, attachment.attachment, session)) return false;
       // No probe at start: asking the server for a wake can use up a grant (and the mail with it).
       const decision = await client.requestWake(workspace);
       if (!decision.wake) return false;

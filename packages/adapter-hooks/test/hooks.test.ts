@@ -20,7 +20,9 @@ import {
   type HookEvent,
   type HookVendor,
   IDLE_WAKE_INTRO,
+  isMailHeld,
   loadHookState,
+  RELEASED_INTRO,
   runHook,
   saveHookState,
   startCodexWaker,
@@ -428,6 +430,7 @@ describe('Codex idle wake through the Codex daemon', () => {
   it('prefers the session its hooks registered, and leaves busy sessions to the hooks', async () => {
     const sender = await attach('cx2-from', 'claude-code', 'off');
     const codex = await attach('cx2-to', 'codex', 'all');
+    await hook(codex, 'post-tool'); // older broadcasts out of the way (else the session starts held)
     await hook(codex, 'session-start', { session_id: 'mine' });
     const fake = fakeCodex([
       { id: 'other', status: 'idle' },
@@ -520,6 +523,7 @@ describe('Codex idle wake through the Codex daemon', () => {
 describe('windows: each session has a label and its own mail (MESSAGE_SPEC §1.1)', () => {
   it('takes over the session quorum mcp registered for the window (Codex starts hooks late)', async () => {
     const codex = await attach('late-hook', 'codex', 'off');
+    await hook(codex, 'post-tool'); // older broadcasts out of the way (else the session starts held)
     const state = await loadHookState(server.dataDir, codex.attachment);
     state.windows = {
       sess_EARLY: { key: 'mcp-4242', label: 'codex@late-hook-1', vendorPid: 777, adoptedBy: 4242 },
@@ -620,5 +624,108 @@ describe('windows: each session has a label and its own mail (MESSAGE_SPEC §1.1
     await new Promise((resolve) => setTimeout(resolve, 200));
     await waker.stop();
     expect(turns).toEqual(['thread-a']);
+  });
+});
+
+describe('asking before mail is read (DECISIONS D-18)', () => {
+  it('holds mail waiting at session start, counts new mail, and lets it through on yes', async () => {
+    const sender = await attach('held-from', 'codex', 'off');
+    const claude = await attach('held-to', 'claude-code', 'direct');
+    await hook(claude, 'post-tool'); // older broadcasts out of the way
+    await note(sender, [claude.agent], 'first secret');
+    await note(sender, [claude.agent], 'second secret');
+    const at = { session_id: 'held-1' };
+
+    const start = parse((await hook(claude, 'session-start', at)).stdout);
+    expect(start?.systemMessage).toBe(
+      `Quorum: 2 messages waiting from ${sender.agent.replace('agent:', '')}. Say "yes" to read them; anything else keeps them waiting.`,
+    );
+    expect(start?.hookSpecificOutput?.additionalContext).toContain(
+      '2 Quorum messages are waiting for this session, held until your human says to read them',
+    );
+    expect(JSON.stringify(start)).not.toContain('secret');
+
+    // Tool calls, other prompts and the end of a turn pass nothing on, and wake nothing.
+    expect((await hook(claude, 'post-tool', at)).stdout).toBe('');
+    expect((await hook(claude, 'prompt', { ...at, prompt: 'fix the build first' })).stdout).toBe(
+      '',
+    );
+    expect((await hook(claude, 'stop', at)).stdout).toBe('');
+    const window = (await loadHookState(server.dataDir, claude.attachment)).sessions['held-1'];
+    expect(await isMailHeld(server.dataDir, claude.attachment, window)).toBe(true);
+
+    // New mail is only counted, once per change.
+    await note(sender, [claude.agent], 'third secret');
+    const counted = parse((await hook(claude, 'prompt', { ...at, prompt: 'and now?' })).stdout);
+    expect(counted?.systemMessage).toBe(
+      'Quorum: 2 (earlier) + 1 (new) messages waiting. Say "show them" to read them.',
+    );
+    expect(JSON.stringify(counted)).not.toContain('secret');
+    expect((await hook(claude, 'prompt', { ...at, prompt: 'ok then' })).stdout).toBe('');
+
+    // Yes: everything that waited, framed; from then on mail flows as usual.
+    const yes = parse((await hook(claude, 'prompt', { ...at, prompt: 'Yes!' })).stdout);
+    const delivered = yes?.hookSpecificOutput?.additionalContext ?? '';
+    expect(delivered.startsWith(RELEASED_INTRO)).toBe(true);
+    for (const text of ['first secret', 'second secret', 'third secret']) {
+      expect(delivered).toContain(text);
+    }
+    expect(await isMailHeld(server.dataDir, claude.attachment, window)).toBe(false);
+    await note(sender, [claude.agent], 'fourth');
+    const next = parse((await hook(claude, 'post-tool', at)).stdout);
+    expect(next?.hookSpecificOutput?.additionalContext).toContain('fourth');
+  });
+
+  it('starts free when nothing is waiting', async () => {
+    const claude = await attach('held-none', 'claude-code', 'off');
+    await hook(claude, 'post-tool');
+    const start = parse((await hook(claude, 'session-start', { session_id: 'free-1' })).stdout);
+    expect(start?.systemMessage).toBeUndefined();
+    const window = (await loadHookState(server.dataDir, claude.attachment)).sessions['free-1'];
+    expect(await isMailHeld(server.dataDir, claude.attachment, window)).toBe(false);
+  });
+
+  it('asks Codex to pass the question on, and asks again on a resume', async () => {
+    const sender = await attach('held-cx-from', 'claude-code', 'off');
+    const codex = await attach('held-cx', 'codex', 'off');
+    await hook(codex, 'post-tool');
+    await note(sender, [codex.agent], 'codex secret');
+    const at = { session_id: 'thread-held' };
+    const start = parse((await hook(codex, 'session-start', at)).stdout);
+    expect(start?.systemMessage).toBeUndefined();
+    expect(start?.hookSpecificOutput?.additionalContext).toContain(
+      'Start your reply by telling your human exactly this line: "Quorum: 1 message waiting from',
+    );
+    expect(JSON.stringify(start)).not.toContain('codex secret');
+    const resumed = parse((await hook(codex, 'session-start', at)).stdout);
+    expect(resumed?.hookSpecificOutput?.additionalContext).toContain(
+      '1 Quorum message is waiting for this session',
+    );
+    const yes = parse((await hook(codex, 'prompt', { ...at, prompt: 'show them' })).stdout);
+    expect(yes?.hookSpecificOutput?.additionalContext).toContain('codex secret');
+  });
+
+  it('never wakes an idle session for held mail', async () => {
+    const sender = await attach('held-w-from', 'codex', 'off');
+    const claude = await attach('held-w', 'claude-code', 'all');
+    await hook(claude, 'post-tool');
+    await note(sender, [claude.agent], 'waiting already');
+    await hook(claude, 'session-start', { session_id: 'held-watch' });
+    const watching = watchForMail({
+      attachment: claude,
+      dataDir: server.dataDir,
+      input: { session_id: 'held-watch' },
+      connect: connectAs(claude),
+      checkEveryMs: 50,
+      reconnectMs: 50,
+      maxLifetimeMs: 800,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await note(sender, [claude.agent], 'more while held');
+    expect((await watching).exitCode).toBe(0); // no wake: lived out its time
+    const yes = parse(
+      (await hook(claude, 'prompt', { session_id: 'held-watch', prompt: 'yes' })).stdout,
+    );
+    expect(yes?.hookSpecificOutput?.additionalContext).toContain('more while held');
   });
 });

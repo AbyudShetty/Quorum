@@ -1,6 +1,6 @@
 # Adapter contract
 
-Status: **frozen as `contract-v1` (IC1), with additive changes since** · Track B (abhijna; abyud while abhijna is away) · Last updated: 2026-10-11: attachments on another machine (`quorum join`, pinned server key) for Phase 1b
+Status: **frozen as `contract-v1` (IC1), with additive changes since** · Track B (abhijna; abyud while abhijna is away) · Last updated: 2026-10-13: the relay (`quorum://` addresses, TLS to the pinned key) and asking before mail is read (D-18)
 
 Track B's half of the contract: what the adapters, the CLI and the client library promise, how Claude Code and Codex receive messages, and how the wake modes work. Track A's half is `packages/schemas` (messages, `/v1` API, `localDiscovery`) and `tests/contract`. Changes follow TEAM_PLAN §5.3.
 
@@ -23,6 +23,7 @@ The client library lives in `adapter-mcp` for now because the CLI and the hook a
 1. **Data directory:** `defaultDataDir` from `@quorum/local` (`QUORUM_HOME`, else `%LOCALAPPDATA%\Quorum` on Windows, else `~/.quorum`). The server, adapters and CLI share one implementation.
 2. **Discovery:** `readDiscovery` from `@quorum/local` reads `<data>/local/server.json` (`localDiscovery` schema). Missing or malformed → treated as "no server".
 3. **Identity handshake:** before any credential is sent, `POST /v1/hello` with a fresh 32-byte nonce; verify the signature with `verifyHello` against the pinned `public_key`, and require `instance_id` to equal the discovery file's. Any mismatch → `IdentityError`; the token is **never** sent and there is no fallback. Tests: wrong key, a squatter on the port, wrong instance (the squatter never receives an `Authorization` header).
+   3a. **Through the relay (D-18):** a server address `quorum://<relay>/<fingerprint>` is reached with `quorumFetch` (`@quorum/adapter-mcp`), the default for every client: a WebSocket to the relay, then TLS 1.3 to the home server whose certificate key must have that fingerprint before anything is sent (INV-33); the handshake above then runs inside. `closeRelayConnections()` ends kept-alive connections so short commands exit.
 4. **Unreachable vs. untrusted:** a connection failure is `UnreachableError` (retry later); a failed handshake is `IdentityError` (stop, tell the human).
 5. **Restarts:** after any failed request the client trusts the address no longer. Before its next request that carries a credential it re-reads the discovery file (starting the server first when the CLI allows it, `ensureServer`), and redoes the handshake against the published key; a long-lived client such as `quorum mcp` therefore follows a server that restarted on a new port, and a program that took over the old port gets the identity check, never a token (tested).
 
@@ -91,6 +92,10 @@ Nothing in the adapters executes message content, follows `reproduce` fields, or
 | Mail at session start / on each prompt / after tool calls | hooks with `additionalContext` (built, `quorum hook claude-code …`)                                                                                                                                                                      | same hooks (built, `quorum hook codex …`); Codex runs them only after the `/hooks` review (S4)                            |
 | Continue a turn when mail arrived                         | `Stop` hook: asks `POST …/wake`; only on a grant `decision: "block"` with the framed mail as `reason` and the neat form as `systemMessage`, the part shown to the person (MESSAGE_SPEC §8); never when `stop_hook_active` (S3, verified) | same hook; documented by OpenAI, **[pending]** a live run                                                                 |
 | Wake an idle session                                      | `asyncRewake` watcher (built, `quorum hook claude-code watch`); verified live                                                                                                                                                            | Codex waker in `quorum mcp` via the shared daemon (built; spike verified that such a turn shows live in the Codex window) |
+
+### Asking before mail is read (D-18)
+
+A session that starts or resumes with mail waiting holds it until the person says yes (MESSAGE_SPEC §8): the session-start hook tells the person the count and senders (Claude Code `systemMessage`; Codex: the agent is asked to pass the line on) and the agent only the count; prompt and tool hooks deliver nothing, a "yes"-like prompt releases it, new mail is counted (`3 (earlier) + 1 (new)`); the `Stop` hook asks for no wake, the idle watcher and the Codex waker skip held windows, and `quorum_inbox` answers that the human has not said yes (`mailHeld` in the MCP server). State: `mail: "held"`, `heldCount`, `shownCount` on the window in the hook state file.
 
 ## 7. Offline sending and delivery guarantees (INV-20)
 
