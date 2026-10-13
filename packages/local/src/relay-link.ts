@@ -3,6 +3,7 @@
 // binary frames between them; here such a WebSocket becomes a plain byte stream, on which the two
 // ends run TLS keyed by the home server's identity (INV-24). The relay never sees inside.
 import { Duplex } from 'node:stream';
+import WebSocket, { type RawData } from 'ws';
 
 /** The relay protocol (packages/relay/src/router.ts holds the relay's side). */
 export const RELAY_PROTOCOL = 'quorum-relay/1';
@@ -40,9 +41,26 @@ const FRAME_BYTES = 64 * 1024;
 /** Above this much unsent data, writes wait. */
 const HIGH_WATER_BYTES = 1024 * 1024;
 
-/** A WebSocket's binary frames as a byte stream (text frames are relay notices and are skipped). */
-export const webSocketStream = (ws: WebSocket): Duplex => {
-  ws.binaryType = 'arraybuffer';
+/** A relay WebSocket (the `ws` library: unlike Node's built-in one it can be dropped at once). */
+export type RelaySocket = WebSocket;
+
+/** Open a WebSocket to the relay. */
+export const openRelaySocket = (url: string): RelaySocket =>
+  new WebSocket(url, { maxPayload: 2 * 1024 * 1024 });
+
+const bytesOf = (data: RawData): Buffer =>
+  Array.isArray(data)
+    ? Buffer.concat(data)
+    : data instanceof ArrayBuffer
+      ? Buffer.from(data)
+      : data;
+
+/**
+ * A WebSocket's binary frames as a byte stream (text frames are relay notices and are skipped).
+ * Destroying the stream drops the connection at once instead of waiting for the other side to
+ * acknowledge a close: a finished command (a vendor hook) must not stay alive for that.
+ */
+export const webSocketStream = (ws: RelaySocket): Duplex => {
   const stream = new Duplex({
     read() {
       // Frames are pushed as they arrive; a WebSocket offers no way to pause.
@@ -67,19 +85,17 @@ export const webSocketStream = (ws: WebSocket): Duplex => {
       callback();
     },
     destroy(error, callback) {
-      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
-        ws.close(1000);
-      }
+      ws.terminate();
       callback(error);
     },
   });
-  ws.addEventListener('message', (event) => {
-    if (typeof event.data !== 'string') stream.push(Buffer.from(event.data as ArrayBuffer));
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) stream.push(bytesOf(data));
   });
-  ws.addEventListener('close', () => {
+  ws.on('close', () => {
     stream.push(null);
   });
-  ws.addEventListener('error', () => {
+  ws.on('error', () => {
     stream.destroy(new Error('The relay connection failed.'));
   });
   return stream;
@@ -114,9 +130,9 @@ export const connectThroughRelay = (
   timeoutMs = 10_000,
 ): Promise<Duplex> =>
   new Promise((resolve, reject) => {
-    let ws: WebSocket;
+    let ws: RelaySocket;
     try {
-      ws = new WebSocket(`${relay}/v1/connect/${home}`);
+      ws = openRelaySocket(`${relay}/v1/connect/${home}`);
     } catch (error) {
       reject(new RelayError(`Cannot reach the relay at ${relay}: ${String(error)}`));
       return;
@@ -126,7 +142,7 @@ export const connectThroughRelay = (
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close();
+      ws.terminate();
       reject(error);
     };
     const timer = setTimeout(() => {
@@ -136,26 +152,26 @@ export const connectThroughRelay = (
         ),
       );
     }, timeoutMs);
-    const onMessage = (event: MessageEvent) => {
-      if (typeof event.data !== 'string') return;
+    const onMessage = (data: RawData, isBinary: boolean) => {
+      if (isBinary || settled) return;
       let notice: unknown;
       try {
-        notice = JSON.parse(event.data);
+        notice = JSON.parse(bytesOf(data).toString('utf8'));
       } catch {
         return;
       }
-      if ((notice as { type?: unknown }).type !== 'paired' || settled) return;
+      if ((notice as { type?: unknown }).type !== 'paired') return;
       settled = true;
       clearTimeout(timer);
-      ws.removeEventListener('message', onMessage);
+      ws.off('message', onMessage);
       // Synchronously, so the first frames from the home server are not missed.
       resolve(webSocketStream(ws));
     };
-    ws.addEventListener('message', onMessage);
-    ws.addEventListener('close', (event) => {
-      fail(new RelayError(closeReason(event.code, relay), event.code));
+    ws.on('message', onMessage);
+    ws.on('close', (code) => {
+      fail(new RelayError(closeReason(code, relay), code));
     });
-    ws.addEventListener('error', () => {
+    ws.on('error', () => {
       fail(new RelayError(`Cannot reach the relay at ${relay}.`));
     });
   });

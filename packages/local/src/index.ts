@@ -39,9 +39,11 @@ export {
 export {
   checkRelayUrl,
   connectThroughRelay,
+  openRelaySocket,
   RELAY_PROTOCOL,
   RelayError,
   relayLinkUrl,
   relayProofMessage,
+  type RelaySocket,
   webSocketStream,
 } from './relay-link.js';

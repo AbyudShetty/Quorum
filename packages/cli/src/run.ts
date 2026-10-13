@@ -57,26 +57,21 @@ export const runFromProcess = (argv: string[]): Promise<number> =>
 /** `quorum mcp` keeps serving over stdio after `main` returns; it ends when its vendor does. */
 const KEEPS_RUNNING = new Set(['mcp']);
 
-const written = (stream: NodeJS.WriteStream) =>
-  new Promise<void>((resolve) => {
-    stream.write('', () => {
-      resolve();
-    });
-  });
+/** Only if something unexpected still holds the process this long after a command finished. */
+const LAST_RESORT_EXIT_MS = 5_000;
 
 /**
- * The `quorum` command: run, then end the process as soon as the output is written. Open network
- * connections must not keep a finished command alive: a relay WebSocket (D-18) can take seconds to
- * finish closing, and vendors wait for a hook's process to end (Codex gives up after 30 s).
+ * The `quorum` command. When a command is done, its relay connections are dropped at once (they
+ * would otherwise wait for the relay to acknowledge the close), so the process ends by itself and
+ * vendors waiting on a hook (Codex gives up after 30 s) are not kept waiting. It is not ended with
+ * `process.exit` right away: on Windows that can crash Node while a pipe is still closing (seen
+ * live: "Assertion failed … UV_HANDLE_CLOSING", exit code 3221226505), which vendors report as a
+ * failed hook. A last-resort exit only fires if something still holds the process seconds later.
  */
 export const runAndExit = async (argv: string[]): Promise<void> => {
   const code = await runFromProcess(argv);
-  if (KEEPS_RUNNING.has(argv[0] ?? '')) {
-    process.exitCode = code;
-    return;
-  }
+  process.exitCode = code;
+  if (KEEPS_RUNNING.has(argv[0] ?? '')) return;
   closeRelayConnections();
-  await written(process.stdout);
-  await written(process.stderr);
-  process.exit(code);
+  setTimeout(() => process.exit(code), LAST_RESORT_EXIT_MS).unref();
 };

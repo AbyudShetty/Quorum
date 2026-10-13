@@ -7,7 +7,7 @@
 import type { Server } from 'node:http';
 import { createSecureContext, TLSSocket } from 'node:tls';
 import { serverFingerprint } from '@quorum/core';
-import { relayLinkUrl, webSocketStream } from '@quorum/local';
+import { openRelaySocket, type RelaySocket, relayLinkUrl, webSocketStream } from '@quorum/local';
 import type { ServerInstance } from '../local/instance.js';
 
 export interface RelayHomeOptions {
@@ -46,7 +46,7 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
   let open = 0;
   let state: RelayHomeState = 'connecting';
   let closed = false;
-  let control: WebSocket | undefined;
+  let control: RelaySocket | undefined;
   let backoffMs = 1000;
   let retry: NodeJS.Timeout | undefined;
   let keepalive: NodeJS.Timeout | undefined;
@@ -75,9 +75,12 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
       if (counted) open -= 1;
       counted = false;
     };
-    const ws = new WebSocket(`${options.relay}/v1/accept/${home}/${conn}`);
-    ws.addEventListener('close', done);
-    ws.addEventListener('open', () => {
+    const ws = openRelaySocket(`${options.relay}/v1/accept/${home}/${conn}`);
+    ws.on('close', done);
+    ws.on('error', () => {
+      // `close` follows
+    });
+    ws.on('open', () => {
       const tls = new TLSSocket(webSocketStream(ws), { isServer: true, secureContext });
       clients.set(tls, client);
       tls.on('error', () => {
@@ -94,13 +97,16 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
   const connect = () => {
     if (closed) return;
     state = 'connecting';
-    const ws = new WebSocket(`${options.relay}/v1/home/${home}`);
+    const ws = openRelaySocket(`${options.relay}/v1/home/${home}`);
     control = ws;
-    ws.addEventListener('message', (event) => {
-      if (typeof event.data !== 'string') return;
+    ws.on('message', (data, isBinary) => {
+      if (isBinary) return;
       let message: Record<string, unknown>;
       try {
-        message = JSON.parse(event.data) as Record<string, unknown>;
+        message = JSON.parse(Buffer.from(data as Buffer).toString('utf8')) as Record<
+          string,
+          unknown
+        >;
       } catch {
         return;
       }
@@ -125,7 +131,7 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
         accept(message.conn, typeof message.client === 'string' ? message.client : 'unknown');
       }
     });
-    ws.addEventListener('close', () => {
+    ws.on('close', () => {
       if (control === ws) control = undefined;
       clearInterval(keepalive);
       if (closed) return;
@@ -134,13 +140,13 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
       retry.unref();
       backoffMs = Math.min(backoffMs * 2, 60_000);
     });
-    ws.addEventListener('error', () => {
+    ws.on('error', () => {
       // `close` follows and schedules the retry.
     });
     clearInterval(keepalive);
     // Keeps idle network paths (home routers, mobile hotspots) from dropping the connection.
     keepalive = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
     }, 25_000);
     keepalive.unref();
   };

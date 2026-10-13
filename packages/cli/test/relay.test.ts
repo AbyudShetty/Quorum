@@ -186,8 +186,7 @@ describe('a relay that pretends to be the home server', () => {
     await new Promise<void>((done) => fake.once('listening', done));
     fake.on('connection', (ws) => {
       ws.send(JSON.stringify({ type: 'paired' }));
-      // The ws library's socket stands in for a WHATWG one here.
-      const tls = new TLSSocket(webSocketStream(ws as unknown as WebSocket), {
+      const tls = new TLSSocket(webSocketStream(ws), {
         isServer: true,
         secureContext,
       });
