@@ -15,6 +15,7 @@ import { type LocalServer, startLocalServer } from '@quorum/server';
 import { WebSocketServer } from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { selfSignedCertificate } from '../../server/src/relay/certificate.js';
+import { HOSTED_RELAY } from '../src/cli.js';
 import { type CliEnv, main } from '../src/index.js';
 
 let root: string;
@@ -216,14 +217,14 @@ describe('a relay that pretends to be the home server', () => {
 });
 
 describe('remote enable --relay', () => {
-  it('needs a relay while none is hosted, and saves the one given', async () => {
+  it('uses the hosted relay by default, and saves another one given', async () => {
     const c = machine(join(root, 'c-data'));
     const saved = process.env.QUORUM_RELAY;
     delete process.env.QUORUM_RELAY;
     try {
-      const none = await c.run('remote', 'enable');
-      expect(none.code).toBe(64);
-      expect(none.err).toContain('There is no hosted Quorum relay yet');
+      const hosted = await c.run('remote', 'enable');
+      expect(hosted.code).toBe(0);
+      expect(hosted.out).toContain(`Remote access is on through the relay ${HOSTED_RELAY}`);
       expect((await c.run('remote', 'enable', '--relay', 'http://example.org')).code).toBe(64);
       const ok = await c.run('remote', 'enable', '--relay', 'wss://relay.example.org');
       expect(ok.code).toBe(0);

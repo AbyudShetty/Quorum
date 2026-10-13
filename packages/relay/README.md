@@ -13,6 +13,6 @@ It pairs a connection from another machine with the home server it asks for, and
 
 - `src/router.ts`: the pairing logic, Web Crypto only, so it runs on Node and in Cloudflare Workers.
 - `src/node.ts`: `startRelay()`, used by `quorum relay` to self-host (one dependency: `ws`, the standard WebSocket server for Node).
-- `worker/`: the hosted relay as a Cloudflare Worker with one Durable Object per home (free plan); see `worker/README.md`.
+- `worker/` and `wrangler.toml`: the hosted relay as a Cloudflare Worker with one Durable Object per home (free plan); see `worker/README.md`.
 
 Limits: frames up to 1 MiB, 64 open connections per home, new connections per address per minute (Node), and the home itself rate-limits connections per address.

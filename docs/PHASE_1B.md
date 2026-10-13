@@ -15,20 +15,20 @@ The first two-laptop run (Tailscale, 2026-10-12) worked both ways, but the setup
 
 ## Steps
 
-| #   | Step                                                                                                          | Status                                                                                                   |
-| --- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| 1   | Remote access: HTTPS front end (`tailscale serve`, `cloudflared`) → loopback server; `quorum remote` (INV-22) | ✅ built                                                                                                 |
-| 2   | Join codes: server URL + key fingerprint + single-use secret, 10 min (INV-24 for remote)                      | ✅ built                                                                                                 |
-| 3   | `quorum join` on the other machine                                                                            | ✅ built                                                                                                 |
-| 4   | Human sign-in from another machine (device code: `quorum login <link>`, `quorum login approve <code>`)        | ✅ built                                                                                                 |
-| 5   | Setup guides: Tailscale and Cloudflare Tunnel ([REMOTE_SETUP.md](REMOTE_SETUP.md)), now alternatives          | ✅ built                                                                                                 |
-| 6   | Two-laptop run over Tailscale (abyud's laptops)                                                               | ✅ 2026-10-12: messages both ways; Codex hooks failed on laptop B (Codex 0.162), now never fail, re-test |
-| 7   | Packaging: one npm package, `npm install -g`; private package files until ready                               | ✅ built (`npm run pack:release`)                                                                        |
-| 8   | Setup without friction: no daemon restarts or separate sign-ins to remember                                   | part: `quorum invite` turns remote access on and makes the code in one step                              |
-| 9   | Relay: free default, outbound only, stores nothing, self-hostable; `quorum invite`                            | ✅ built (Node `quorum relay`, Cloudflare Worker); hosted one not deployed yet                           |
-| 10  | End-to-end encryption between machines (keyed by the home server's identity, INV-24)                          | ✅ built: TLS 1.3 to the pinned key (INV-33)                                                             |
-| 11  | Asking before mail is read when a session starts or resumes                                                   | ✅ built                                                                                                 |
-| 12  | Exit run: two laptops from a clean `npm install -g`, then with abhijna                                        | —                                                                                                        |
+| #   | Step                                                                                                          | Status                                                                                                     |
+| --- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 1   | Remote access: HTTPS front end (`tailscale serve`, `cloudflared`) → loopback server; `quorum remote` (INV-22) | ✅ built                                                                                                   |
+| 2   | Join codes: server URL + key fingerprint + single-use secret, 10 min (INV-24 for remote)                      | ✅ built                                                                                                   |
+| 3   | `quorum join` on the other machine                                                                            | ✅ built                                                                                                   |
+| 4   | Human sign-in from another machine (device code: `quorum login <link>`, `quorum login approve <code>`)        | ✅ built                                                                                                   |
+| 5   | Setup guides: Tailscale and Cloudflare Tunnel ([REMOTE_SETUP.md](REMOTE_SETUP.md)), now alternatives          | ✅ built                                                                                                   |
+| 6   | Two-laptop run over Tailscale (abyud's laptops)                                                               | ✅ 2026-10-12: messages both ways; Codex hooks failed on laptop B (Codex 0.162), now never fail, re-test   |
+| 7   | Packaging: one npm package, `npm install -g`; private package files until ready                               | ✅ built (`npm run pack:release`)                                                                          |
+| 8   | Setup without friction: no daemon restarts or separate sign-ins to remember                                   | part: `quorum invite` turns remote access on and makes the code in one step                                |
+| 9   | Relay: free default, outbound only, stores nothing, self-hostable; `quorum invite`                            | ✅ built (Node `quorum relay`, Cloudflare Worker); hosted at `quorum-relay.abyud.workers.dev` (2026-10-13) |
+| 10  | End-to-end encryption between machines (keyed by the home server's identity, INV-24)                          | ✅ built: TLS 1.3 to the pinned key (INV-33)                                                               |
+| 11  | Asking before mail is read when a session starts or resumes                                                   | ✅ built                                                                                                   |
+| 12  | Exit run: two laptops from a clean `npm install -g`, then with abhijna                                        | —                                                                                                          |
 
 Automated: `packages/cli/test/two-machines.test.ts` runs both machines in one process (a real server with remote access, a second CLI with its own data folder and keychain behind a stand-in front end): join with a forged fingerprint refused without spending the code, join, messages both ways, device sign-in with confirmation.
 

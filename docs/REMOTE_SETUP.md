@@ -8,7 +8,7 @@ Tailscale and Cloudflare Tunnel still work as alternatives (further down).
 
 Install Node 22.12+ and Quorum: `npm install -g <the package file>` (built with `npm run pack:release`; see the README). Install Claude Code and/or Codex wherever agents will run.
 
-**Until the hosted relay is deployed**, add `--relay wss://<relay>` to the first `quorum invite` below (or set `QUORUM_RELAY`). Deploying it once is free: [packages/relay/worker/README.md](../packages/relay/worker/README.md). You can also run your own with `quorum relay`, behind HTTPS.
+The default relay is Quorum's hosted one, `wss://quorum-relay.abyud.workers.dev` (free). To use another, add `--relay wss://<relay>` to the first `quorum invite` (or set `QUORUM_RELAY`); you can run your own with `quorum relay`, behind HTTPS, or deploy the same Cloudflare Worker ([packages/relay/worker/README.md](../packages/relay/worker/README.md)).
 
 ## 1. Laptop A: invite
 

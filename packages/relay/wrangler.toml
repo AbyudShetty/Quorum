@@ -1,6 +1,8 @@
-# The hosted Quorum relay on Cloudflare Workers (free plan). Deploy: see README.md in this folder.
+# The hosted Quorum relay on Cloudflare Workers (free plan). Deploy: see worker/README.md.
+# It lives here, next to package.json, because `npx wrangler` runs in the folder that holds
+# package.json (npm workspaces), whichever subfolder you start it from.
 name = "quorum-relay"
-main = "index.js"
+main = "worker/index.js"
 compatibility_date = "2026-10-01"
 
 # One Durable Object per home server. The free plan offers only SQLite-backed Durable Objects;

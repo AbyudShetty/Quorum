@@ -613,10 +613,11 @@ const stop = async (args: string[], env: CliEnv): Promise<number> => {
 export const DEFAULT_REMOTE_PORT = 7420;
 
 /**
- * The relay Quorum runs for everyone (DECISIONS D-18): empty until it is deployed (deploy/relay).
- * `--relay` or QUORUM_RELAY name another one, e.g. one you run with `quorum relay`.
+ * The relay Quorum runs for everyone (DECISIONS D-18): a Cloudflare Worker on the free plan
+ * (packages/relay/worker, deployed 2026-10-13). `--relay` or QUORUM_RELAY name another one, e.g.
+ * one you run with `quorum relay`. Empty would mean none: then a relay must be named.
  */
-export const HOSTED_RELAY: string = '';
+export const HOSTED_RELAY: string = 'wss://quorum-relay.abyud.workers.dev';
 
 /** The relay to use: the flag, then QUORUM_RELAY, then the hosted one. */
 const relayToUse = (flag: string | undefined): string => {
