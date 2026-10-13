@@ -130,9 +130,12 @@ export class Room {
 
   async webSocketClose(ws) {
     onClose(this, wrap(ws));
+    // Answer the close, so the other end is not left waiting for it.
+    wrap(ws).close(1000, 'Closed.');
   }
 
   async webSocketError(ws) {
     onClose(this, wrap(ws));
+    wrap(ws).close(1011, 'Connection error.');
   }
 }

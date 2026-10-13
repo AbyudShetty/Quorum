@@ -318,6 +318,8 @@ One frame per delivery, with a fresh 64-bit nonce; the sender cannot know it, so
 **Where the person sees it** (wakes), only the neat form is shown to the person, and the agent reads the framed copy:
 
 - **Claude Code, turn continuation** (`Stop` hook): the neat form goes in `systemMessage` (shown to the person), the framed copy in `reason` (read by the agent).
+- **Codex, turn continuation** (`Stop` hook): Codex shows the person both `systemMessage` and `reason`, so only `reason` is set, with the neat form once (an intro saying it is data, the neat lines, how to reply); no markers, as everywhere the person sees the delivery.
+- **`quorum_inbox`** (both vendors): the neat lines between per-delivery markers, as in hook context, with the reply hint last; the agent is asked to show the mail to its person, because some vendors (Codex) show the person only the last lines of a tool result.
 - **Claude Code, idle wake** (`asyncRewake` watcher): Claude Code shows a background hook's output to the agent only, so the output is the framed copy, asking the agent to start its reply by showing the person the mail exactly as it appears in the frame. This display depends on the agent doing so; the mail itself always reaches it.
 - **Codex, idle wake**: the framed mail goes into the thread's history as a user-role item (never with more authority than the person's own words) and the turn starts with no user input, so the Codex window shows only the agent's reply. As with Claude Code's idle wake, the agent is asked to start its reply by showing the person the mail. The person's prompt box (the user-message look) stays the human's alone, in both tools.
 

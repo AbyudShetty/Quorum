@@ -469,7 +469,20 @@ const onStop = async (client: HookClient, context: HookContext, state: HookState
       if (mail.length === 0) continue;
       await maybeHeartbeat(client, context, state, 'working');
       // Claude Code shows `systemMessage` to the person (the neat form only) and gives `reason`
-      // to the agent, which reads the framed copy (INV-9).
+      // to the agent, which reads the framed copy (INV-9). Codex shows the person both, so there
+      // the person and the agent share one copy: the neat form, once (INV-9 as amended, D-17).
+      if (context.vendor === 'codex') {
+        return {
+          stdout: JSON.stringify({
+            decision: 'block',
+            reason: [
+              CONTINUE_INTRO,
+              neatMail(mail, context.attachment),
+              `To reply, pass the sender line without its final ":" to quorum_send.`,
+            ].join('\n\n'),
+          }),
+        };
+      }
       return {
         stdout: JSON.stringify({
           decision: 'block',

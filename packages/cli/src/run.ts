@@ -24,7 +24,6 @@ export const keychainService = (
 };
 
 export const runFromProcess = (argv: string[]): Promise<number> =>
-  // Kept-alive relay connections (D-18) would keep a finished command running: close them.
   main(argv, {
     out: (text) => process.stdout.write(text),
     err: (text) => process.stderr.write(text),
@@ -53,4 +52,31 @@ export const runFromProcess = (argv: string[]): Promise<number> =>
           (await import('@quorum/server')).spawnLocalServer(dataDir);
         },
       }),
-  }).finally(closeRelayConnections);
+  });
+
+/** `quorum mcp` keeps serving over stdio after `main` returns; it ends when its vendor does. */
+const KEEPS_RUNNING = new Set(['mcp']);
+
+const written = (stream: NodeJS.WriteStream) =>
+  new Promise<void>((resolve) => {
+    stream.write('', () => {
+      resolve();
+    });
+  });
+
+/**
+ * The `quorum` command: run, then end the process as soon as the output is written. Open network
+ * connections must not keep a finished command alive: a relay WebSocket (D-18) can take seconds to
+ * finish closing, and vendors wait for a hook's process to end (Codex gives up after 30 s).
+ */
+export const runAndExit = async (argv: string[]): Promise<void> => {
+  const code = await runFromProcess(argv);
+  if (KEEPS_RUNNING.has(argv[0] ?? '')) {
+    process.exitCode = code;
+    return;
+  }
+  closeRelayConnections();
+  await written(process.stdout);
+  await written(process.stderr);
+  process.exit(code);
+};

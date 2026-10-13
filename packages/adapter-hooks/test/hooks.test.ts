@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   activeWindow,
   type CodexSessions,
+  CONTINUE_INTRO,
   type HookEvent,
   type HookVendor,
   IDLE_WAKE_INTRO,
@@ -185,7 +186,7 @@ describe('Claude Code and Codex hooks', () => {
   it('continues the turn only when the server grants a wake, and only once in a row', async () => {
     const sender = await attach('stop-from', 'claude-code', 'off');
     const off = await attach('stop-off', 'claude-code', 'off');
-    const direct = await attach('stop-direct', 'codex', 'direct');
+    const direct = await attach('stop-direct', 'claude-code', 'direct');
 
     await note(sender, [off.agent], 'for the off agent');
     expect((await hook(off, 'stop')).stdout).toBe(''); // wake off: mail waits for the next prompt
@@ -206,6 +207,22 @@ describe('Claude Code and Codex hooks', () => {
 
     await note(sender, [direct.agent], 'another one');
     expect((await hook(direct, 'stop', { stop_hook_active: true })).stdout).toBe(''); // loop guard
+  });
+
+  it('continues a Codex turn with the message shown once, in the neat form', async () => {
+    const sender = await attach('stop-cx-from', 'claude-code', 'off');
+    const codex = await attach('stop-cx', 'codex', 'direct');
+    await hook(codex, 'post-tool'); // older broadcasts out of the way
+    await note(sender, [codex.agent], 'see you later');
+    const out = parse((await hook(codex, 'stop')).stdout);
+    expect(out?.decision).toBe('block');
+    // Codex shows the person `systemMessage` and `reason` both: one copy only, no markers.
+    expect(out?.systemMessage).toBeUndefined();
+    const reason = out?.reason ?? '';
+    expect(reason.startsWith(CONTINUE_INTRO)).toBe(true);
+    expect(reason).toContain(`${sender.agent.replace('agent:', '')}:\n\n  see you later`);
+    expect(reason.split('see you later')).toHaveLength(2);
+    expect(reason).not.toMatch(/<<quorum/);
   });
 
   it('ends a session: offline at once and the session is closed', async () => {

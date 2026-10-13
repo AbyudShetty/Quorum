@@ -106,14 +106,14 @@ describe('heartbeat (MESSAGE_SPEC §5.10)', () => {
   }, 10_000);
 });
 
-describe('sender header shows the folder name (MESSAGE_SPEC §8)', () => {
+describe('sender line in quorum_inbox (MESSAGE_SPEC §8)', () => {
   let mcp: Client | undefined;
   afterEach(async () => {
     await mcp?.close();
     mcp = undefined;
   });
 
-  it('adds vendor and folder, but never a path', async () => {
+  it('names the sender, and never a path from another machine', async () => {
     world = await startWorld();
     const sender = world.server.addAgent(
       'agent:web-agent@abhijna',
@@ -138,9 +138,8 @@ describe('sender header shows the folder name (MESSAGE_SPEC §8)', () => {
     });
     const result = await mcp.callTool({ name: 'quorum_inbox', arguments: {} });
     const text = (result.content as { text: string }[])[0]?.text ?? '';
-    expect(text).toContain(
-      'from: agent:web-agent@abhijna (verified sender; vendor codex; folder "web-app")',
-    );
+    // Not sent from a window: the sender line is the agent's address (a window adds its folder).
+    expect(text).toContain('web-agent@abhijna:\n\n  hello');
     expect(text).not.toMatch(/[A-Za-z]:[\\/]/);
   });
 });

@@ -1,4 +1,4 @@
 #!/usr/bin/env node
-import { runFromProcess } from '../dist/index.js';
+import { runAndExit } from '../dist/index.js';
 
-process.exitCode = await runFromProcess(process.argv.slice(2));
+await runAndExit(process.argv.slice(2));
