@@ -18,7 +18,11 @@ import { HOOK_EVENT_NAMES, type HookEvent, HOOK_EVENTS } from '@quorum/adapter-h
  *  - exec (no shell; Claude Code MCP servers and hooks, Codex MCP servers): the bare name only on
  *    POSIX. On Windows `quorum` is an npm shim (`.cmd`/`.ps1`) that cannot start without a shell,
  *    so it is always Node (a real program) plus this CLI's absolute path.
- *  - shell (Codex hooks): the bare name whenever it is on the PATH, which every shell resolves.
+ *  - shell (Codex hooks): the bare name whenever it is on the PATH. On Windows the shell may be
+ *    PowerShell, where the bare name runs the npm `.ps1` shim, which the default script policy
+ *    blocks (every hook then exits 1). So there it is `quorum.cmd` (a batch file, which both
+ *    PowerShell and cmd run under any policy), or `node "<this CLI>"` when not on the PATH: the
+ *    first word is never a quoted path, which PowerShell would read as a string, not a command.
  */
 export interface QuorumCommand {
   node: string;
@@ -42,8 +46,7 @@ const exists = (path: string): Promise<boolean> =>
 
 /** Is a `quorum` command on the PATH? (Looks for the file; runs nothing.) */
 export const quorumOnPath = async (path = process.env.PATH ?? ''): Promise<boolean> => {
-  const names =
-    process.platform === 'win32' ? ['quorum.cmd', 'quorum.exe', 'quorum.ps1'] : ['quorum'];
+  const names = process.platform === 'win32' ? ['quorum.cmd'] : ['quorum'];
   for (const dir of path.split(delimiter).filter(Boolean)) {
     for (const name of names) if (await exists(join(dir, name))) return true;
   }
@@ -370,10 +373,11 @@ export const writeVendorConfig = async (
   if (vendor === 'codex') {
     const configFile = join(root, '.codex', 'config.toml');
     const hooksFile = join(root, '.codex', 'hooks.json');
+    const windows = (command.platform ?? process.platform) === 'win32';
     const shellCommand = (event: HookEvent) =>
       (command.onPath
-        ? ['quorum', ...hookArgs('codex', event)]
-        : [command.node, command.bin, ...hookArgs('codex', event)]
+        ? [windows ? 'quorum.cmd' : 'quorum', ...hookArgs('codex', event)]
+        : [windows ? 'node' : command.node, command.bin, ...hookArgs('codex', event)]
       )
         .map(quote)
         .join(' ');

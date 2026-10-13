@@ -28,6 +28,7 @@ const absolute: QuorumCommand = {
   node: 'C:\\Program Files\\nodejs\\node.exe',
   bin: 'C:\\work\\SIDE PROJ\\Quorum\\packages\\cli\\bin\\quorum.js',
   onPath: false,
+  platform: 'linux',
 };
 // On the PATH, on Linux/macOS: the bare name works everywhere.
 const byName: QuorumCommand = { ...absolute, onPath: true, platform: 'linux' };
@@ -235,9 +236,16 @@ describe('Windows: npm shims need a shell', () => {
     expect(await readFile(join(codex, '.codex', 'config.toml'), 'utf8')).toContain(
       `command = '${absolute.node}'`,
     );
-    // Codex hooks run in a shell, which resolves the shim: the short form is fine there.
+    // Codex hooks run in a shell that may be PowerShell, where `quorum` would be the .ps1 shim the
+    // default script policy blocks: the batch shim runs under any policy.
     expect(firstHook(await json(join(codex, '.codex', 'hooks.json')), 'Stop')?.command).toBe(
-      `quorum hook codex stop --attachment ${ID}`,
+      `quorum.cmd hook codex stop --attachment ${ID}`,
+    );
+    // Not on the PATH: `node` first, never a quoted path (PowerShell would read it as a string).
+    const bare = await project();
+    await writeVendorConfig('codex', bare, ID, { ...absolute, platform: 'win32' });
+    expect(firstHook(await json(join(bare, '.codex', 'hooks.json')), 'Stop')?.command).toBe(
+      `node "${absolute.bin}" hook codex stop --attachment ${ID}`,
     );
   });
 });
