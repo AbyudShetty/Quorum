@@ -24,6 +24,7 @@ Lightweight ADRs. Each records the decision, why, how to undo it, and what would
 | D-18 | Easy setup: npm install, a free end-to-end-encrypted relay, asking before mail is read             | decided (abyud) — abhijna to review                      | 2026-10-13 |
 | D-19 | While abhijna is away, abyud decides alone; track split and RFC step on hold                       | decided (abyud) — until abhijna returns                  | 2026-10-13 |
 | D-20 | Session pairing: `/quorum-id`, `/quorum-attach`; every laptop its own server; replaces invite/join | decided (abyud) — abhijna to review                      | 2026-10-13 |
+| D-21 | Link requests answered in a dialog (MCP elicitation) the agent opens and only the person answers   | decided (abyud) — abhijna to review                      | 2026-10-13 |
 
 ---
 
@@ -200,3 +201,15 @@ Decisions are joint, so abhijna confirms or challenges these during the E2 revie
 - **Why safe:** commands are handled by hooks from what the person typed (Claude Code `UserPromptExpansion`, only person-typed commands; Codex `UserPromptSubmit`), blocked before the model runs. Agents cannot type prompts, so they cannot link, approve or detach themselves (INV-30). Verified live on both vendors.
 - **Supersedes:** the invite/join and asking-before-reading parts of D-18; D-17's numbering and display stay.
 - **Revisit if:** a vendor stops letting hooks see or block typed commands (then: a plain `quorum: id` prefix), or groups need a shared group ID instead of pairwise links.
+
+## D-21 Link requests answered in a dialog
+
+- **Decision (abyud, 2026-10-13; abhijna to review):** typing `/quorum-allow` to answer a link request was too much. "As soon as I run quorum attach on laptop B, a pop up should come in laptop A asking permission to allow or not."
+  - When a session is asked to link, it wakes, if it is idle: Claude Code's watcher, which now also starts next to every `/quorum-*` command, or Codex's waker. Otherwise the request comes with the next prompt.
+  - The agent is told to call `quorum_requests`. That tool opens an MCP elicitation dialog, "… wants to link with this session", with the choices Not now / Allow / Block. The person answers it; the agent gets only the outcome.
+  - Typing `/quorum-allow`, `/quorum-block` or attaching back still works.
+- **Why safe:** the dialog is shown by the vendor to the person, and the model cannot answer it, so INV-34 is amended (an answer in that dialog is the person's), not weakened.
+  - The default is Not now, and anything but a chosen Allow or Block links nothing. This covers Codex's bypass mode, which accepts dialogs by itself.
+  - Request wakes are capped at 5 per session per hour and respect wake mode off (INV-29's spirit for non-message wakes).
+- **Not possible:** `/quorum-…` in Codex. Codex has no custom slash commands (only built-ins; skills are typed `$name`), so Codex keeps `$quorum-…`.
+- **Revisit if:** a vendor shows dialogs only in some modes or answers them by itself with a choice other than the default, or Codex adds custom slash commands.

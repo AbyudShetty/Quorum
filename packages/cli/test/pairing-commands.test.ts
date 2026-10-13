@@ -282,3 +282,76 @@ describe('pairing commands on a laptop with leftovers, or stuck', () => {
     );
   });
 });
+
+describe('waking an idle session for requests and new links (D-21)', () => {
+  /** Claude Code's asyncRewake watcher: exit 2 and stderr wake the session. */
+  const watch = async (m: Machine, input: unknown) => {
+    const err: string[] = [];
+    const code = await main(['hook', 'claude-code', 'watch'], {
+      ...m.env,
+      err: (t) => err.push(t),
+      stdin: () => Promise.resolve(JSON.stringify(input)),
+    });
+    return { code, text: err.join('') };
+  };
+  const typed = (command: string) => ({
+    session_id: 'claude-a-wake',
+    cwd: folderA,
+    hook_event_name: 'UserPromptExpansion',
+    command_name: command,
+    command_args: '',
+  });
+
+  it('a watcher started next to /quorum-id wakes the session to ask the person, then wakes for mail on the new link', async () => {
+    // Started at the same time as the command that joins the session (no turn ends after it).
+    const first = watch(a, typed('quorum-id'));
+    const out = await hook(a, 'claude-code', 'command', typed('quorum-id'));
+    const id = /QRM-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}/.exec(String(out?.reason))?.[0] ?? '';
+    await until(
+      async () => (await fetch(`${relay.url.replace('ws://', 'http://')}/v1/lookup/${id}`)).status,
+      (s) => s === 200,
+      'in the phone book',
+    );
+    const asked = await hook(b, 'codex', 'prompt', {
+      session_id: 'codex-b-wake',
+      cwd: folderB,
+      prompt: `$quorum-attach ${id}`,
+    });
+    const idB = /\((QRM-[0-9A-Z-]+)\)/.exec(String(asked?.reason))?.[1] ?? '';
+
+    const woke = await first;
+    expect(woke.code).toBe(2);
+    expect(woke.text).toContain(`codex@laptop-b - `);
+    expect(woke.text).toContain(`(${idB}) wants to link with this session`);
+    expect(woke.text).toContain('call the quorum_requests tool');
+    // Shown once: the next prompt does not repeat it.
+    expect(
+      await hook(a, 'claude-code', 'prompt', {
+        session_id: 'claude-a-wake',
+        cwd: folderA,
+        prompt: 'ok',
+      }),
+    ).toBeUndefined();
+
+    // Allowed (here by the typed command); the watcher started next to it had no link yet.
+    const second = watch(a, typed('quorum-allow'));
+    await hook(a, 'claude-code', 'command', typed('quorum-allow'));
+    const pairing = JSON.parse(
+      readFileSync(join(b.dataDir, 'hooks', 'pairing.json'), 'utf8'),
+    ) as Record<string, { attachment: string }>;
+    const client = await QuorumClient.connect({
+      dataDir: b.dataDir,
+      credentialKey: pairing['codex:codex-b-wake']?.attachment ?? '',
+      store: b.store,
+    });
+    await until(
+      async () => (await client.links()).links.find((l) => l.id === id)?.state,
+      (s) => s === 'linked',
+      'link at B',
+    );
+    await client.sendToLinks({ to: [id], type: 'note', body: { text: 'wake up, A' } });
+    const mail = await second;
+    expect(mail.code).toBe(2);
+    expect(mail.text).toContain('wake up, A');
+  }, 60_000);
+});

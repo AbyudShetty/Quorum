@@ -42,6 +42,13 @@ export interface CodexWakerOptions {
   /** How often open windows say they are alive (default 30 s, MESSAGE_SPEC §5.10). */
   keepAliveMs?: number;
   onError?: (error: unknown) => void;
+  /**
+   * Link requests for this session (D-20): `waiting` is a cheap look (no Codex connection);
+   * `take` marks them shown and gives the text that has the agent open Quorum's dialog.
+   */
+  requests?: { waiting(): Promise<boolean>; take(): Promise<string | undefined> };
+  /** How often to look for link requests (default 3 s). */
+  requestEveryMs?: number;
 }
 
 export interface CodexWaker {
@@ -196,10 +203,37 @@ export const startCodexWaker = (options: CodexWakerOptions): Promise<CodexWaker>
   );
   const alive = keepAlive();
 
+  /** Wake an idle window of this session when someone asks to link with it. */
+  const watchRequests = async (): Promise<void> => {
+    const requests = options.requests;
+    if (!requests) return;
+    while (!stopped()) {
+      await delay(options.requestEveryMs ?? 3000, stop.signal);
+      if (stopped()) break;
+      let codex: CodexSessions | undefined;
+      try {
+        if (!(await requests.waiting())) continue;
+        codex = await options.openCodex();
+        const idle = (await codex.threadsIn(attachment.root)).filter((t) => t.status === 'idle');
+        const windows = await windowsByThread();
+        const thread = idle.find((t) => windows.has(t.id));
+        // Busy or closed: the next prompt's hook shows the request instead.
+        if (!thread) continue;
+        const text = await requests.take();
+        if (text) await codex.startTurn(thread.id, text);
+      } catch (error) {
+        onError(error);
+      } finally {
+        codex?.close();
+      }
+    }
+  };
+  const asking = watchRequests();
+
   return Promise.resolve({
     stop: async () => {
       stop.abort();
-      await Promise.allSettled([...streams, alive]);
+      await Promise.allSettled([...streams, alive, asking]);
       await queue;
     },
   });

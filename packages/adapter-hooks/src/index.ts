@@ -57,9 +57,13 @@ export {
   QUORUM_COMMANDS,
   type QuorumCommand,
   type QuorumCommandName,
+  REQUEST_WAKES_PER_HOUR,
+  requestAsk,
   requestNotice,
   runQuorumCommand,
   savePairing,
+  takeRequestWake,
+  withContext,
   withNotice,
   sessionKey as pairingKey,
 } from './pairing.js';

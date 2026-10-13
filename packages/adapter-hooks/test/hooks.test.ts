@@ -484,6 +484,45 @@ describe('Codex idle wake through the Codex daemon', () => {
     expect(mail?.hookSpecificOutput?.additionalContext).toContain('while busy');
   });
 
+  it('wakes its idle session when someone asks to link, and leaves Codex alone otherwise', async () => {
+    const codex = await attach('cx-ask', 'codex', 'direct');
+    await hook(codex, 'post-tool');
+    await hook(codex, 'session-start', { session_id: 'asked' });
+    const fake = fakeCodex([
+      { id: 'someone-else', status: 'idle' },
+      { id: 'asked', status: 'idle' },
+    ]);
+    let waiting = false;
+    let taken = 0;
+    const waker = await startCodexWaker({
+      client: await connectAs(codex)(),
+      attachment: codex,
+      dataDir: server.dataDir,
+      openCodex: fake.open,
+      reconnectMs: 50,
+      keepAliveMs: 60_000,
+      requestEveryMs: 50,
+      requests: {
+        waiting: () => Promise.resolve(waiting),
+        take: () => {
+          taken++;
+          waiting = false;
+          return Promise.resolve('Quorum: someone wants to link. Call quorum_requests.');
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const openedBefore = fake.opened(); // the keep-alive's own look, nothing for requests
+    waiting = true;
+    await until(() => fake.turns.length > 0);
+    await waker.stop();
+    expect(openedBefore).toBeLessThanOrEqual(1);
+    expect(taken).toBe(1);
+    expect(fake.turns).toEqual([
+      { threadId: 'asked', text: 'Quorum: someone wants to link. Call quorum_requests.' },
+    ]);
+  });
+
   it('never starts a turn when wake mode is off', async () => {
     const sender = await attach('cx-off-from', 'claude-code', 'off');
     const codex = await attach('cx-off', 'codex', 'off');

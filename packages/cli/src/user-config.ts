@@ -200,14 +200,15 @@ export const writeUserConfig = async (options: UserConfigOptions): Promise<Confi
       { type: 'command', ...execForm(command, ['hook', 'claude-code', 'command']), timeout: 60 },
       'quorum-.*',
     );
-    // The idle-wake watcher, for paired sessions only (others return at once).
-    for (const event of ['SessionStart', 'Stop']) {
-      addHook(settings, event, {
-        type: 'command',
-        ...execForm(command, ['hook', 'claude-code', 'watch']),
-        asyncRewake: true,
-      });
-    }
+    // The idle-wake watcher, for paired sessions only (others return at once). Also next to a typed
+    // /quorum-* command: the command joins or links the session but no turn runs, so no Stop.
+    const watcher = {
+      type: 'command',
+      ...execForm(command, ['hook', 'claude-code', 'watch']),
+      asyncRewake: true,
+    };
+    for (const event of ['SessionStart', 'Stop']) addHook(settings, event, watcher);
+    addHook(settings, 'UserPromptExpansion', watcher, 'quorum-.*');
     const permissions = (settings.permissions ??= {}) as { deny?: unknown; allow?: unknown };
     const deny = Array.isArray(permissions.deny) ? (permissions.deny as unknown[]) : [];
     permissions.deny = [...deny, ...dataDirDenyRules(dataDir).filter((r) => !deny.includes(r))];
@@ -284,6 +285,8 @@ export const writeUserConfig = async (options: UserConfigOptions): Promise<Confi
         MCP_HEADER,
         `command = ${tomlString(mcp.command)}`,
         `args = [${mcp.args.map(tomlString).join(', ')}]`,
+        // quorum_requests waits while the person reads Quorum's dialog (Codex's default is 60 s).
+        'tool_timeout_sec = 600',
       ],
       [''],
       after,

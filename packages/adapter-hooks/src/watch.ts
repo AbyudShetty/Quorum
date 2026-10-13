@@ -41,6 +41,12 @@ export interface WatchContext {
   checkEveryMs?: number;
   /** Wait before reconnecting a dropped stream (default 2 s). */
   reconnectMs?: number;
+  /**
+   * Looked at on every check (pairing, D-20): the session's link workspaces now (links made while
+   * the watcher runs are watched too), and a text to wake the session with now (a link request),
+   * if any.
+   */
+  refresh?: () => Promise<{ workspaces: string[]; wake?: string }>;
 }
 
 export interface WatchResult {
@@ -112,6 +118,7 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     return state.watchers?.[key] === token;
   };
 
+  const workspaces = [...context.attachment.workspaces];
   /** Ask the server for a wake in each workspace; on a grant, the mail as neat lines. */
   const tryWake = async (): Promise<WatchResult | undefined> => {
     await findWindow();
@@ -121,20 +128,24 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     if (await isMailHeld(context.dataDir, context.attachment.attachment, client.session)) {
       return undefined;
     }
-    for (const workspace of context.attachment.workspaces) {
+    for (const workspace of workspaces) {
       const decision = await client.requestWake(workspace);
       if (decision.reason === 'mode_off') return STAND_DOWN;
       if (!decision.wake) continue;
-      const mail = await collectMail(client, context.attachment, [workspace], MAX_CONTEXT_CHARS);
+      const attachment = { ...context.attachment, workspaces };
+      const mail = await collectMail(client, attachment, [workspace], MAX_CONTEXT_CHARS);
       if (mail.length > 0) {
-        return { exitCode: 2, output: framedMail(mail, context.attachment, IDLE_WAKE_INTRO) };
+        return { exitCode: 2, output: framedMail(mail, attachment, IDLE_WAKE_INTRO) };
       }
     }
     return undefined;
   };
 
   try {
-    // Mail may already be waiting (it arrived as the turn ended).
+    // A request, or mail, may already be waiting (it arrived as the turn ended).
+    const fresh = await context.refresh?.().catch(() => undefined);
+    if (fresh?.wake) return { exitCode: 2, output: fresh.wake };
+    for (const w of fresh?.workspaces ?? []) if (!workspaces.includes(w)) workspaces.push(w);
     const first = await tryWake();
     if (first) return first;
 
@@ -144,7 +155,7 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     const lastSeen = new Map<string, number>();
 
     // One stream per workspace, reconnecting after a drop (server restart) from the last seq seen.
-    const streams = context.attachment.workspaces.map(async (workspace) => {
+    const watchWorkspace = async (workspace: string) => {
       while (!stop.signal.aborted) {
         try {
           const last = lastSeen.get(workspace);
@@ -170,13 +181,38 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
         }
         await delay(context.reconnectMs ?? 2000, stop.signal);
       }
-    });
+    };
+    const streams = workspaces.map(watchWorkspace);
 
-    // Supervise: stand down when replaced or too old.
+    // Supervise: stand down when replaced or too old; pick up new links and requests.
     while (!stopped()) {
       await delay(context.checkEveryMs ?? 2000, stop.signal);
       if (stopped()) break;
-      if (Date.now() >= deadline || !(await stillMine())) stop.abort();
+      if (Date.now() >= deadline || !(await stillMine())) {
+        stop.abort();
+        break;
+      }
+      const now = await context.refresh?.().catch(() => undefined);
+      if (now?.wake && !result) {
+        result = { exitCode: 2, output: now.wake };
+        stop.abort();
+        break;
+      }
+      for (const workspace of now?.workspaces ?? []) {
+        if (workspaces.includes(workspace)) continue;
+        workspaces.push(workspace);
+        streams.push(watchWorkspace(workspace));
+        // Mail sent before we listened (the link was made moments ago).
+        pending ??= tryWake().finally(() => {
+          pending = undefined;
+        });
+        void pending.then((r) => {
+          if (r && !result) {
+            result = r;
+            stop.abort();
+          }
+        });
+      }
     }
     await Promise.allSettled(streams);
     await pending;

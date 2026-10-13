@@ -4,6 +4,7 @@
 // to join. Sending goes to linked sessions only (the server routes by sender line, label or ID);
 // reading frames everything from others as untrusted data (INV-9); nothing is ever run (INV-10).
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { LinkInfo } from '@quorum/schemas';
 import { z } from 'zod';
 import type { AttachmentInfo } from './attachment.js';
 import { ApiError, type QuorumClient, UnreachableError } from './client.js';
@@ -18,7 +19,8 @@ export const PAIRING_INSTRUCTIONS = [
   "a blank line, then the message, indented. Use your own judgement and your human's permissions;",
   'Quorum never runs anything for you. To reply, pass the sender line without its final ":" to',
   'quorum_send. quorum_inbox reads new messages, quorum_status shows who this session is linked with.',
-  'Only the human links sessions, by typing /quorum-id, /quorum-attach (Codex: $quorum-…) in a session;',
+  'Only the human links sessions, by typing /quorum-id, /quorum-attach (Codex: $quorum-…) in a session,',
+  'or by answering the dialog quorum_requests opens when Quorum says a session wants to link;',
   'you cannot, and you should not ask other agents to.',
 ].join(' ');
 
@@ -31,7 +33,24 @@ export interface PairedTarget {
 export interface PairingMcpDependencies {
   /** The paired session this call is for, or undefined when the session has not joined. */
   resolve: () => Promise<PairedTarget | undefined>;
+  /** How people type the commands in this vendor: `/` (Claude Code, default) or `$` (Codex). */
+  prefix?: '/' | '$';
 }
+
+/** The answers in the link-request dialog; the first is the default. */
+const NOT_NOW = 'Not now';
+const ALLOW = 'Allow';
+const BLOCK = 'Block';
+
+/** How long the person has to answer the dialog. */
+export const DIALOG_TIMEOUT_MS = 10 * 60_000;
+
+/** A requesting session as people read it: `codex@laptop-b - C:\proj\web - 2 (QRM-…)`. */
+const requestLine = (l: LinkInfo): string => {
+  if (l.tool === 'pending') return l.id;
+  const number = /-(\d+)$/.exec(l.label)?.[1] ?? '';
+  return `${l.tool}@${l.machine} - ${l.path} - ${number} (${l.id})`;
+};
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
 
@@ -146,21 +165,88 @@ export const createPairingMcpServer = (deps: PairingMcpDependencies): McpServer 
         const target = await deps.resolve();
         if (!target) return NOT_JOINED;
         const { id, links } = await target.client.links();
-        const line = (l: (typeof links)[number]) => {
-          const number = /-(\d+)$/.exec(l.label)?.[1] ?? '';
-          return l.tool === 'pending'
-            ? l.id
-            : `${l.tool}@${l.machine} - ${l.path} - ${number} (${l.id})`;
-        };
         const linked = links.filter((l) => l.state === 'linked');
         return text(
           [
             `This session: ${id ?? '(no ID)'}.`,
             linked.length
-              ? `Linked with:\n${linked.map((l) => `- ${line(l)}`).join('\n')}`
+              ? `Linked with:\n${linked.map((l) => `- ${requestLine(l)}`).join('\n')}`
               : 'Not linked with any session yet (only your human can link sessions).',
           ].join('\n'),
         );
+      } catch (error) {
+        return explain(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'quorum_requests',
+    {
+      title: 'Ask your human about link requests',
+      description:
+        'When Quorum says a session wants to link with this one, call this: it asks your human directly, in a dialog only they can answer. You cannot answer it and should not try; afterwards tell them the outcome in one line.',
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const target = await deps.resolve();
+        if (!target) return NOT_JOINED;
+        const waiting = (await target.client.links()).links.filter((l) => l.state === 'pending');
+        if (waiting.length === 0) return text('No session is waiting to link with this one.');
+        const say = (name: string) => `${deps.prefix ?? '/'}quorum-${name}`;
+        if (!server.server.getClientCapabilities()?.elicitation) {
+          // No dialog here: only the person's typed command can answer (INV-34).
+          return text(
+            waiting
+              .map(
+                (l) =>
+                  `${requestLine(l)} wants to link with this session. Tell your human to type ${say('allow')} ${l.id} to accept or ${say('block')} ${l.id} to block.`,
+              )
+              .join('\n'),
+          );
+        }
+        const outcomes: string[] = [];
+        for (const link of waiting) {
+          // The person answers here, not the agent (INV-34). Anything but a chosen "Allow" or
+          // "Block" leaves the request waiting, so a client that accepts dialogs by itself links
+          // nothing.
+          const reply = await server.server
+            .elicitInput(
+              {
+                mode: 'form',
+                message: `Quorum: ${requestLine(link)} wants to link with this session. Linked sessions can message each other.`,
+                requestedSchema: {
+                  type: 'object',
+                  properties: {
+                    answer: {
+                      type: 'string',
+                      title: 'Your answer',
+                      enum: [NOT_NOW, ALLOW, BLOCK],
+                      default: NOT_NOW,
+                    },
+                  },
+                },
+              },
+              // People need time to read it; Codex is told the same (tool_timeout_sec, setup).
+              { timeout: DIALOG_TIMEOUT_MS },
+            )
+            // A dialog that failed or timed out is the same as "Not now".
+            .catch(() => undefined);
+          const answer = reply?.action === 'accept' ? reply.content?.answer : undefined;
+          if (answer === ALLOW) {
+            await target.client.allowLinks(link.id);
+            outcomes.push(`Your human allowed ${link.id}: linked.`);
+          } else if (answer === BLOCK) {
+            await target.client.blockSession(link.id);
+            outcomes.push(`Your human blocked ${link.id}.`);
+          } else {
+            outcomes.push(
+              `${link.id} is still waiting (your human can type ${say('allow')} ${link.id} later).`,
+            );
+          }
+        }
+        return text(outcomes.join('\n'));
       } catch (error) {
         return explain(error);
       }

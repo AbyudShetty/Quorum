@@ -70,6 +70,8 @@ export interface PairedSession {
   attachment: string;
   /** Request IDs already shown to the person (each is shown once per run of the session). */
   shown?: string[];
+  /** When the idle session was woken for link requests (ms), for the hourly cap. */
+  asked?: number[];
 }
 
 const pairingPath = (dataDir: string): string => join(dataDir, 'hooks', 'pairing.json');
@@ -353,6 +355,35 @@ export const runQuorumCommand = async (context: CommandContext): Promise<string>
 export const commandOutput = (text: string): string =>
   JSON.stringify({ decision: 'block', reason: text });
 
+/** At most this many wakes for link requests per session per hour (a requester cannot burn tokens). */
+export const REQUEST_WAKES_PER_HOUR = 5;
+
+/**
+ * The requests to wake the idle session `key` for now: new ones (not yet shown in this run), within
+ * the hourly cap. They are marked shown, so the next prompt does not repeat them. Never when the
+ * session's wake mode is off (INV-29).
+ */
+export const takeRequestWake = async (
+  dataDir: string,
+  key: string,
+  links: readonly LinkInfo[],
+  options: { wakeOff?: boolean; now?: number } = {},
+): Promise<LinkInfo[]> => {
+  if (options.wakeOff) return [];
+  const sessions = await loadPairing(dataDir);
+  const session = sessions[key];
+  if (!session) return [];
+  const fresh = newRequests(session, links);
+  if (fresh.length === 0) return [];
+  const now = options.now ?? Date.now();
+  const recent = (session.asked ?? []).filter((at) => now - at < 3_600_000);
+  if (recent.length >= REQUEST_WAKES_PER_HOUR) return []; // the next prompt still shows them
+  session.asked = [...recent, now];
+  session.shown = [...(session.shown ?? []), ...fresh.map((l) => l.id)];
+  await savePairing(dataDir, sessions);
+  return fresh;
+};
+
 /** Requests waiting for this session that the person has not been shown yet in this run. */
 export const newRequests = (session: PairedSession, links: readonly LinkInfo[]): LinkInfo[] =>
   links.filter((l) => l.state === 'pending' && !session.shown?.includes(l.id));
@@ -362,9 +393,36 @@ export const requestNotice = (vendor: HookVendor, links: readonly LinkInfo[]): s
   links
     .map(
       (l) =>
-        `Quorum: ${linkLine(l)} wants to link with this session. Type ${commandText(vendor, 'allow')} ${l.id} to accept, or ${commandText(vendor, 'block')} ${l.id} to block; anything else leaves it waiting.`,
+        `Quorum: ${linkLine(l)} wants to link with this session. Quorum asks you in a dialog; or type ${commandText(vendor, 'allow')} ${l.id} to accept, or ${commandText(vendor, 'block')} ${l.id} to block.`,
     )
     .join('\n');
+
+/**
+ * What the agent is told when a session asks to link: open Quorum's dialog, which only the person
+ * can answer (INV-34). The agent cannot accept; it only brings the question up.
+ */
+export const requestAsk = (vendor: HookVendor, links: readonly LinkInfo[]): string =>
+  [
+    ...links.map((l) => `Quorum: ${linkLine(l)} wants to link with this session.`),
+    'Before anything else, call the quorum_requests tool: it asks your human in a dialog that only they can answer (you cannot answer it). Then tell them the outcome in one line and carry on.',
+    `If that tool is not available, tell them to type ${commandText(vendor, 'allow')} <id> to accept or ${commandText(vendor, 'block')} <id> to block.`,
+  ].join('\n');
+
+/** Add hidden context for the agent to a hook's output (`additionalContext`). */
+export const withContext = (eventName: string, stdout: string, text: string): string => {
+  let output: Record<string, unknown>;
+  try {
+    output = stdout ? (JSON.parse(stdout) as Record<string, unknown>) : {};
+  } catch {
+    output = {};
+  }
+  const specific = (output.hookSpecificOutput ?? {}) as { additionalContext?: string };
+  const context = [specific.additionalContext, text].filter(Boolean).join('\n\n');
+  return JSON.stringify({
+    ...output,
+    hookSpecificOutput: { ...specific, hookEventName: eventName, additionalContext: context },
+  });
+};
 
 /** The attachment as the hooks use it: the session's link workspaces, fetched fresh. */
 export const linkedAttachment = (

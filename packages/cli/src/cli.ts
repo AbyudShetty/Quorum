@@ -86,10 +86,14 @@ import {
   loadPairing,
   newRequests,
   pairingKey,
+  type PairedSession,
   parseQuorumCommand,
+  requestAsk,
   requestNotice,
   runQuorumCommand,
   savePairing,
+  takeRequestWake,
+  withContext,
   withNotice,
   type CodexSessions,
   type HookEvent,
@@ -1500,13 +1504,19 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
   /** Paired sessions of this vendor with their windows, newest activity first. */
   const candidates = async () => {
     const sessions = await loadPairing(dataDir);
-    const found: { attachment: string; window: string; vendorPid: number; activeAtMs: number }[] =
-      [];
+    const found: {
+      key: string;
+      attachment: string;
+      window: string;
+      vendorPid: number;
+      activeAtMs: number;
+    }[] = [];
     for (const [key, session] of Object.entries(sessions)) {
       if (!key.startsWith(`${vendor}:`)) continue;
       const state = await loadHookState(dataDir, session.attachment);
       for (const [window, w] of Object.entries(state.windows ?? {})) {
         found.push({
+          key,
           attachment: session.attachment,
           window,
           vendorPid: w.vendorPid,
@@ -1524,6 +1534,7 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
     return { client, attachment: linkedAttachment(saved, (await client.links()).links) };
   };
   const server = createPairingMcpServer({
+    prefix: vendor === 'codex' ? '$' : '/',
     resolve: async () => {
       const all = await candidates();
       const mine = vendor === 'codex' ? all[0] : all.find((c) => c.vendorPid === vendorPid);
@@ -1533,9 +1544,10 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
   // Codex has no hook to wake an idle window: this shared process does, for each paired session.
   const wakers = new Map<string, { workspaces: string; stop: () => Promise<void> }>();
   const keepWakersCurrent = async () => {
-    for (const { attachment, window } of await candidates()) {
+    for (const { key, attachment, window } of await candidates()) {
       const target = await targetOf(attachment, window).catch(() => undefined);
       if (!target) continue;
+      const wakeOff = target.attachment.wake === 'off';
       const workspaces = target.attachment.workspaces.join(',');
       const running = wakers.get(attachment);
       if (running?.workspaces === workspaces) continue;
@@ -1545,6 +1557,19 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
         attachment: target.attachment,
         dataDir,
         openCodex: () => (env.openCodex ?? openCodexDaemon)(),
+        // Someone asked to link: wake an idle window so its agent opens Quorum's dialog (D-21).
+        requests: {
+          waiting: async () => {
+            const session = (await loadPairing(dataDir))[key];
+            const links = (await target.client.links()).links;
+            return !wakeOff && !!session && newRequests(session, links).length > 0;
+          },
+          take: async () => {
+            const links = (await target.client.links()).links;
+            const asking = await takeRequestWake(dataDir, key, links, { wakeOff });
+            return asking.length > 0 ? requestAsk('codex', asking) : undefined;
+          },
+        },
       }).catch(() => undefined);
       if (waker) wakers.set(attachment, { workspaces, stop: () => waker.stop() });
     }
@@ -1738,6 +1763,47 @@ const commandLog = (dataDir: string, what: string) => {
   };
 };
 
+/** A hook input from Claude Code's `UserPromptExpansion` (a typed /quorum-* command). */
+const isCommandEvent = (input: unknown): boolean =>
+  typeof input === 'object' &&
+  input !== null &&
+  (input as Record<string, unknown>).hook_event_name === 'UserPromptExpansion';
+
+/**
+ * The session once the command next to this watcher has joined it: it runs at the same time, so
+ * look for up to 30 s (the time a first /quorum-id may take, starting the server and signing in).
+ */
+const joinedSoon = async (
+  dataDir: string,
+  key: string,
+  sleep: ((ms: number) => Promise<void>) | undefined,
+): Promise<PairedSession | undefined> => {
+  const wait = sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  for (let i = 0; i < 60; i++) {
+    const session = (await loadPairing(dataDir))[key];
+    if (session) return session;
+    await wait(500);
+  }
+  return undefined;
+};
+
+/**
+ * What the idle watcher looks at on every check (D-20): the session's link workspaces now, and,
+ * when someone new asks to link, the text that wakes the agent to open Quorum's dialog.
+ */
+const watchRefresh = async (
+  vendor: HookVendor,
+  dataDir: string,
+  key: string,
+  saved: AttachmentInfo,
+  client: QuorumClient,
+): Promise<{ workspaces: string[]; wake?: string }> => {
+  const links = (await client.links()).links;
+  const workspaces = linkedAttachment(saved, links).workspaces;
+  const asking = await takeRequestWake(dataDir, key, links, { wakeOff: saved.wake === 'off' });
+  return asking.length > 0 ? { workspaces, wake: requestAsk(vendor, asking) } : { workspaces };
+};
+
 /**
  * `quorum hook <vendor> <event>` without `--attachment`: Quorum's user-level hooks, in every session
  * (D-20, PAIRING.md). A typed pairing command is done here and its prompt blocked; a session that
@@ -1797,7 +1863,11 @@ const pairingHook = async (
   if (event === 'command') return 0; // another command: not Quorum's
   const key = pairingKey(vendor, input);
   const sessions = key ? await loadPairing(dataDir) : {};
-  const session = key ? sessions[key] : undefined;
+  let session = key ? sessions[key] : undefined;
+  if (key && !session && event === 'watch' && isCommandEvent(input)) {
+    // Started next to a /quorum-* command, which may be joining this session right now.
+    session = await joinedSoon(dataDir, key, env.sleep);
+  }
   if (!key || !session) return 0; // not in Quorum: nothing to do, nothing contacted
   const saved = await loadAttachment(dataDir, session.attachment);
   if (!saved) return 0;
@@ -1810,6 +1880,7 @@ const pairingHook = async (
       dataDir,
       input,
       connect: () => Promise.resolve(client),
+      refresh: () => watchRefresh(vendor, dataDir, key, saved, client),
     });
     if (woke.output) env.err(`${woke.output}\n`);
     return woke.exitCode;
@@ -1834,6 +1905,8 @@ const pairingHook = async (
     const fresh = newRequests(session, links);
     if (fresh.length > 0) {
       stdout = withNotice(vendor, HOOK_EVENT_NAMES[event], stdout, requestNotice(vendor, fresh));
+      // The agent opens Quorum's dialog for the person (INV-34: only they can answer it).
+      stdout = withContext(HOOK_EVENT_NAMES[event], stdout, requestAsk(vendor, fresh));
       session.shown = [...(session.shown ?? []), ...fresh.map((l) => l.id)];
     }
     await savePairing(dataDir, sessions);
@@ -1844,6 +1917,9 @@ const pairingHook = async (
 
 /** Where `quorum setup` notes that it ran (and with which installed copy of Quorum). */
 const setupMarker = (dataDir: string): string => join(dataDir, 'setup.json');
+
+/** Raised whenever setup writes something new, so an updated Quorum sets itself up again. */
+const SETUP_REVISION = 2;
 
 /**
  * `quorum setup [--quiet]` (D-20, PAIRING.md §4): Quorum in every Claude Code and Codex session.
@@ -1875,7 +1951,7 @@ const setup = async (args: string[], env: CliEnv): Promise<number> => {
   await mkdir(dataDir, { recursive: true });
   await writeFile(
     setupMarker(dataDir),
-    `${JSON.stringify({ bin: command.bin, node: command.node, at: new Date().toISOString() })}\n`,
+    `${JSON.stringify({ bin: command.bin, node: command.node, revision: SETUP_REVISION, at: new Date().toISOString() })}\n`,
   );
   if (values.quiet) return 0;
   const skipped = changes.filter((c) => c.action === 'skipped');
@@ -1901,7 +1977,14 @@ export const ensureSetUp = async (env: CliEnv): Promise<void> => {
   const dataDir = dataDirOf(env);
   const command = await (env.quorumCommand ?? quorumCommand)();
   const marker = await readFile(setupMarker(dataDir), 'utf8').catch(() => '');
-  if (marker.includes(JSON.stringify(command.bin))) return;
+  const done = ((): { bin?: unknown; revision?: unknown } => {
+    try {
+      return JSON.parse(marker) as { bin?: unknown; revision?: unknown };
+    } catch {
+      return {};
+    }
+  })();
+  if (done.bin === command.bin && done.revision === SETUP_REVISION) return;
   await setup(['--quiet'], env).catch(() => undefined);
 };
 

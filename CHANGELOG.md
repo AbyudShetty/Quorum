@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added (Phase 1b)
 
+- **Link requests answered in a dialog (D-21):**
+  - When a session is asked to link, Quorum's new `quorum_requests` tool opens an MCP elicitation dialog that only the person answers ("… wants to link with this session": Not now / Allow / Block), and the agent is told to call it.
+  - The default is Not now: a dialog declined, dismissed, timed out or accepted without a choice (Codex's bypass mode) links nothing. INV-34 is amended accordingly.
+  - People get 10 minutes to answer; Codex is set up with `tool_timeout_sec = 600` for Quorum.
+  - Typing `/quorum-allow` still works.
+- **Idle sessions now wake for link requests and new links** (seen live: "Hii!" did not wake the Claude session that had just linked):
+  - Claude Code's watcher also starts next to every `/quorum-*` command. A command runs no turn, so before this no watcher started.
+  - It re-reads the session's links every 2 s, so mail on a link made after it started wakes the session too.
+  - It wakes the session when someone asks to link. Codex's waker does the same for its windows.
+  - Request wakes are capped at 5 per session per hour and never happen with wake mode off; the request still shows at the next prompt.
+- `quorum setup` has a revision number: an updated Quorum runs it again by itself, at its first `quorum` command.
 - Pairing commands on a laptop used for the earlier tests (seen live: `$quorum-attach` in Codex on a second laptop showed only "hook timed out after 60s"):
   - They now always use this laptop's own server. A sign-in to another machine's server, left by `quorum login <link>`, is dropped.
   - A command that takes longer than 40 s answers that it stopped, and names the step it was on (`sign-in`, `create-id`, `register-window`, `request-link` …).

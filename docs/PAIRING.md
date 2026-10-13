@@ -4,7 +4,7 @@ Status: **design, being built** (Phase 1b, replaces invite/join). Decided by aby
 
 ## 1. What the person does
 
-After `npm install -g @quorumhq/quorum`, five commands exist in every Claude Code and Codex session, in every folder:
+After `npm install -g @quorumhq/quorum`, these commands exist in every Claude Code and Codex session, in every folder (plus `allow`, below):
 
 | Claude Code             | Codex                   | What it does                                                                                                    |
 | ----------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------- |
@@ -16,20 +16,31 @@ After `npm install -g @quorumhq/quorum`, five commands exist in every Claude Cod
 
 A session that never runs `/quorum-id` or `/quorum-attach` never joins: no ID, no mail, no wakes. A link lasts until one side detaches; it survives resuming the session (`/clear` starts a new session with no ID).
 
-**Approving.** When someone attaches to your session, the request waits until that session is open in its folder (running, or the next time you resume it). Then you see, at your next prompt:
+**Approving (D-21).** When someone attaches to your session, the request waits until that session is open in its folder (running, or the next time you resume it). A session that is open and idle wakes within seconds; otherwise the request is picked up at your next prompt. Quorum then asks you in a dialog:
 
 ```
 Quorum: claude@laptop-a - ~\proj\api - 3 (QRM-7KD2-PX9F-M3TA) wants to link with this session.
-Type /quorum-allow to link, /quorum-block QRM-7KD2-PX9F-M3TA to block it; anything else leaves it waiting.
+Your answer:  Not now | Allow | Block
 ```
 
-(`/quorum-allow`, and `$quorum-allow` in Codex, is the sixth command: the answer to a request.)
+The dialog is an MCP elicitation, opened by Quorum's `quorum_requests` tool. The agent is told to open it but cannot answer it. Anything but a chosen **Allow** or **Block** leaves the request waiting, and you have 10 minutes to answer.
+
+Typing works too: `/quorum-allow [<id>]` (`$quorum-allow` in Codex), the sixth command, or `/quorum-block <id>`. Attaching back to a session that asked first also links the two. A vendor without dialogs only shows the line and the commands to type.
+
+Requests wake an idle session at most 5 times an hour, and never when wake mode is off. The person still sees every request at the next prompt.
 
 **Groups.** Links are between two sessions and are all equal. A session linked to several others is the "orchestrator" shape; sessions all linked to each other are peers. Who leads is said by the humans in their prompts, not decided by the agents (plan §4.1).
 
 ## 2. Why the commands are safe
 
 The commands are caught by Quorum's hook **from the text the person typed**, before the model runs: Claude Code's `UserPromptExpansion` event (fires only for commands a person types, never when Claude runs one) and Codex's `UserPromptSubmit` (the raw prompt; skills are typed as `$name`). The hook does the work, blocks the prompt (no tokens are spent) and shows the result. An agent cannot type a prompt, so an agent can never link, approve or detach on its own, even if a message asks it to (INV-30, plan §4.2). Verified live on Claude Code 2.1.287 and Codex 0.162.1 (2026-10-13).
+
+The one other way to approve is Quorum's dialog (D-21). The vendor shows it to the person, and the model gets back only the outcome.
+
+- **The default is "Not now".** In Codex's `--dangerously-bypass-approvals-and-sandbox` mode, Codex accepts dialogs by itself, so a dialog that is accepted, declined or dismissed without a chosen Allow links nothing.
+- **Your own auto-answering config.** A person's own Claude Code `Elicitation` hook that answers dialogs automatically is their own choice, like an allow rule.
+
+Codex has no custom slash commands: its TUI rejects unknown `/x`, and custom prompts were removed. Its extension points (skills, apps) are typed with `$`, so Codex uses `$quorum-…`.
 
 ## 3. How it works
 

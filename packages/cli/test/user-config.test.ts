@@ -65,6 +65,12 @@ describe('quorum setup (user level)', () => {
       command: command.node,
       args: [command.bin, 'hook', 'claude-code', 'command'],
     });
+    // The idle watcher also starts next to a /quorum-* command (no turn ends after one).
+    expect(hooks.UserPromptExpansion?.[1]).toMatchObject({
+      matcher: 'quorum-.*',
+      hooks: [{ args: [command.bin, 'hook', 'claude-code', 'watch'], asyncRewake: true }],
+    });
+    expect(hooks.UserPromptExpansion).toHaveLength(2);
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd']) {
       expect(JSON.stringify(hooks[event])).not.toContain('--attachment');
     }
@@ -98,6 +104,7 @@ describe('quorum setup (user level)', () => {
     expect(toml).toContain('[mcp_servers.docs]');
     expect(toml.match(/\[mcp_servers\.quorum\]/g)).toHaveLength(1);
     expect(toml).toContain(`args = ['${command.bin}', 'mcp', '--vendor', 'codex']`);
+    expect(toml).toContain('tool_timeout_sec = 600'); // time to answer Quorum's dialog
     const skill = readFileSync(join(h, '.codex', 'skills', 'quorum-attach', 'SKILL.md'), 'utf8');
     expect(skill).toContain('name: quorum-attach');
     expect(skill).toContain('$quorum-attach <QRM-id>');
