@@ -5,14 +5,22 @@
 //   GET /v1/home/<home>        WebSocket   the home server's control connection
 //   GET /v1/connect/<home>     WebSocket   another machine asking for that home
 //   GET /v1/accept/<home>/<conn> WebSocket the home's side of one connection
+//   GET /v1/lookup/<quorum id>             {"home","salt"} or 404 "no such ID" (D-20)
 //
-// Nothing is stored and nothing is logged; rooms live only while their sockets are open.
-import { createServer, type IncomingMessage } from 'node:http';
+// Nothing is logged. The only thing kept is the phone book (Quorum ID → home, D-20), in a file
+// when `phonebookFile` is given (`quorum relay` keeps it in the data folder), else in memory.
+// Rooms live only while their sockets are open.
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { dirname } from 'node:path';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import {
   type Arrival,
+  lookupId,
+  type Phonebook,
+  type PhonebookEntry,
   arriveAccept,
   arriveConnect,
   arriveHome,
@@ -36,6 +44,10 @@ export interface RelayOptions {
   trustProxy?: boolean;
   /** New WebSockets per client address per minute. Default 120. */
   perMinute?: number;
+  /** ID lookups per client address per minute. Default 30. */
+  lookupsPerMinute?: number;
+  /** Where the phone book is kept (JSON). Default: memory only. */
+  phonebookFile?: string;
 }
 
 export interface Relay {
@@ -67,8 +79,37 @@ class NodeSocket implements RoomSocket {
   }
 }
 
+/** The phone book in memory, written to a file (atomically) after each change when one is given. */
+const filePhonebook = async (file: string | undefined): Promise<Phonebook> => {
+  const entries = new Map<string, PhonebookEntry>();
+  if (file) {
+    try {
+      const saved = JSON.parse(await readFile(file, 'utf8')) as Record<string, PhonebookEntry>;
+      for (const [id, entry] of Object.entries(saved)) entries.set(id, entry);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  let writing = Promise.resolve();
+  return {
+    get: (id) => Promise.resolve(entries.get(id)),
+    put: (id, entry) => {
+      entries.set(id, entry);
+      if (!file) return Promise.resolve();
+      writing = writing.then(async () => {
+        await mkdir(dirname(file), { recursive: true });
+        const temp = `${file}.tmp`;
+        await writeFile(temp, JSON.stringify(Object.fromEntries(entries)));
+        await rename(temp, file);
+      });
+      return writing;
+    },
+  };
+};
+
 class NodeRoom implements Room {
   readonly members = new Set<NodeSocket>();
+  constructor(readonly phonebook: Phonebook) {}
   sockets(filter?: { kind: SocketMeta['kind']; conn?: string }): RoomSocket[] {
     return [...this.members].filter(
       (s) =>
@@ -87,24 +128,30 @@ const toBytes = (data: RawData): Uint8Array =>
       : data;
 
 export const startRelay = async (options: RelayOptions = {}): Promise<Relay> => {
+  const phonebook = await filePhonebook(options.phonebookFile);
   const rooms = new Map<string, NodeRoom>();
   const roomOf = (home: string): NodeRoom => {
     let room = rooms.get(home);
-    if (!room) rooms.set(home, (room = new NodeRoom()));
+    if (!room) rooms.set(home, (room = new NodeRoom(phonebook)));
     return room;
   };
-  const perMinute = options.perMinute ?? 120;
-  const recent = new Map<string, { windowStart: number; count: number }>();
-  const allowed = (client: string): boolean => {
-    const now = Date.now();
-    const entry = recent.get(client);
-    if (!entry || now - entry.windowStart >= 60_000) {
-      recent.set(client, { windowStart: now, count: 1 });
-      return true;
-    }
-    entry.count += 1;
-    return entry.count <= perMinute;
+  /** Fixed-window limits per client address. */
+  const limiter = (perMinute: number) => {
+    const recent = new Map<string, { windowStart: number; count: number }>();
+    return (client: string): boolean => {
+      const now = Date.now();
+      const entry = recent.get(client);
+      if (!entry || now - entry.windowStart >= 60_000) {
+        if (recent.size > 10_000) recent.clear();
+        recent.set(client, { windowStart: now, count: 1 });
+        return true;
+      }
+      entry.count += 1;
+      return entry.count <= perMinute;
+    };
   };
+  const allowed = limiter(options.perMinute ?? 120);
+  const lookupAllowed = limiter(options.lookupsPerMinute ?? 30);
   const clientOf = (request: IncomingMessage): string => {
     if (options.trustProxy) {
       const header = request.headers['cf-connecting-ip'] ?? request.headers['x-forwarded-for'];
@@ -114,10 +161,26 @@ export const startRelay = async (options: RelayOptions = {}): Promise<Relay> => 
     return request.socket.remoteAddress ?? 'unknown';
   };
 
+  const json = (response: ServerResponse, status: number, body: unknown) => {
+    response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    response.end(JSON.stringify(body));
+  };
   const server = createServer((request, response) => {
-    if (request.method === 'GET' && request.url === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      response.end(JSON.stringify({ status: 'ok', relay: RELAY_PROTOCOL }));
+    const url = request.url ?? '';
+    if (request.method === 'GET' && url === '/health') {
+      json(response, 200, { status: 'ok', relay: RELAY_PROTOCOL });
+      return;
+    }
+    const lookup = /^\/v1\/lookup\/([^/?]+)$/.exec(url);
+    if (request.method === 'GET' && lookup) {
+      if (!lookupAllowed(clientOf(request))) {
+        json(response, 429, { error: 'Too many lookups; try again in a minute.' });
+        return;
+      }
+      void lookupId(phonebook, decodeURIComponent(lookup[1] ?? '')).then((entry) => {
+        if (entry) json(response, 200, entry);
+        else json(response, 404, { error: 'No such ID.' });
+      });
       return;
     }
     response.writeHead(404, { 'content-type': 'text/plain' }).end('Not found.\n');

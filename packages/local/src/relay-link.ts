@@ -179,3 +179,9 @@ export const connectThroughRelay = (
 /** The address other machines use for home `home` through `relay`: quorum://<relay host>/<home>. */
 export const relayLinkUrl = (relay: string, home: string): string =>
   `quorum://${new URL(relay).host}/${home}`;
+
+/**
+ * The relay Quorum runs for everyone (DECISIONS D-18, D-20): a Cloudflare Worker on the free plan
+ * (packages/relay/worker). QUORUM_RELAY, or `quorum remote enable --relay`, names another one.
+ */
+export const DEFAULT_RELAY = 'wss://quorum-relay.abyud.workers.dev';

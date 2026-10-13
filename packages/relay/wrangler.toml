@@ -5,12 +5,21 @@ name = "quorum-relay"
 main = "worker/index.js"
 compatibility_date = "2026-10-01"
 
-# One Durable Object per home server. The free plan offers only SQLite-backed Durable Objects;
-# the relay stores nothing in it.
+# One Durable Object per home server (it stores nothing). The free plan offers only SQLite-backed
+# Durable Objects.
 [[durable_objects.bindings]]
 name = "ROOMS"
 class_name = "Room"
 
+# The phone book (D-20): one small Durable Object per Quorum ID, holding {home, salt}.
+[[durable_objects.bindings]]
+name = "PHONEBOOK"
+class_name = "Phonebook"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Phonebook"]

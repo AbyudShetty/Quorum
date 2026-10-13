@@ -15,7 +15,7 @@ import {
 } from '@quorum/schemas';
 import { writePrivateFile } from '@quorum/local';
 import { ApiError, IdentityError, type Target, UnreachableError } from './client.js';
-import { quorumFetch } from './relay-fetch.js';
+import { quorumFetch } from '@quorum/local';
 
 /** A server on another machine, with the key this machine pinned for it. */
 export interface RemoteServer {

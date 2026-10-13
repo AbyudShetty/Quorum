@@ -42,3 +42,24 @@ export {
   type WindowTracker,
 } from './adopt.js';
 export { type HookWindow } from './state.js';
+export {
+  commandOutput,
+  commandText,
+  type CommandContext,
+  exportFileName,
+  linkedAttachment,
+  linkLine,
+  loadPairing,
+  newRequests,
+  type PairedSession,
+  pairedSession,
+  parseQuorumCommand,
+  QUORUM_COMMANDS,
+  type QuorumCommand,
+  type QuorumCommandName,
+  requestNotice,
+  runQuorumCommand,
+  savePairing,
+  withNotice,
+  sessionKey as pairingKey,
+} from './pairing.js';

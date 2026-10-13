@@ -20,6 +20,8 @@ export interface RelayHomeOptions {
   maxConnections?: number;
   /** New connections per other-machine address per minute. Default 60. */
   perClientPerMinute?: number;
+  /** This server's Quorum IDs (D-20), registered in the relay's phone book on every connect. */
+  quorumIds?: () => readonly { id: string; salt: string }[];
 }
 
 export type RelayHomeState = 'connecting' | 'ready' | 'down';
@@ -32,6 +34,13 @@ export interface RelayHome {
   ready(timeoutMs?: number): Promise<void>;
   /** Which other-machine address a connection came from, if it came through the relay. */
   clientOf(socket: unknown): string | undefined;
+  /**
+   * The key fingerprint of the server on the other end, when the caller is a Quorum server that
+   * presented its own key as a TLS client certificate (server to server, D-20).
+   */
+  peerOf(socket: unknown): string | undefined;
+  /** Put new Quorum IDs in the relay's phone book now (they are also sent on every reconnect). */
+  register(ids: readonly { id: string; salt: string }[]): void;
   close(): void;
 }
 
@@ -40,6 +49,7 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
   const identity = options.instance.tlsIdentity();
   const secureContext = createSecureContext({ ...identity, minVersion: 'TLSv1.3' });
   const clients = new WeakMap<object, string>();
+  const peers = new WeakMap<object, string>();
   const maxConnections = options.maxConnections ?? 64;
   const perClient = options.perClientPerMinute ?? 60;
   const recent = new Map<string, { windowStart: number; count: number }>();
@@ -81,7 +91,13 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
       // `close` follows
     });
     ws.on('open', () => {
-      const tls = new TLSSocket(webSocketStream(ws), { isServer: true, secureContext });
+      // A calling server presents its own key; people's tools present none (both are fine).
+      const tls = new TLSSocket(webSocketStream(ws), {
+        isServer: true,
+        secureContext,
+        requestCert: true,
+        rejectUnauthorized: false,
+      });
       clients.set(tls, client);
       tls.on('error', () => {
         tls.destroy();
@@ -89,9 +105,20 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
       tls.on('close', done);
       // Only a finished handshake reaches the HTTP server.
       tls.once('secure', () => {
+        const key = tls.getPeerX509Certificate()?.publicKey.export({ format: 'jwk' });
+        if (key?.crv === 'Ed25519' && key.x) peers.set(tls, serverFingerprint(key.x));
         options.server.emit('connection', tls);
       });
     });
+  };
+
+  /** Phone book entries go over the proven control connection, at most 100 per message. */
+  const sendIds = (ids: readonly { id: string; salt: string }[]) => {
+    const ws = control;
+    if (state !== 'ready' || ws?.readyState !== ws?.OPEN || !ws) return;
+    for (let at = 0; at < ids.length; at += 100) {
+      ws.send(JSON.stringify({ type: 'register', ids: ids.slice(at, at + 100) }));
+    }
   };
 
   const connect = () => {
@@ -121,6 +148,7 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
       } else if (message.type === 'ready') {
         state = 'ready';
         backoffMs = 1000;
+        sendIds(options.quorumIds?.() ?? []);
         for (const wake of waiters) wake();
         waiters.clear();
       } else if (
@@ -173,6 +201,11 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
           }),
     clientOf: (socket) =>
       typeof socket === 'object' && socket !== null ? clients.get(socket) : undefined,
+    peerOf: (socket) =>
+      typeof socket === 'object' && socket !== null ? peers.get(socket) : undefined,
+    register: (ids) => {
+      sendIds(ids);
+    },
     close: () => {
       closed = true;
       clearTimeout(retry);

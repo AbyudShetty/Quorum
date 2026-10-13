@@ -2,6 +2,7 @@
 // Object state and WebSocketPair: roles kept in tags and attachments, as after hibernation.
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { newQuorumId } from '@quorum/core';
 import { homeProofMessage } from '../src/router.js';
 
 class FakeSocket {
@@ -57,7 +58,12 @@ const saved = {
   response: globalThis.Response,
   rr: undefined as unknown,
 };
-let RoomClass: new (state: FakeState) => RoomLike;
+let RoomClass: new (state: FakeState, env?: unknown) => RoomLike;
+interface WorkerModule {
+  default: { fetch(request: Request, env: unknown): Promise<Response> };
+  Phonebook: new (state: { storage: unknown }) => { fetch(request: Request): Promise<Response> };
+}
+let worker: WorkerModule;
 let lastInside: FakeSocket;
 
 beforeAll(async () => {
@@ -71,18 +77,18 @@ beforeAll(async () => {
   g.WebSocketRequestResponsePair = function WebSocketRequestResponsePair() {
     // an auto-response rule: nothing to do in tests
   };
-  // Node's Response refuses status 101; Cloudflare's takes it with a webSocket.
-  g.Response = class {
-    constructor(
-      readonly body: unknown,
-      readonly init: { status: number; webSocket?: FakeSocket },
-    ) {}
-    get webSocket() {
-      return lastInside;
-    }
+  // Node's Response refuses status 101; Cloudflare's takes it with a webSocket. Others are real.
+  const Real = saved.response;
+  g.Response = function Response(
+    body: ConstructorParameters<typeof Real>[0],
+    init?: { status?: number },
+  ) {
+    if (init?.status !== 101) return new Real(body, init);
+    return { status: 101, webSocket: lastInside };
   };
   // @ts-expect-error -- plain JavaScript module without types
-  RoomClass = ((await import('../worker/index.js')) as { Room: typeof RoomClass }).Room;
+  worker = (await import('../worker/index.js')) as WorkerModule;
+  RoomClass = (worker as unknown as { Room: typeof RoomClass }).Room;
 });
 
 afterAll(() => {
@@ -139,5 +145,64 @@ describe('hosted relay glue (worker/index.js)', () => {
     const room = new RoomClass(new FakeState());
     const b = (await room.fetch(request(`/v1/connect/${'A'.repeat(43)}`))).webSocket;
     expect(b.closed).toBe(4404);
+  });
+});
+
+describe('hosted phone book (worker/index.js, D-20)', () => {
+  it('keeps one Durable Object per ID, filled by the proven home, read by lookups', async () => {
+    const objects = new Map<string, InstanceType<WorkerModule['Phonebook']>>();
+    const env = {
+      PHONEBOOK: {
+        idFromName: (name: string) => name,
+        get: (name: string) => {
+          let object = objects.get(name);
+          if (!object) {
+            const stored = new Map<string, unknown>();
+            object = new worker.Phonebook({
+              storage: {
+                get: (key: string) => Promise.resolve(stored.get(key)),
+                put: (key: string, value: unknown) => {
+                  stored.set(key, value);
+                  return Promise.resolve();
+                },
+              },
+            });
+            objects.set(name, object);
+          }
+          const target = object;
+          return {
+            fetch: (input: string, init?: RequestInit) => target.fetch(new Request(input, init)),
+          };
+        },
+      },
+    };
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const publicKey = privateKey.export({ format: 'jwk' }).x ?? '';
+    const home = createHash('sha256')
+      .update(Buffer.from(publicKey, 'base64url'))
+      .digest('base64url');
+    const room = new RoomClass(new FakeState(), env);
+    const control = (await room.fetch(request(`/v1/home/${home}`))).webSocket;
+    const { nonce } = control.texts()[0] as { nonce: string };
+    await room.webSocketMessage(
+      control,
+      JSON.stringify({
+        type: 'prove',
+        public_key: publicKey,
+        signature: sign(null, homeProofMessage(home, nonce), privateKey).toString('base64url'),
+      }),
+    );
+    const mine = newQuorumId(home);
+    const theirs = newQuorumId('A'.repeat(43));
+    await room.webSocketMessage(control, JSON.stringify({ type: 'register', ids: [mine, theirs] }));
+    expect(control.texts().at(-1)).toEqual({ type: 'registered', ids: [mine.id] });
+    expect([...objects.keys()]).toEqual([mine.id]);
+
+    const lookup = (id: string) =>
+      worker.default.fetch(new Request(`https://relay.example/v1/lookup/${id}`), env);
+    const found = await lookup(mine.id);
+    expect(found.status).toBe(200);
+    expect(await found.json()).toEqual({ home, salt: mine.salt });
+    expect((await lookup(theirs.id)).status).toBe(404);
   });
 });

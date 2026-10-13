@@ -8,6 +8,12 @@ import {
   type AttachmentCreate,
   type AttachmentCreated,
   type AttachmentUpdate,
+  type LinkCreated,
+  type LinkList,
+  type LinkSend,
+  type LinkSent,
+  type QuorumIdCreate,
+  type QuorumIdCreated,
   type SessionCreate,
   type SessionCreated,
   type DeliveredEnvelope,
@@ -22,7 +28,7 @@ import {
 import { newHelloNonce, verifyHello } from '@quorum/core';
 import { defaultDataDir, readDiscovery, withFileLock } from '@quorum/local';
 import type { CredentialStore, StoredCredentials } from './credentials.js';
-import { quorumFetch } from './relay-fetch.js';
+import { quorumFetch } from '@quorum/local';
 
 export class IdentityError extends Error {
   constructor(message: string) {
@@ -557,6 +563,44 @@ export class QuorumClient {
   async createSession(request: SessionCreate): Promise<SessionCreated> {
     const reply = await this.call('POST', '/v1/sessions', request);
     return reply.body as SessionCreated;
+  }
+
+  // --- session pairing (D-20, PAIRING.md) ---------------------------------------------------
+
+  /** `/quorum-id`, as the human who typed it: this session's own agent and permanent ID. */
+  async createQuorumId(request: QuorumIdCreate): Promise<QuorumIdCreated> {
+    return (await this.call('POST', '/v1/quorum-ids', request)).body as QuorumIdCreated;
+  }
+
+  /** This session's ID, links and waiting requests. */
+  async links(): Promise<LinkList> {
+    return (await this.call('GET', '/v1/links')).body as LinkList;
+  }
+
+  async requestLink(to: string): Promise<LinkCreated> {
+    return (await this.call('POST', '/v1/links', { to })).body as LinkCreated;
+  }
+
+  async allowLinks(id?: string): Promise<LinkList> {
+    return (await this.call('POST', '/v1/links/allow', id ? { id } : {})).body as LinkList;
+  }
+
+  async detachLinks(id?: string): Promise<string[]> {
+    const reply = await this.call('POST', '/v1/links/detach', id ? { id } : {});
+    return (reply.body as { detached: string[] }).detached;
+  }
+
+  async blockSession(id: string): Promise<void> {
+    await this.call('POST', '/v1/links/block', { id });
+  }
+
+  async sendToLinks(request: LinkSend): Promise<LinkSent> {
+    return (await this.call('POST', '/v1/links/send', request)).body as LinkSent;
+  }
+
+  /** This session's conversations as Markdown. */
+  async exportLinks(): Promise<string> {
+    return (await this.#authenticated('GET', '/v1/links/export')).text;
   }
 
   async deleteSession(id: string): Promise<void> {

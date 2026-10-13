@@ -274,6 +274,8 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 - Minimal web timeline (read-only).
 - **Exit:** a Claude Code session in folder A and a Codex session in folder B on **one machine** exchange messages within 1 minute of running `quorum attach` in each folder, with no network configuration; two agents attached to the same working tree are both warned; offline queueing works when the local server is killed; `quorum verify` detects a tampered log; integration, conformance (framing, no-exec) and local-mode adversarial basics (other local process without a token, port squatting, DNS rebinding, path traversal) pass.
 
+> Phase 1b was redesigned again on 2026-10-13 (D-20, abyud): sessions pair with `/quorum-id` and `/quorum-attach` (`$quorum-…` in Codex), every laptop runs its own server, and servers link through the relay; invite/join and asking before reading are replaced. See `docs/PAIRING.md`. The D-18 text below is kept for history; the exit criterion is D-20's.
+
 > Phase 1b was widened on 2026-10-13 (D-18, abyud) after the first two-laptop run showed the setup was too fiddly: npm packaging, a free default relay, end-to-end encryption between machines and asking before reading mail. Previously the exit was "tested over both Tailscale and Cloudflare Tunnel"; those stay as documented alternatives.
 
 ### Phase 1b — Cross-machine
@@ -284,7 +286,7 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 - **Relay:** free default, outbound connections only, stores nothing, invite-only use with size and rate limits; self-hostable (`quorum relay`). `quorum invite` / `quorum join <code>`.
 - **End-to-end encryption between machines:** keyed by the home server's identity in the invite code (INV-24); the relay cannot read or alter traffic.
 - **Asking before reading mail** when a session starts or resumes (§9).
-- **Exit:** a Claude Code session on machine A and a Codex session on machine B, on different networks, exchange messages in < 5 minutes from `npm install -g` on a clean machine, through the default relay with no network setup; a test shows the relay cannot read or alter the messages; mail waiting for a session is held until its human allows it; all Phase 1 exit criteria still hold.
+- **Exit (D-20):** a Claude Code session on laptop A and a Codex session on laptop B, on different networks, pair with `/quorum-id` and `/quorum-attach` and exchange messages, from `npm install -g` alone, in under 5 minutes; a session that never ran a command is not reachable; a blocked session sees "no such ID"; the relay cannot read or alter messages (INV-33); all Phase 1 exit criteria still hold. _(Was: invite/join through the relay, and held mail, D-18.)_
 
 ### Phase 2 — Governance: approvals and policy
 - Approval requests/decisions, policy file, gated action types, quorum (number of approvers set per action), expiry, rollback plan field.
@@ -325,7 +327,7 @@ Create a reproducible **"two-machine sprint"** scenario based on the hackathon p
 - Policy templates (ML competition, web app, data pipeline).
 - "Planner" view: tasks and dependencies across agents with critical path.
 - End-to-end encryption of message bodies within a workspace, so that even the home machine's server cannot read them. (Encryption between machines through the relay moved to Phase 1b, D-18.)
-- Federation between Quorum servers.
+- Federation between Quorum servers. (Pairwise links between servers moved to Phase 1b, D-20.)
 - Analytics: time saved, relay eliminated, decisions per day; an opt-in, metadata-only yearly summary ("Quorum Wrapped").
 
 ## 14. What makes it the best (the differentiators to protect)

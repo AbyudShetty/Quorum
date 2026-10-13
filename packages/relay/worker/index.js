@@ -2,7 +2,8 @@
 // per home server, so a home and the connections asking for it always meet in the same place. The
 // pairing logic is the same router the Node relay runs (../src/router.ts). WebSockets use the
 // Hibernation API: an idle home connection costs nothing, and each socket's role lives in its
-// attachment and tags, so nothing is lost when the object sleeps. Nothing is stored or logged.
+// attachment and tags, so nothing is lost when the object sleeps. Nothing is logged. The only
+// thing stored is the phone book (Quorum ID → home, D-20): one small Durable Object per ID.
 /* global WebSocketPair, WebSocketRequestResponsePair */
 import {
   arriveAccept,
@@ -10,6 +11,7 @@ import {
   arriveHome,
   CONN_ID,
   HOME_ID,
+  lookupId,
   onClose,
   onMessage,
   RELAY_PROTOCOL,
@@ -21,7 +23,24 @@ const json = (body, status = 200) =>
     headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
   });
 
-/** Routes: /health, /v1/home/<home>, /v1/connect/<home>, /v1/accept/<home>/<conn>. */
+/** The phone book: each ID's entry lives in its own Durable Object (named by the ID). */
+const phonebookOf = (env) => {
+  const stub = (id) => env.PHONEBOOK.get(env.PHONEBOOK.idFromName(id));
+  return {
+    async get(id) {
+      const response = await stub(id).fetch('https://phonebook/entry');
+      return response.status === 200 ? response.json() : undefined;
+    },
+    async put(id, entry) {
+      await stub(id).fetch('https://phonebook/entry', {
+        method: 'PUT',
+        body: JSON.stringify(entry),
+      });
+    },
+  };
+};
+
+/** Routes: /health, /v1/lookup/<id>, /v1/home/<home>, /v1/connect/<home>, /v1/accept/<home>/<conn>. */
 const route = (url) => {
   const parts = url.pathname.split('/');
   const [, v1, kind, home, conn] = parts;
@@ -38,6 +57,11 @@ export default {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/health') {
       return json({ status: 'ok', relay: RELAY_PROTOCOL });
+    }
+    const lookup = /^\/v1\/lookup\/([^/]+)$/.exec(url.pathname);
+    if (request.method === 'GET' && lookup) {
+      const entry = await lookupId(phonebookOf(env), decodeURIComponent(lookup[1]));
+      return entry ? json(entry) : json({ error: 'No such ID.' }, 404);
     }
     const target = route(url);
     if (!target || request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
@@ -83,8 +107,9 @@ const tagsOf = (meta) =>
   meta.kind === 'home' ? ['home'] : [meta.kind, `${meta.kind}:${meta.conn}`];
 
 export class Room {
-  constructor(state) {
+  constructor(state, env) {
     this.state = state;
+    this.phonebook = phonebookOf(env);
     // Keepalive pings from home servers are answered without waking the object.
     state.setWebSocketAutoResponse(
       new WebSocketRequestResponsePair('{"type":"ping"}', '{"type":"pong"}'),
@@ -137,5 +162,21 @@ export class Room {
   async webSocketError(ws) {
     onClose(this, wrap(ws));
     wrap(ws).close(1011, 'Connection error.');
+  }
+}
+
+/** One phone book entry (D-20): `{home, salt}` for the ID this object is named after. */
+export class Phonebook {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async fetch(request) {
+    if (request.method === 'PUT') {
+      await this.state.storage.put('entry', await request.json());
+      return new Response(null, { status: 204 });
+    }
+    const entry = await this.state.storage.get('entry');
+    return entry ? json(entry) : json({ error: 'No such ID.' }, 404);
   }
 }

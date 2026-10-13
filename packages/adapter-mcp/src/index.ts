@@ -73,4 +73,10 @@ export {
   createQuorumFetch,
   parseRelayUrl,
   quorumFetch,
-} from './relay-fetch.js';
+} from '@quorum/local';
+export {
+  createPairingMcpServer,
+  PAIRING_INSTRUCTIONS,
+  type PairedTarget,
+  type PairingMcpDependencies,
+} from './pairing-mcp.js';

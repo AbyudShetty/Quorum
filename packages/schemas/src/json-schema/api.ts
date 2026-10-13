@@ -27,6 +27,27 @@ const schema = (name: string, body: Record<string, unknown>) => ({
   ...body,
 });
 
+/** A Quorum ID (D-20): QRM- and 12 Crockford base32 characters. */
+const QUORUM_ID = '^QRM-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$';
+
+/** A session as its home server describes it to another server (D-20). */
+const peerSession = {
+  type: 'object',
+  required: ['id', 'salt', 'tool', 'machine', 'path', 'label'],
+  properties: {
+    id: { type: 'string', pattern: QUORUM_ID },
+    /** With the caller's key fingerprint it must give `id` (checked by the receiving server). */
+    salt: base64url(16),
+    tool: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,31}$' },
+    machine: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,31}$' },
+    path: { type: 'string', minLength: 1, maxLength: 4096 },
+    label: {
+      type: 'string',
+      pattern: '^[a-z][a-z0-9-]{0,31}@[a-z0-9][a-z0-9-]{0,95}-[1-9][0-9]{0,3}$',
+    },
+  },
+} as const;
+
 const tokenPair = {
   type: 'object',
   required: ['access_token', 'refresh_token', 'token_type', 'expires_in', 'refresh_expires_in'],
@@ -448,6 +469,158 @@ export const apiSchemas = {
     properties: {
       code: { type: 'string', pattern: '^qrm_bc_[A-Za-z0-9_-]{43}$' },
       expires_at: common('timestamp'),
+    },
+  }),
+
+  // --- session pairing (DECISIONS D-20, PAIRING.md) -----------------------------------------
+
+  /** `/quorum-id`: the human (who typed it) gives this session its own agent and Quorum ID. */
+  quorumIdCreate: schema('quorum-id-create', {
+    type: 'object',
+    required: ['vendor', 'vendor_session_id', 'root'],
+    properties: {
+      vendor: { enum: [...VENDORS] },
+      vendor_session_id: { type: 'string', minLength: 1, maxLength: 256 },
+      /** The folder the session runs in (this machine's canonical path). */
+      root: absolutePath,
+      /** Issue fresh credentials for an existing ID (the keychain entry was lost). */
+      credentials: { type: 'boolean', default: false },
+    },
+  }),
+  quorumIdCreated: schema('quorum-id-created', {
+    type: 'object',
+    required: ['id', 'agent', 'created'],
+    properties: {
+      id: { type: 'string', pattern: QUORUM_ID },
+      agent: {
+        type: 'object',
+        required: ['id', 'address'],
+        properties: { id: common('agentId'), address: common('agentAddress') },
+      },
+      attachment: common('attachmentId'),
+      /** Only when the ID is new (or `credentials` was asked for): shown once. */
+      credentials: tokenPair,
+      created: { type: 'boolean' },
+    },
+  }),
+  /** `/quorum-attach <id>`. */
+  linkCreate: schema('link-create', {
+    type: 'object',
+    required: ['to'],
+    properties: { to: { type: 'string', pattern: QUORUM_ID } },
+  }),
+  linkCreated: schema('link-created', {
+    type: 'object',
+    required: ['state'],
+    properties: {
+      /** requested: the other person is asked; linked: done; queued: their laptop is off. */
+      state: { enum: ['requested', 'linked', 'queued'] },
+    },
+  }),
+  /** `/quorum-allow [id]`, `/quorum-detach [id]`: one link, or all. */
+  linkSelect: schema('link-select', {
+    type: 'object',
+    properties: { id: { type: 'string', pattern: QUORUM_ID } },
+  }),
+  /** `/quorum-block <id>`. */
+  linkBlock: schema('link-block', {
+    type: 'object',
+    required: ['id'],
+    properties: { id: { type: 'string', pattern: QUORUM_ID } },
+  }),
+  /** This session's ID, links and waiting requests. */
+  linkList: schema('link-list', {
+    type: 'object',
+    required: ['links'],
+    properties: {
+      id: { type: 'string', pattern: QUORUM_ID },
+      links: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['id', 'state', 'tool', 'machine', 'path', 'label'],
+          properties: {
+            id: { type: 'string', pattern: QUORUM_ID },
+            state: { enum: ['requested', 'pending', 'linked'] },
+            tool: common('name'),
+            machine: common('name'),
+            path: { type: 'string', minLength: 1, maxLength: 4096 },
+            label: common('sessionLabel'),
+            workspace: common('workspaceId'),
+          },
+        },
+      },
+    },
+  }),
+  /** Send to linked sessions: `to` holds sender lines, window labels or Quorum IDs. */
+  linkSend: schema('link-send', {
+    type: 'object',
+    required: ['to', 'type', 'body'],
+    properties: {
+      to: { type: 'array', minItems: 1, maxItems: 32, items: { type: 'string', minLength: 1 } },
+      type: { enum: [...MESSAGE_TYPES] },
+      type_version: { type: 'integer', minimum: 1 },
+      body: { type: 'object' },
+      thread: common('threadId'),
+      reply_to: common('messageId'),
+      refs: common('refList'),
+    },
+  }),
+  linkSent: schema('link-sent', {
+    type: 'object',
+    required: ['sent'],
+    properties: {
+      sent: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['to', 'id', 'workspace'],
+          properties: {
+            to: { type: 'string', pattern: QUORUM_ID },
+            id: common('messageId'),
+            workspace: common('workspaceId'),
+          },
+        },
+      },
+    },
+  }),
+
+  /** Server to server (through the relay, the caller proven by its TLS client key): a session. */
+  peerSession: schema('peer-session', peerSession),
+  federatedLink: schema('federated-link', {
+    type: 'object',
+    required: ['from', 'to'],
+    properties: { from: peerSession, to: { type: 'string', pattern: QUORUM_ID } },
+  }),
+  federatedUnlink: schema('federated-unlink', {
+    type: 'object',
+    required: ['from', 'to'],
+    properties: {
+      from: { type: 'string', pattern: QUORUM_ID },
+      to: { type: 'string', pattern: QUORUM_ID },
+    },
+  }),
+  federatedMessage: schema('federated-message', {
+    type: 'object',
+    required: ['from', 'to', 'message'],
+    properties: {
+      from: { type: 'string', pattern: QUORUM_ID },
+      to: { type: 'string', pattern: QUORUM_ID },
+      /** The sender's envelope fields; the receiving server addresses and stamps it itself. */
+      message: {
+        type: 'object',
+        required: ['id', 'type', 'type_version', 'created_at', 'body'],
+        properties: {
+          id: common('messageId'),
+          type: { enum: [...MESSAGE_TYPES] },
+          type_version: { type: 'integer', minimum: 1 },
+          created_at: common('timestamp'),
+          body: { type: 'object' },
+          thread: common('threadId'),
+          reply_to: common('messageId'),
+          refs: common('refList'),
+        },
+      },
     },
   }),
 

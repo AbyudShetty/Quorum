@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { closeRelayConnections, KeychainCredentialStore } from '@quorum/adapter-mcp';
 import { defaultDataDir } from '@quorum/local';
-import { main } from './cli.js';
+import { type CliEnv, ensureSetUp, main } from './cli.js';
 import { ensureLocalServer } from './local-server.js';
 
 /**
@@ -23,36 +23,45 @@ export const keychainService = (
   return `quorum:${createHash('sha256').update(home).digest('hex').slice(0, 12)}`;
 };
 
-export const runFromProcess = (argv: string[]): Promise<number> =>
-  main(argv, {
-    out: (text) => process.stdout.write(text),
-    err: (text) => process.stderr.write(text),
-    store: new KeychainCredentialStore(keychainService()),
-    // A question only a person at a terminal can answer (INV-30). Without a terminal (an agent's
-    // shell, a pipe, CI) the answer is no.
-    confirm: async (question) => {
-      if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
-      const terminal = createInterface({ input: process.stdin, output: process.stdout });
-      try {
-        return /^y(es)?$/i.test((await terminal.question(`${question} [y/N] `)).trim());
-      } finally {
-        terminal.close();
-      }
-    },
-    stdin: async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-      return Buffer.concat(chunks).toString('utf8');
-    },
-    // Commands start the local server when it is not running (ARCHITECTURE §8.2).
-    startServer: (dataDir) =>
-      ensureLocalServer(dataDir, {
-        // Loaded only when a server must be started, so commands stay light otherwise.
-        start: async () => {
-          (await import('@quorum/server')).spawnLocalServer(dataDir);
-        },
-      }),
-  });
+/** Commands that run inside Claude Code or Codex (or set Quorum up): they never set up first. */
+const NO_SETUP = new Set(['hook', 'mcp', 'setup', 'uninstall', 'relay', 'serve']);
+
+export const runFromProcess = async (argv: string[]): Promise<number> => {
+  const env = processEnv();
+  // Install scripts turned off (or Quorum installed again elsewhere): set up on first use (D-20).
+  if (argv[0] !== undefined && !NO_SETUP.has(argv[0])) await ensureSetUp(env);
+  return main(argv, env);
+};
+
+const processEnv = (): CliEnv => ({
+  out: (text) => process.stdout.write(text),
+  err: (text) => process.stderr.write(text),
+  store: new KeychainCredentialStore(keychainService()),
+  // A question only a person at a terminal can answer (INV-30). Without a terminal (an agent's
+  // shell, a pipe, CI) the answer is no.
+  confirm: async (question) => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+    const terminal = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      return /^y(es)?$/i.test((await terminal.question(`${question} [y/N] `)).trim());
+    } finally {
+      terminal.close();
+    }
+  },
+  stdin: async () => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks).toString('utf8');
+  },
+  // Commands start the local server when it is not running (ARCHITECTURE §8.2).
+  startServer: (dataDir) =>
+    ensureLocalServer(dataDir, {
+      // Loaded only when a server must be started, so commands stay light otherwise.
+      start: async () => {
+        (await import('@quorum/server')).spawnLocalServer(dataDir);
+      },
+    }),
+});
 
 /** `quorum mcp` keeps serving over stdio after `main` returns; it ends when its vendor does. */
 const KEEPS_RUNNING = new Set(['mcp']);

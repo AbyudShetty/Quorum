@@ -5,8 +5,8 @@
 // Everything is a function of (argv, env) so tests can run it against the fake server without
 // spawning processes. Output that contains other participants' messages is always framed as
 // untrusted data (INV-9), because a person may paste it to an agent.
-import { appendFile, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { hostname } from 'node:os';
+import { appendFile, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { homedir, hostname } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
@@ -21,6 +21,7 @@ import {
   addGitWorktree,
   checkPublicUrl,
   checkRelayUrl,
+  DEFAULT_RELAY,
   defaultDataDir,
   readRemoteConfig,
   type RemoteConfig,
@@ -36,6 +37,7 @@ import {
 } from '@quorum/local';
 import {
   type AttachmentCreated,
+  type QuorumIdCreated,
   MESSAGE_TYPES,
   type MessageType,
   type SubmittedEnvelope,
@@ -58,6 +60,7 @@ import {
   startDeviceLogin,
   targetOf,
   type CredentialStore,
+  createPairingMcpServer,
   createQuorumMcpServer,
   frameMessages,
   senderResolver,
@@ -74,8 +77,20 @@ import {
   UnreachableError,
 } from '@quorum/adapter-mcp';
 import {
+  commandOutput,
+  HOOK_EVENT_NAMES,
   HOOK_EVENTS,
   HOOK_VENDORS,
+  linkedAttachment,
+  loadHookState,
+  loadPairing,
+  newRequests,
+  pairingKey,
+  parseQuorumCommand,
+  requestNotice,
+  runQuorumCommand,
+  savePairing,
+  withNotice,
   type CodexSessions,
   type HookEvent,
   type HookVendor,
@@ -98,6 +113,7 @@ import {
   removeVendorConfig,
   writeVendorConfig,
 } from './vendor-config.js';
+import { removeUserConfig, writeUserConfig } from './user-config.js';
 
 export interface CliEnv {
   out: (text: string) => void;
@@ -132,6 +148,8 @@ export interface CliEnv {
   adoptTimeoutMs?: number;
   /** Stop a verified local server process (default: SIGTERM). Tests replace it. */
   killServer?: (pid: number) => void;
+  /** The person's home folder, where ~/.claude and ~/.codex live (tests). */
+  home?: string;
 }
 
 /** Keychain entry for the signed-in human (used by `export`). */
@@ -225,6 +243,10 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
         return await joinCode(rest, env, true);
       case 'relay':
         return await relayCommand(rest, env);
+      case 'setup':
+        return await setup(rest, env);
+      case 'uninstall':
+        return await uninstall(rest, env);
       case 'join':
         return await joinCommand(rest, env);
       case 'status':
@@ -612,12 +634,8 @@ const stop = async (args: string[], env: CliEnv): Promise<number> => {
 /** The loopback port remote access uses unless another is given (the front end forwards here). */
 export const DEFAULT_REMOTE_PORT = 7420;
 
-/**
- * The relay Quorum runs for everyone (DECISIONS D-18): a Cloudflare Worker on the free plan
- * (packages/relay/worker, deployed 2026-10-13). `--relay` or QUORUM_RELAY name another one, e.g.
- * one you run with `quorum relay`. Empty would mean none: then a relay must be named.
- */
-export const HOSTED_RELAY: string = 'wss://quorum-relay.abyud.workers.dev';
+/** The relay Quorum runs for everyone (D-18); `--relay` or QUORUM_RELAY name another one. */
+export const HOSTED_RELAY: string = DEFAULT_RELAY;
 
 /** The relay to use: the flag, then QUORUM_RELAY, then the hosted one. */
 const relayToUse = (flag: string | undefined): string => {
@@ -779,9 +797,11 @@ const relayCommand = async (args: string[], env: CliEnv): Promise<number> => {
     port,
     ...(values.host ? { host: values.host } : {}),
     trustProxy: values['trust-proxy'],
+    // The phone book (Quorum ID → laptop, D-20) outlives restarts: IDs are permanent.
+    phonebookFile: join(dataDirOf(env), 'relay', 'phonebook.json'),
   });
   env.out(
-    `Quorum relay on ${relay.url} (stores nothing; cannot read what it passes on).\n` +
+    `Quorum relay on ${relay.url}. It keeps only its phone book of Quorum IDs and cannot read what it passes on.\n` +
       'Other machines need it over HTTPS: put it behind a reverse proxy or tunnel that gives wss://<host>, then on the home machine:\n\n' +
       '  quorum remote enable --relay wss://<host>\n\nStop it with Ctrl+C.\n',
   );
@@ -1461,8 +1481,101 @@ const mcpWindow = async (
   };
 };
 
+/**
+ * `quorum mcp --vendor <v>` without `--attachment`: the tools in every session (D-20). Claude Code
+ * runs one per window (its process is our parent); Codex runs one for all its windows, which speaks
+ * for the window used last. A session that never joined gets told how to.
+ */
+const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
+  const dataDir = dataDirOf(env);
+  const vendorPid = env.vendorPid ?? process.ppid;
+  const clients = new Map<string, QuorumClient>();
+  const clientFor = async (attachment: string): Promise<QuorumClient> => {
+    let client = clients.get(attachment);
+    if (!client) clients.set(attachment, (client = await connect(env, attachment)));
+    return client;
+  };
+  /** Paired sessions of this vendor with their windows, newest activity first. */
+  const candidates = async () => {
+    const sessions = await loadPairing(dataDir);
+    const found: { attachment: string; window: string; vendorPid: number; activeAtMs: number }[] =
+      [];
+    for (const [key, session] of Object.entries(sessions)) {
+      if (!key.startsWith(`${vendor}:`)) continue;
+      const state = await loadHookState(dataDir, session.attachment);
+      for (const [window, w] of Object.entries(state.windows ?? {})) {
+        found.push({
+          attachment: session.attachment,
+          window,
+          vendorPid: w.vendorPid,
+          activeAtMs: w.activeAtMs ?? 0,
+        });
+      }
+    }
+    return found.sort((a, b) => b.activeAtMs - a.activeAtMs);
+  };
+  const targetOf = async (attachment: string, window: string) => {
+    const saved = await loadAttachment(dataDir, attachment);
+    if (!saved) return undefined;
+    const client = await clientFor(attachment);
+    client.session = window;
+    return { client, attachment: linkedAttachment(saved, (await client.links()).links) };
+  };
+  const server = createPairingMcpServer({
+    resolve: async () => {
+      const all = await candidates();
+      const mine = vendor === 'codex' ? all[0] : all.find((c) => c.vendorPid === vendorPid);
+      return mine ? targetOf(mine.attachment, mine.window) : undefined;
+    },
+  });
+  // Codex has no hook to wake an idle window: this shared process does, for each paired session.
+  const wakers = new Map<string, { workspaces: string; stop: () => Promise<void> }>();
+  const keepWakersCurrent = async () => {
+    for (const { attachment, window } of await candidates()) {
+      const target = await targetOf(attachment, window).catch(() => undefined);
+      if (!target) continue;
+      const workspaces = target.attachment.workspaces.join(',');
+      const running = wakers.get(attachment);
+      if (running?.workspaces === workspaces) continue;
+      await running?.stop();
+      const waker = await startCodexWaker({
+        client: target.client,
+        attachment: target.attachment,
+        dataDir,
+        openCodex: () => (env.openCodex ?? openCodexDaemon)(),
+      }).catch(() => undefined);
+      if (waker) wakers.set(attachment, { workspaces, stop: () => waker.stop() });
+    }
+  };
+  const wakeTimer =
+    vendor === 'codex' && process.env.QUORUM_CODEX_IDLE_WAKE !== 'off'
+      ? setInterval(() => {
+          void keepWakersCurrent().catch(() => undefined);
+        }, 10_000)
+      : undefined;
+  wakeTimer?.unref();
+  if (wakeTimer) void keepWakersCurrent().catch(() => undefined);
+  const goodbye = async () => {
+    if (wakeTimer) clearInterval(wakeTimer);
+    await Promise.all([...wakers.values()].map((w) => w.stop()));
+  };
+  process.stdin.once('end', () => {
+    void goodbye().finally(() => process.exit(0));
+  });
+  await serveStdio(server);
+  return 0;
+};
+
 const mcp = async (args: string[], env: CliEnv): Promise<number> => {
-  const { values } = parseArgs({ args, options: { attachment: { type: 'string' } }, strict: true });
+  const { values } = parseArgs({
+    args,
+    options: { attachment: { type: 'string' }, vendor: { type: 'string' } },
+    strict: true,
+  });
+  if (values.attachment === undefined) {
+    const vendor = oneOf(values.vendor, HOOK_VENDORS, '--vendor') ?? 'claude-code';
+    return pairingMcp(vendor, env);
+  }
   const info = await attachmentOf(env, values.attachment);
   const dataDir = dataDirOf(env);
   const client = await connect(env, info.attachment);
@@ -1537,6 +1650,214 @@ const hookNeverFails = async (args: string[], env: CliEnv): Promise<number> => {
   }
 };
 
+/**
+ * The person's own client, signing in on this machine first when needed: a pairing command typed in
+ * a session acts for the person who typed it (D-20), with the sign-in code from the private data
+ * folder (INV-25), like `quorum login`.
+ */
+const ensureHuman = async (env: CliEnv): Promise<QuorumClient> => {
+  if (await env.store.load(HUMAN_CREDENTIAL_KEY)) return humanClient(env);
+  const dataDir = dataDirOf(env);
+  await removeRemoteServer(dataDir);
+  await env.startServer?.(dataDir);
+  const file = await readBootstrapCode(dataDir);
+  if (!file)
+    throw new NeedsActionError('Quorum could not sign you in on this machine: run `quorum login`.');
+  const client = await connect(env, HUMAN_CREDENTIAL_KEY);
+  await client.bootstrapLogin(file.code);
+  return client;
+};
+
+/** Keep a newly paired session's credentials (keychain) and its attachment record. */
+const savePairedSession = async (
+  env: CliEnv,
+  created: QuorumIdCreated,
+  root: string,
+  vendor: Vendor,
+): Promise<void> => {
+  if (!created.attachment || !created.credentials) return;
+  const credentials = created.credentials;
+  await env.store.save(created.attachment, {
+    access_token: credentials.access_token,
+    refresh_token: credentials.refresh_token,
+    access_expires_at: Date.now() + credentials.expires_in * 1000,
+  });
+  await saveAttachment(dataDirOf(env), {
+    attachment: created.attachment,
+    agent: created.agent.address,
+    workspaces: [],
+    vendor,
+    root,
+    wake: 'direct',
+    lease_enforcement: 'warn',
+  });
+};
+
+/**
+ * `quorum hook <vendor> <event>` without `--attachment`: Quorum's user-level hooks, in every session
+ * (D-20, PAIRING.md). A typed pairing command is done here and its prompt blocked; a session that
+ * never ran one returns at once without contacting anything; a paired session gets its mail, wakes
+ * and requests as before.
+ */
+const pairingHook = async (
+  vendor: HookVendor,
+  event: string,
+  input: unknown,
+  env: CliEnv,
+): Promise<number> => {
+  const dataDir = dataDirOf(env);
+  if (event === 'command' || event === 'prompt') {
+    const command = parseQuorumCommand(input);
+    if (command) {
+      const text = await runQuorumCommand({
+        vendor,
+        command,
+        input,
+        dataDir,
+        human: () => ensureHuman(env),
+        saveSession: (created, root, v) => savePairedSession(env, created, root, v),
+        agent: (attachment) => connect(env, attachment),
+        ...(env.vendorPid === undefined ? {} : { vendorPid: env.vendorPid }),
+      }).catch((error: unknown) => {
+        if (error instanceof NeedsActionError || error instanceof ApiError) {
+          return `Quorum: ${error.message}`;
+        }
+        throw error;
+      });
+      env.out(`${commandOutput(text)}\n`);
+      return 0;
+    }
+  }
+  if (event === 'command') return 0; // another command: not Quorum's
+  const key = pairingKey(vendor, input);
+  const sessions = key ? await loadPairing(dataDir) : {};
+  const session = key ? sessions[key] : undefined;
+  if (!key || !session) return 0; // not in Quorum: nothing to do, nothing contacted
+  const saved = await loadAttachment(dataDir, session.attachment);
+  if (!saved) return 0;
+  if (event === 'watch') {
+    // Claude Code's asyncRewake hook: exit 2 wakes the idle session with what we print.
+    const client = await connect(env, session.attachment, { autoStart: false });
+    const links = (await client.links()).links;
+    const woke = await watchForMail({
+      attachment: linkedAttachment(saved, links),
+      dataDir,
+      input,
+      connect: () => Promise.resolve(client),
+    });
+    if (woke.output) env.err(`${woke.output}\n`);
+    return woke.exitCode;
+  }
+  const client = await connect(env, session.attachment, {
+    autoStart: event === 'session-start' || event === 'prompt',
+  });
+  const links = (await client.links()).links;
+  const result = await runHook({
+    vendor,
+    event: event as HookEvent,
+    input,
+    attachment: linkedAttachment(saved, links),
+    dataDir,
+    connect: () => Promise.resolve(client),
+    holdMail: false,
+  });
+  let stdout = result.stdout;
+  if (event === 'session-start' || event === 'prompt') {
+    // Requests waiting for this session: shown once per run (again after a resume).
+    if (event === 'session-start') session.shown = [];
+    const fresh = newRequests(session, links);
+    if (fresh.length > 0) {
+      stdout = withNotice(vendor, HOOK_EVENT_NAMES[event], stdout, requestNotice(vendor, fresh));
+      session.shown = [...(session.shown ?? []), ...fresh.map((l) => l.id)];
+    }
+    await savePairing(dataDir, sessions);
+  }
+  if (stdout) env.out(`${stdout}\n`);
+  return 0;
+};
+
+/** Where `quorum setup` notes that it ran (and with which installed copy of Quorum). */
+const setupMarker = (dataDir: string): string => join(dataDir, 'setup.json');
+
+/**
+ * `quorum setup [--quiet]` (D-20, PAIRING.md §4): Quorum in every Claude Code and Codex session.
+ * Run by `npm install -g` (and by the first `quorum` command when install scripts are off). It also
+ * takes out the per-folder config of earlier `quorum attach` / `join` runs, which would otherwise
+ * run alongside.
+ */
+const setup = async (args: string[], env: CliEnv): Promise<number> => {
+  const { values } = parseArgs({
+    args,
+    options: { quiet: { type: 'boolean', default: false } },
+    strict: true,
+  });
+  const dataDir = dataDirOf(env);
+  const command = await (env.quorumCommand ?? quorumCommand)();
+  const home = env.home ?? homedir();
+  // Quietly (npm install's step): never fail the install; `quorum setup` shows what went wrong.
+  const changes = await writeUserConfig({ home, command, dataDir }).catch((error: unknown) => {
+    if (values.quiet) return undefined;
+    throw error;
+  });
+  if (!changes) return 0;
+  const earlier: string[] = [];
+  for (const old of await listAttachments(dataDir)) {
+    if (old.workspaces.length === 0 && !old.server) continue; // a paired session: no folder config
+    const removed = await removeVendorConfig(old.vendor, old.root, old.attachment, dataDir);
+    if (removed.length > 0) earlier.push(old.root);
+  }
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(
+    setupMarker(dataDir),
+    `${JSON.stringify({ bin: command.bin, node: command.node, at: new Date().toISOString() })}\n`,
+  );
+  if (values.quiet) return 0;
+  const skipped = changes.filter((c) => c.action === 'skipped');
+  env.out(
+    'Quorum is set up in Claude Code and Codex (all folders).\n\n' +
+      'In any session, type /quorum-id in Claude Code (or $quorum-id in Codex) to get its ID; give it to the other person, who types /quorum-attach <ID> ($quorum-attach in Codex).\n\n' +
+      'Restart sessions that are already open. Codex asks once to trust the new hooks: choose "Trust all and continue".\n' +
+      (earlier.length
+        ? `\nRemoved the older per-folder Quorum config from: ${earlier.join(', ')}.\n`
+        : '') +
+      (skipped.length
+        ? `\nNot changed (fix by hand, then run \`quorum setup\` again): ${skipped.map((c) => `${c.file} (${c.note ?? ''})`).join('; ')}.\n`
+        : ''),
+  );
+  return 0;
+};
+
+/**
+ * Run `quorum setup` quietly when it never ran with this copy of Quorum (install scripts turned
+ * off, or Quorum installed again elsewhere).
+ */
+export const ensureSetUp = async (env: CliEnv): Promise<void> => {
+  const dataDir = dataDirOf(env);
+  const command = await (env.quorumCommand ?? quorumCommand)();
+  const marker = await readFile(setupMarker(dataDir), 'utf8').catch(() => '');
+  if (marker.includes(JSON.stringify(command.bin))) return;
+  await setup(['--quiet'], env).catch(() => undefined);
+};
+
+/**
+ * `quorum uninstall`: take Quorum out of Claude Code and Codex again and stop the local server.
+ * npm no longer runs anything on uninstall, so this comes first; the data folder (your sessions'
+ * IDs and history) is kept.
+ */
+const uninstall = async (args: string[], env: CliEnv): Promise<number> => {
+  parseArgs({ args, options: {}, strict: true });
+  const dataDir = dataDirOf(env);
+  const changes = await removeUserConfig({ home: env.home ?? homedir(), dataDir });
+  await rm(setupMarker(dataDir), { force: true });
+  await stop([], env).catch(() => 0);
+  env.out(
+    `Quorum is out of Claude Code and Codex (${String(changes.length)} settings changed). Restart open sessions.\n\n` +
+      'To remove the program too:\n\n  npm uninstall -g @quorumhq/quorum\n\n' +
+      `Your Quorum data (session IDs, history) stays in ${dataDir}; delete that folder to forget it.\n`,
+  );
+  return 0;
+};
+
 const hook = async (args: string[], env: CliEnv): Promise<number> => {
   const { values, positionals } = parseArgs({
     args,
@@ -1546,6 +1867,21 @@ const hook = async (args: string[], env: CliEnv): Promise<number> => {
   });
   const [vendor, event] = positionals;
   const watch = vendor === 'claude-code' && event === 'watch';
+  if (values.attachment === undefined && HOOK_VENDORS.includes(vendor as HookVendor)) {
+    // Quorum's user-level hooks (D-20): every session, joined or not.
+    const known = event === 'command' || watch || HOOK_EVENTS.includes(event as HookEvent);
+    if (!known)
+      throw new UsageError(
+        `Use: quorum hook <${HOOK_VENDORS.join('|')}> <${HOOK_EVENTS.join('|')}|command|watch>.`,
+      );
+    let pairingInput: unknown;
+    try {
+      pairingInput = JSON.parse((await env.stdin?.()) ?? '');
+    } catch {
+      pairingInput = undefined;
+    }
+    return pairingHook(vendor as HookVendor, event ?? '', pairingInput, env);
+  }
   if (
     !watch &&
     (!HOOK_VENDORS.includes(vendor as HookVendor) || !HOOK_EVENTS.includes(event as HookEvent))

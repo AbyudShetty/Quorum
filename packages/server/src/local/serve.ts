@@ -5,9 +5,10 @@ import { mkdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
-import { createIdFactory } from '@quorum/core';
+import { createIdFactory, serverFingerprint } from '@quorum/core';
 import {
   acquireStartLock,
+  DEFAULT_RELAY,
   defaultDataDir,
   ensurePrivateDir,
   readDiscovery,
@@ -16,13 +17,14 @@ import {
   writeDiscovery,
 } from '@quorum/local';
 import { buildApp } from '../http/app.js';
-import { Quorum } from '../service/quorum.js';
+import { type FederationPort, Quorum } from '../service/quorum.js';
 import { openDatabase } from '../storage/database.js';
 import { Registry } from '../storage/registry.js';
 import { SqliteEventStore } from '../storage/sqlite-event-store.js';
 import { LocalBootstrap } from './bootstrap.js';
 import { loadOrCreateInstance } from './instance.js';
 import { connectRelayHome, type RelayHome } from '../relay/home.js';
+import { type Federation, startFederation } from '../relay/federation.js';
 
 export const SERVER_VERSION = '0.1.0-dev';
 
@@ -43,6 +45,13 @@ export interface LocalServerOptions {
   version?: string;
   /** Server clock (tests). Default: the system clock. */
   clock?: () => Date;
+  /**
+   * The relay this server uses for session pairing (D-20) when its sessions have Quorum IDs.
+   * Default: QUORUM_RELAY, else the hosted one (DEFAULT_RELAY).
+   */
+  relay?: string;
+  /** How often queued deliveries to other servers are retried (tests). Default 15 s. */
+  federationIntervalMs?: number;
 }
 
 export interface LocalServer {
@@ -129,9 +138,31 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
   try {
     const ids = createIdFactory();
     const instance = await loadOrCreateInstance(dataDir, ids);
+    const home = serverFingerprint(instance.publicKey);
+    // Session pairing (D-20): the relay link and the deliveries to other servers start when the
+    // first session gets a Quorum ID (or at start, when some already have one).
+    let relayHome: RelayHome | undefined;
+    let federation: Federation | undefined;
+    let startPairing: () => Federation = () => {
+      throw new Error('the server is not listening yet');
+    };
+    const pairing: FederationPort = {
+      lookup: (id) => startPairing().lookup(id),
+      flush: (outboxId) => startPairing().flush(outboxId),
+      queued: () => {
+        startPairing().queued();
+      },
+    };
+    const registry = new Registry(db);
     const quorum = await Quorum.open({
+      home,
+      federation: pairing,
+      onQuorumId: (entry) => {
+        startPairing();
+        relayHome?.register([entry]);
+      },
       db,
-      registry: new Registry(db),
+      registry,
       store: new SqliteEventStore(db),
       ids,
       mode: 'local',
@@ -145,7 +176,10 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
     // forwards to; with the relay, through an outbound connection (ARCHITECTURE §8.4).
     const remote = await readRemoteConfig(dataDir);
     const frontEnd = remote && 'public_url' in remote ? remote : undefined;
-    let relayHome: RelayHome | undefined;
+    const relay =
+      remote && 'relay' in remote
+        ? remote.relay
+        : (options.relay ?? process.env.QUORUM_RELAY ?? DEFAULT_RELAY);
     let lastActivity = Date.now();
     let port = 0;
     const app = buildApp({
@@ -168,13 +202,32 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
       quorum.close(); // ends open streams, so closing the HTTP server does not wait on them
     });
     port = (app.server.address() as AddressInfo).port;
-    if (remote && 'relay' in remote) {
-      const link = connectRelayHome({ relay: remote.relay, instance, server: app.server });
+    startPairing = () => {
+      if (federation) return federation;
+      const link = connectRelayHome({
+        relay,
+        instance,
+        server: app.server,
+        quorumIds: () => quorum.quorumIds(),
+      });
       relayHome = link;
+      const started = startFederation({
+        relay,
+        identity: instance.tlsIdentity(),
+        registry,
+        onRefused: (row) => {
+          quorum.linkRefused(row.kind, row.payload);
+        },
+        ...(options.federationIntervalMs ? { intervalMs: options.federationIntervalMs } : {}),
+      });
+      federation = started;
       cleanups.push(() => {
+        started.close();
         link.close();
       });
-    }
+      return started;
+    };
+    if ((remote && 'relay' in remote) || quorum.quorumIds().length > 0) startPairing();
 
     await writeDiscovery(dataDir, {
       instance_id: instance.instanceId,
@@ -200,8 +253,16 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
       setInterval(() => {
         quorum.pruneTokens();
       }, 3_600_000),
+      // A fresh sign-in code before the current one expires (10 min): a pairing command typed
+      // in a session at any time signs its person in by reading it (D-20). The code sits only in
+      // the private data folder, as at every start (INV-25); each one still works once.
+      setInterval(() => {
+        void bootstrap.issue().catch(() => undefined);
+      }, 8 * 60_000),
     ];
-    const idleMs = options.idleShutdownMs ?? (remote ? 0 : 30 * 60_000);
+    // With remote access or paired sessions, other machines need this server: never idle out.
+    const idleMs =
+      options.idleShutdownMs ?? (remote || quorum.quorumIds().length > 0 ? 0 : 30 * 60_000);
     let resolveClosed: () => void = () => undefined;
     const closed = new Promise<void>((done) => {
       resolveClosed = done;

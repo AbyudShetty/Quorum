@@ -126,6 +126,58 @@ const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE sessions ADD COLUMN display_root TEXT;
   `,
+  // 5: session pairing (DECISIONS D-20, PAIRING.md). A session that ran /quorum-id has its own
+  // agent and a permanent Quorum ID; each link between two sessions is a workspace of two members
+  // (for a session on another laptop: a "mirror" agent that stands for it here); servers send each
+  // other link changes and messages through the relay, queued until delivered.
+  `
+  CREATE TABLE quorum_ids (
+    id                TEXT PRIMARY KEY,
+    salt              TEXT NOT NULL,
+    agent             TEXT NOT NULL UNIQUE REFERENCES agents (id),
+    vendor            TEXT NOT NULL,
+    vendor_session_id TEXT NOT NULL,
+    root              TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    UNIQUE (vendor, vendor_session_id)
+  ) STRICT;
+  -- One row per side: state is this side's view (requested: we asked; pending: they asked us).
+  CREATE TABLE links (
+    local          TEXT NOT NULL REFERENCES quorum_ids (id),
+    remote         TEXT NOT NULL,
+    remote_home    TEXT NOT NULL,
+    remote_salt    TEXT NOT NULL,
+    remote_tool    TEXT NOT NULL,
+    remote_machine TEXT NOT NULL,
+    remote_path    TEXT NOT NULL,
+    remote_label   TEXT NOT NULL,
+    state          TEXT NOT NULL CHECK (state IN ('requested', 'pending', 'linked')),
+    workspace      TEXT,
+    remote_agent   TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    PRIMARY KEY (local, remote)
+  ) STRICT, WITHOUT ROWID;
+  CREATE INDEX links_workspace ON links (workspace);
+  CREATE TABLE link_blocks (
+    local      TEXT NOT NULL,
+    remote     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (local, remote)
+  ) STRICT, WITHOUT ROWID;
+  -- Mirror agents stand for sessions on other laptops: no tokens, never sign in.
+  ALTER TABLE agents ADD COLUMN mirror_of TEXT;
+  CREATE TABLE federation_outbox (
+    id          TEXT PRIMARY KEY,
+    remote_home TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    next_at     TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX federation_outbox_due ON federation_outbox (next_at);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

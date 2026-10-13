@@ -99,6 +99,8 @@ export const openApiDocument = {
     { name: 'messages', description: 'Send, read, acknowledge, stream' },
     { name: 'members', description: 'Agents, presence, revocation' },
     { name: 'audit', description: 'Event log export' },
+    { name: 'pairing', description: 'Session pairing: Quorum IDs and links (D-20)' },
+    { name: 'federation', description: 'Server to server through the relay (D-20)' },
   ],
   paths: {
     '/v1/health': {
@@ -380,6 +382,181 @@ export const openApiDocument = {
         responses: { '204': { description: 'Ended.' }, '404': errorRef('NotFound'), ...authErrors },
       },
     },
+    '/v1/quorum-ids': {
+      post: {
+        operationId: 'createQuorumId',
+        tags: ['pairing'],
+        summary: 'D-20: give a session its own agent and permanent Quorum ID (`/quorum-id`).',
+        description:
+          'Called by the hook that caught `/quorum-id` typed by the person, with their token. The same vendor session always gets the same ID; credentials are returned only for a new ID or when `credentials` is asked for.',
+        security: human,
+        requestBody: { required: true, content: json('QuorumIdCreate') },
+        responses: {
+          '200': { description: 'The existing ID.', content: json('QuorumIdCreated') },
+          '201': { description: 'A new ID.', content: json('QuorumIdCreated') },
+          '400': errorRef('BadRequest'),
+          ...authErrors,
+        },
+      },
+    },
+    '/v1/links': {
+      get: {
+        operationId: 'listLinks',
+        tags: ['pairing'],
+        summary: "D-20: this session's ID, its links and the requests waiting for it.",
+        security: agent,
+        responses: { '200': { description: 'Links.', content: json('LinkList') }, ...authErrors },
+      },
+      post: {
+        operationId: 'requestLink',
+        tags: ['pairing'],
+        summary: 'D-20: ask to link with another session (`/quorum-attach <id>`).',
+        description:
+          'Looks the ID up in the relay phone book (checked against the ID), then asks its server. Unknown and blocked IDs both answer 404 `pairing.no_such_id`.',
+        security: agent,
+        requestBody: { required: true, content: json('LinkCreate') },
+        responses: {
+          '200': {
+            description: 'Already linked (or they had asked first).',
+            content: json('LinkCreated'),
+          },
+          '202': {
+            description: 'Asked (or queued: their laptop is off).',
+            content: json('LinkCreated'),
+          },
+          '400': errorRef('BadRequest'),
+          '404': errorRef('NotFound'),
+          ...authErrors,
+        },
+      },
+    },
+    '/v1/links/allow': {
+      post: {
+        operationId: 'allowLinks',
+        tags: ['pairing'],
+        summary: 'D-20: accept one waiting request, or all (`/quorum-allow [id]`).',
+        security: agent,
+        requestBody: { required: true, content: json('LinkSelect') },
+        responses: {
+          '200': { description: 'Links after allowing.', content: json('LinkList') },
+          '404': errorRef('NotFound'),
+          ...authErrors,
+        },
+      },
+    },
+    '/v1/links/detach': {
+      post: {
+        operationId: 'detachLinks',
+        tags: ['pairing'],
+        summary:
+          'D-20: unlink one session, or all (`/quorum-detach [id]`); the other side is told.',
+        security: agent,
+        requestBody: { required: true, content: json('LinkSelect') },
+        responses: { '200': { description: 'The IDs unlinked.' }, ...authErrors },
+      },
+    },
+    '/v1/links/block': {
+      post: {
+        operationId: 'blockSession',
+        tags: ['pairing'],
+        summary:
+          'D-20: unlink and block a session (`/quorum-block <id>`); it then sees "no such ID".',
+        security: agent,
+        requestBody: { required: true, content: json('LinkBlock') },
+        responses: {
+          '204': { description: 'Blocked.' },
+          '400': errorRef('BadRequest'),
+          ...authErrors,
+        },
+      },
+    },
+    '/v1/links/send': {
+      post: {
+        operationId: 'sendToLinks',
+        tags: ['pairing'],
+        summary: 'D-20: send to linked sessions, by sender line, window label or Quorum ID.',
+        description:
+          "One message per link, in that link's workspace; for a session on another laptop it is also queued for its server and retried until delivered.",
+        security: agent,
+        requestBody: { required: true, content: json('LinkSend') },
+        responses: {
+          '201': { description: 'Sent.', content: json('LinkSent') },
+          '400': errorRef('BadRequest'),
+          ...authErrors,
+        },
+      },
+    },
+    '/v1/links/export': {
+      get: {
+        operationId: 'exportLinks',
+        tags: ['pairing'],
+        summary: "D-20: this session's conversations as Markdown (`/quorum-export`).",
+        security: agent,
+        responses: {
+          '200': {
+            description: 'Markdown.',
+            content: { 'text/markdown': { schema: { type: 'string' } } },
+          },
+          ...authErrors,
+        },
+      },
+    },
+    '/v1/federation/link': {
+      post: {
+        operationId: 'federationLink',
+        tags: ['federation'],
+        summary: 'D-20, server to server: another server asks one of our sessions to link.',
+        description:
+          "Only through the relay, from a server that presented its own key as the TLS client certificate; the requesting session's ID must derive from that key.",
+        security: none,
+        requestBody: { required: true, content: json('FederatedLink') },
+        responses: {
+          '202': { description: 'Waiting for our person (or linked).' },
+          '403': errorRef('Forbidden'),
+          '404': errorRef('NotFound'),
+        },
+      },
+    },
+    '/v1/federation/accept': {
+      post: {
+        operationId: 'federationAccept',
+        tags: ['federation'],
+        summary: 'D-20, server to server: their session accepted ours.',
+        security: none,
+        requestBody: { required: true, content: json('FederatedLink') },
+        responses: {
+          '200': { description: 'Linked.' },
+          '403': errorRef('Forbidden'),
+          '404': errorRef('NotFound'),
+        },
+      },
+    },
+    '/v1/federation/unlink': {
+      post: {
+        operationId: 'federationUnlink',
+        tags: ['federation'],
+        summary: 'D-20, server to server: their session detached from ours.',
+        security: none,
+        requestBody: { required: true, content: json('FederatedUnlink') },
+        responses: { '204': { description: 'Unlinked.' }, '403': errorRef('Forbidden') },
+      },
+    },
+    '/v1/federation/message': {
+      post: {
+        operationId: 'federationMessage',
+        tags: ['federation'],
+        summary: 'D-20, server to server: a message from their session for ours.',
+        description:
+          'Stored in the link workspace from the mirror agent; repeats of the same message id are ignored.',
+        security: none,
+        requestBody: { required: true, content: json('FederatedMessage') },
+        responses: {
+          '201': { description: 'Stored.' },
+          '403': errorRef('Forbidden'),
+          '404': errorRef('NotFound'),
+        },
+      },
+    },
     '/v1/workspaces/{workspace}/messages': {
       post: {
         operationId: 'sendMessage',
@@ -630,6 +807,18 @@ export const openApiDocument = {
       LocalBootstrapRequest: apiSchemas.localBootstrapRequest,
       LocalBootstrapResponse: apiSchemas.localBootstrapResponse,
       UiLink: apiSchemas.uiLink,
+      QuorumIdCreate: apiSchemas.quorumIdCreate,
+      QuorumIdCreated: apiSchemas.quorumIdCreated,
+      LinkCreate: apiSchemas.linkCreate,
+      LinkCreated: apiSchemas.linkCreated,
+      LinkSelect: apiSchemas.linkSelect,
+      LinkBlock: apiSchemas.linkBlock,
+      LinkList: apiSchemas.linkList,
+      LinkSend: apiSchemas.linkSend,
+      LinkSent: apiSchemas.linkSent,
+      FederatedLink: apiSchemas.federatedLink,
+      FederatedUnlink: apiSchemas.federatedUnlink,
+      FederatedMessage: apiSchemas.federatedMessage,
       JoinCodeCreate: apiSchemas.joinCodeCreate,
       JoinCode: apiSchemas.joinCode,
       JoinRequest: apiSchemas.joinRequest,

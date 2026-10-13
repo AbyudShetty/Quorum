@@ -39,6 +39,7 @@ export {
 export {
   checkRelayUrl,
   connectThroughRelay,
+  DEFAULT_RELAY,
   openRelaySocket,
   RELAY_PROTOCOL,
   RelayError,
@@ -47,3 +48,10 @@ export {
   type RelaySocket,
   webSocketStream,
 } from './relay-link.js';
+export {
+  closeRelayConnections,
+  createQuorumFetch,
+  parseRelayUrl,
+  quorumFetch,
+  type TlsIdentity,
+} from './relay-fetch.js';

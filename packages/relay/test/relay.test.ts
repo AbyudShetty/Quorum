@@ -1,6 +1,18 @@
 import { createHash, generateKeyPairSync, type KeyObject, sign } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { newQuorumId, quorumId } from '@quorum/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { checkHomeProof, CLOSE, homeProofMessage, type Relay, startRelay } from '../src/index.js';
+import {
+  checkHomeProof,
+  CLOSE,
+  homeProofMessage,
+  QUORUM_ID,
+  quorumIdOf,
+  type Relay,
+  startRelay,
+} from '../src/index.js';
 
 let relay: Relay;
 
@@ -160,5 +172,92 @@ describe('relay (DECISIONS D-18)', () => {
     control.ws.send(JSON.stringify({ type: 'refuse', conn }));
     expect(await b.closed).toBe(CLOSE.refused);
     control.ws.close();
+  });
+});
+
+describe('the phone book (D-20)', () => {
+  const http = (path: string, on: Relay = relay) =>
+    fetch(`${on.url.replace('ws://', 'http://')}${path}`);
+
+  it('computes IDs exactly like @quorum/core', async () => {
+    const { id, salt } = newQuorumId(newHome().id);
+    const home = newHome().id;
+    expect(await quorumIdOf(home, salt)).toBe(quorumId(home, salt));
+    expect(id).toMatch(QUORUM_ID);
+  });
+
+  it('stores only IDs derived from the registering home key, and answers lookups', async () => {
+    const home = newHome();
+    const other = newHome();
+    const control = await provenHome(home);
+    const mine = newQuorumId(home.id);
+    const theirs = newQuorumId(other.id);
+    control.ws.send(
+      JSON.stringify({ type: 'register', ids: [mine, theirs, { id: 'x', salt: 1 }] }),
+    );
+    expect(await control.next('registered')).toEqual({ type: 'registered', ids: [mine.id] });
+
+    const found = await http(`/v1/lookup/${mine.id}`);
+    expect(found.status).toBe(200);
+    expect(await found.json()).toEqual({ home: home.id, salt: mine.salt });
+    expect((await http(`/v1/lookup/${theirs.id}`)).status).toBe(404); // claimed by the wrong home
+    expect((await http('/v1/lookup/QRM-0000-0000-0000')).status).toBe(404);
+    expect((await http('/v1/lookup/nonsense')).status).toBe(404);
+    control.ws.close();
+  });
+
+  it('ignores registrations before the home has proven its key', async () => {
+    const home = newHome();
+    const control = await open(`/v1/home/${home.id}`);
+    await control.next('challenge');
+    const early = newQuorumId(home.id);
+    control.ws.send(JSON.stringify({ type: 'register', ids: [early] }));
+    expect(await control.closed).toBe(CLOSE.unproven);
+    expect((await http(`/v1/lookup/${early.id}`)).status).toBe(404);
+  });
+
+  it('limits lookups per address, and keeps the phone book in a file across restarts', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'quorum-phonebook-'));
+    const file = join(dir, 'phonebook.json');
+    const first = await startRelay({ port: 0, lookupsPerMinute: 2, phonebookFile: file });
+    const home = newHome();
+    const saved = newQuorumId(home.id);
+    const control = new WebSocket(`${first.url}/v1/home/${home.id}`);
+    const answers: Record<string, unknown>[] = [];
+    control.addEventListener('message', (event) => {
+      answers.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+    });
+    const until = async (type: string) => {
+      for (let i = 0; i < 200 && !answers.some((a) => a.type === type); i++) {
+        await new Promise((done) => setTimeout(done, 10));
+      }
+      return answers.find((a) => a.type === type);
+    };
+    const { nonce } = (await until('challenge')) as { nonce: string };
+    control.send(
+      JSON.stringify({
+        type: 'prove',
+        public_key: home.publicKey,
+        signature: sign(null, homeProofMessage(home.id, nonce), home.privateKey).toString(
+          'base64url',
+        ),
+      }),
+    );
+    await until('ready');
+    control.send(JSON.stringify({ type: 'register', ids: [saved] }));
+    await until('registered');
+    control.close();
+    expect((await http(`/v1/lookup/${saved.id}`, first)).status).toBe(200);
+    expect((await http(`/v1/lookup/${saved.id}`, first)).status).toBe(200);
+    expect((await http(`/v1/lookup/${saved.id}`, first)).status).toBe(429);
+    await first.close();
+
+    const second = await startRelay({ port: 0, phonebookFile: file });
+    expect(await (await http(`/v1/lookup/${saved.id}`, second)).json()).toEqual({
+      home: home.id,
+      salt: saved.salt,
+    });
+    await second.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

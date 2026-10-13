@@ -7,9 +7,13 @@
 import { Agent, request as httpRequest } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { Readable } from 'node:stream';
+import { createHash } from 'node:crypto';
 import { connect as tlsConnect } from 'node:tls';
-import { serverFingerprint } from '@quorum/core';
-import { connectThroughRelay } from '@quorum/local';
+import { connectThroughRelay } from './relay-link.js';
+
+/** A key's fingerprint as Quorum writes it (base64url SHA-256 of the 32 raw key bytes, INV-24). */
+const fingerprintOf = (publicKey: string): string =>
+  createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('base64url');
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -42,14 +46,28 @@ class PinnedKeyError extends Error {
   }
 }
 
+/**
+ * A server's own TLS identity (its instance key, self-signed): a server reaching another server
+ * presents it, so the other side knows which laptop is calling (D-20 links).
+ */
+export interface TlsIdentity {
+  key: string;
+  cert: string;
+}
+
 /** One TLS session to `home` through `relay`, its key checked before anything is sent. */
-const openTunnel = async (relay: string, home: string): Promise<Duplex> => {
+const openTunnel = async (relay: string, home: string, identity?: TlsIdentity): Promise<Duplex> => {
   const stream = await connectThroughRelay(relay, home);
   return new Promise((resolve, reject) => {
-    const tls = tlsConnect({ socket: stream, rejectUnauthorized: false, minVersion: 'TLSv1.3' });
+    const tls = tlsConnect({
+      socket: stream,
+      rejectUnauthorized: false,
+      minVersion: 'TLSv1.3',
+      ...(identity ? { key: identity.key, cert: identity.cert } : {}),
+    });
     tls.once('secureConnect', () => {
       const key = tls.getPeerX509Certificate()?.publicKey.export({ format: 'jwk' });
-      if (key?.crv !== 'Ed25519' || !key.x || serverFingerprint(key.x) !== home) {
+      if (key?.crv !== 'Ed25519' || !key.x || fingerprintOf(key.x) !== home) {
         const error = new PinnedKeyError(relay);
         tls.destroy(error);
         reject(error);
@@ -69,6 +87,7 @@ class RelayAgent extends Agent {
   constructor(
     readonly relay: string,
     readonly home: string,
+    readonly identity?: TlsIdentity,
   ) {
     super({ keepAlive: true, maxSockets: 4, timeout: 30_000 });
   }
@@ -76,7 +95,7 @@ class RelayAgent extends Agent {
     _options: unknown,
     callback?: (error: Error | null, socket: Duplex) => void,
   ): undefined {
-    openTunnel(this.relay, this.home).then(
+    openTunnel(this.relay, this.home, this.identity).then(
       (socket) => {
         callback?.(null, socket);
       },
@@ -88,10 +107,10 @@ class RelayAgent extends Agent {
   }
 }
 
-const agentFor = (relay: string, home: string): Agent => {
-  const key = `${relay}/${home}`;
+const agentFor = (relay: string, home: string, identity?: TlsIdentity): Agent => {
+  const key = `${relay}/${home}/${identity ? createHash('sha256').update(identity.cert).digest('hex') : ''}`;
   let agent = agents.get(key);
-  if (!agent) agents.set(key, (agent = new RelayAgent(relay, home)));
+  if (!agent) agents.set(key, (agent = new RelayAgent(relay, home, identity)));
   return agent;
 };
 
@@ -112,6 +131,7 @@ const bodyOf = (body: RequestInit['body']): string | Buffer | undefined => {
 const relayed = (
   target: { relay: string; home: string; path: string },
   init: RequestInit | undefined,
+  identity?: TlsIdentity,
 ): Promise<Response> =>
   new Promise((resolve, reject) => {
     const headers: Record<string, string> = {};
@@ -121,7 +141,7 @@ const relayed = (
     const method = (init?.method ?? 'GET').toUpperCase();
     const request = httpRequest(
       {
-        agent: agentFor(target.relay, target.home),
+        agent: agentFor(target.relay, target.home, identity),
         method,
         path: target.path,
         headers: { ...headers, host: 'quorum.relay' },
@@ -152,13 +172,13 @@ const relayed = (
     request.end(bodyOf(init?.body));
   });
 
-/** `fetch`, plus `quorum://` addresses through the relay. */
+/** `fetch`, plus `quorum://` addresses through the relay (presenting `identity` when given). */
 export const createQuorumFetch =
-  (base: typeof fetch = fetch): typeof fetch =>
+  (base: typeof fetch = fetch, options: { identity?: TlsIdentity } = {}): typeof fetch =>
   (input, init) => {
     const text = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const target = parseRelayUrl(text);
-    return target ? relayed(target, init) : base(input, init);
+    return target ? relayed(target, init, options.identity) : base(input, init);
   };
 
 export const quorumFetch: typeof fetch = createQuorumFetch();

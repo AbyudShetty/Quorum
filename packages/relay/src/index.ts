@@ -1,6 +1,13 @@
 // The relay between machines on different networks (DECISIONS D-18, ARCHITECTURE §8.4).
 export {
   type Arrival,
+  lookupId,
+  MAX_REGISTER,
+  type Phonebook,
+  type PhonebookEntry,
+  QUORUM_ID,
+  quorumIdOf,
+  registerIds,
   arriveAccept,
   arriveConnect,
   arriveHome,

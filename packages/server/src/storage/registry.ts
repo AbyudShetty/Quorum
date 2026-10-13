@@ -27,6 +27,8 @@ export interface AgentRow {
   folder: string | null;
   status: AgentStatus;
   created_at: string;
+  /** For a mirror agent (a session on another laptop, D-20): its Quorum ID. */
+  mirror_of?: string | null;
 }
 
 export interface AttachmentRow {
@@ -72,6 +74,50 @@ export interface SessionRow {
   label_group: string | null;
   /** The folder as shown in messages, e.g. ~\proj\api (home folder as ~). */
   display_root: string | null;
+}
+
+/** A session's permanent Quorum ID (D-20) and the agent that is that session. */
+export interface QuorumIdRow {
+  id: string;
+  salt: string;
+  agent: string;
+  vendor: string;
+  vendor_session_id: string;
+  root: string;
+  created_at: string;
+}
+
+/** requested: this side asked; pending: the other side asked and waits for /quorum-allow. */
+export type LinkState = 'requested' | 'pending' | 'linked';
+
+/** One side of a link between two sessions. */
+export interface LinkRow {
+  local: string;
+  remote: string;
+  remote_home: string;
+  remote_salt: string;
+  remote_tool: string;
+  remote_machine: string;
+  remote_path: string;
+  remote_label: string;
+  state: LinkState;
+  /** The link's workspace, once linked. */
+  workspace: string | null;
+  /** The agent that is the other session here: a mirror, or a local session agent. */
+  remote_agent: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Something to send to another laptop's server, kept until it is delivered. */
+export interface OutboxRow {
+  id: string;
+  remote_home: string;
+  kind: string;
+  payload: string;
+  attempts: number;
+  next_at: string;
+  created_at: string;
 }
 
 export class Registry {
@@ -196,8 +242,8 @@ export class Registry {
 
   insertAgent(row: AgentRow): void {
     this.#run(
-      'INSERT INTO agents (id, address, vendor, owner, folder, status, created_at) VALUES (@id, @address, @vendor, @owner, @folder, @status, @created_at)',
-      { ...row },
+      'INSERT INTO agents (id, address, vendor, owner, folder, status, created_at, mirror_of) VALUES (@id, @address, @vendor, @owner, @folder, @status, @created_at, @mirror_of)',
+      { ...row, mirror_of: row.mirror_of ?? null },
     );
   }
 
@@ -347,5 +393,130 @@ export class Registry {
     const id = make();
     this.#run('INSERT INTO path_ids (kind, key, id) VALUES (?, ?, ?)', [kind, key, id]);
     return id;
+  }
+
+  // --- session pairing (migration 5, D-20) ----------------------------------------------------
+
+  quorumId(id: string): QuorumIdRow | undefined {
+    return this.#get('SELECT * FROM quorum_ids WHERE id = ?', id);
+  }
+
+  quorumIdOfAgent(agent: string): QuorumIdRow | undefined {
+    return this.#get('SELECT * FROM quorum_ids WHERE agent = ?', agent);
+  }
+
+  quorumIdOfVendorSession(vendor: string, vendorSessionId: string): QuorumIdRow | undefined {
+    return this.#get(
+      'SELECT * FROM quorum_ids WHERE vendor = ? AND vendor_session_id = ?',
+      vendor,
+      vendorSessionId,
+    );
+  }
+
+  allQuorumIds(): QuorumIdRow[] {
+    return this.#all('SELECT * FROM quorum_ids ORDER BY created_at');
+  }
+
+  insertQuorumId(row: QuorumIdRow): void {
+    this.#run(
+      'INSERT INTO quorum_ids (id, salt, agent, vendor, vendor_session_id, root, created_at) VALUES (@id, @salt, @agent, @vendor, @vendor_session_id, @root, @created_at)',
+      { ...row },
+    );
+  }
+
+  link(local: string, remote: string): LinkRow | undefined {
+    return this.#get('SELECT * FROM links WHERE local = ? AND remote = ?', local, remote);
+  }
+
+  linksOf(local: string): LinkRow[] {
+    return this.#all('SELECT * FROM links WHERE local = ? ORDER BY created_at', local);
+  }
+
+  linkByWorkspace(workspace: string, local: string): LinkRow | undefined {
+    return this.#get('SELECT * FROM links WHERE workspace = ? AND local = ?', workspace, local);
+  }
+
+  linksInWorkspace(workspace: string): LinkRow[] {
+    return this.#all('SELECT * FROM links WHERE workspace = ?', workspace);
+  }
+
+  upsertLink(row: LinkRow): void {
+    this.#run(
+      `INSERT INTO links (local, remote, remote_home, remote_salt, remote_tool, remote_machine, remote_path, remote_label, state, workspace, remote_agent, created_at, updated_at)
+       VALUES (@local, @remote, @remote_home, @remote_salt, @remote_tool, @remote_machine, @remote_path, @remote_label, @state, @workspace, @remote_agent, @created_at, @updated_at)
+       ON CONFLICT (local, remote) DO UPDATE SET remote_home = excluded.remote_home, remote_salt = excluded.remote_salt,
+         remote_tool = excluded.remote_tool, remote_machine = excluded.remote_machine, remote_path = excluded.remote_path,
+         remote_label = excluded.remote_label, state = excluded.state, workspace = excluded.workspace,
+         remote_agent = excluded.remote_agent, updated_at = excluded.updated_at`,
+      { ...row },
+    );
+  }
+
+  deleteLink(local: string, remote: string): number {
+    return this.#run('DELETE FROM links WHERE local = ? AND remote = ?', [local, remote]);
+  }
+
+  isBlocked(local: string, remote: string): boolean {
+    return (
+      this.#get('SELECT 1 AS x FROM link_blocks WHERE local = ? AND remote = ?', local, remote) !==
+      undefined
+    );
+  }
+
+  block(local: string, remote: string, at: string): void {
+    this.#run(
+      'INSERT INTO link_blocks (local, remote, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING',
+      [local, remote, at],
+    );
+  }
+
+  unblock(local: string, remote: string): void {
+    this.#run('DELETE FROM link_blocks WHERE local = ? AND remote = ?', [local, remote]);
+  }
+
+  /** The agent's most recent window (open or not): its label and folder as others see them. */
+  latestSessionOf(agent: string): SessionRow | undefined {
+    return this.#get(
+      'SELECT * FROM sessions WHERE agent = ? ORDER BY started_at DESC, id DESC LIMIT 1',
+      agent,
+    );
+  }
+
+  mirrorAgent(remoteQuorumId: string): AgentRow | undefined {
+    return this.#get('SELECT * FROM agents WHERE mirror_of = ?', remoteQuorumId);
+  }
+
+  enqueueOutbox(row: OutboxRow): void {
+    this.#run(
+      'INSERT INTO federation_outbox (id, remote_home, kind, payload, attempts, next_at, created_at) VALUES (@id, @remote_home, @kind, @payload, @attempts, @next_at, @created_at)',
+      { ...row },
+    );
+  }
+
+  dueOutbox(now: string, limit = 50): OutboxRow[] {
+    return this.#all(
+      'SELECT * FROM federation_outbox WHERE next_at <= ? ORDER BY created_at LIMIT ?',
+      now,
+      limit,
+    );
+  }
+
+  outboxItem(id: string): OutboxRow | undefined {
+    return this.#get('SELECT * FROM federation_outbox WHERE id = ?', id);
+  }
+
+  outboxSize(): number {
+    return this.#get<{ n: number }>('SELECT COUNT(*) AS n FROM federation_outbox')?.n ?? 0;
+  }
+
+  outboxDelivered(id: string): void {
+    this.#run('DELETE FROM federation_outbox WHERE id = ?', [id]);
+  }
+
+  outboxRetry(id: string, nextAt: string): void {
+    this.#run('UPDATE federation_outbox SET attempts = attempts + 1, next_at = ? WHERE id = ?', [
+      nextAt,
+      id,
+    ]);
   }
 }

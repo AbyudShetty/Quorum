@@ -65,3 +65,12 @@ export {
   type ServerLink,
   verifyHello,
 } from './hello.js';
+export {
+  checkQuorumId,
+  isQuorumId,
+  newQuorumId,
+  parseQuorumId,
+  quorumId,
+  quorumIdInput,
+} from './quorum-id.js';
+export { recipientFor } from './recipients.js';

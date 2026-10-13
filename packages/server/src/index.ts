@@ -49,3 +49,5 @@ export {
 } from './service/quorum.js';
 export { Registry } from './storage/registry.js';
 export { localServerCommand, spawnLocalServer } from './local/spawn.js';
+export { connectRelayHome, type RelayHome, type RelayHomeOptions } from './relay/home.js';
+export { type IdLocation, lookupQuorumId } from './relay/phonebook.js';

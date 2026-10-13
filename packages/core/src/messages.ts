@@ -329,6 +329,11 @@ export class MessageLog {
     return this.#byId.get(id);
   }
 
+  /** Every message, oldest first (exports). */
+  all(): readonly StoredMessage[] {
+    return this.#bySeq;
+  }
+
   /** The highest seq this address (or this window of it) has acknowledged (0 if none). */
   ackedUpTo(address: string, session?: string): number {
     return this.#acked.get(ackKey(address, session)) ?? 0;

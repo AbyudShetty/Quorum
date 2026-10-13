@@ -3,7 +3,6 @@
 // delivery by the receiver, so the sender cannot know it and cannot forge the end marker.
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { labelSlug } from '@quorum/core';
 import type { DeliveredEnvelope, UnknownDeliveredEnvelope } from '@quorum/schemas';
 
 type Message = DeliveredEnvelope | UnknownDeliveredEnvelope;
@@ -143,35 +142,7 @@ export const senderName = (message: Message, display: DisplayOptions | string = 
   return message.from.replace(/^agent:/, '');
 };
 
-/**
- * The address to send to, from what an agent was shown (MESSAGE_SPEC §1.1): a window's
- * `tool[@machine] - path - number` becomes its label (`claude@api-1`), `abyud (human)` becomes
- * `human:abyud`, a bare agent address gets its `agent:` prefix. A trailing `:` (as in the sender
- * line) is ignored. Anything else is passed as given (the server checks every address).
- */
-export const recipientFor = (shown: string): string => {
-  const given = shown.trim().replace(/\s*:$/, '');
-  const window =
-    /^([a-z][a-z0-9-]*)(?:@([a-z0-9][a-z0-9-]*))?(?:\s+-\s+([a-z0-9][a-z0-9-]*))?\s+-\s+(.+?)\s+-\s+([1-9][0-9]*)$/.exec(
-      given,
-    );
-  if (window) {
-    const [, tool = '', atMachine, dashMachine, path = '', number = ''] = window;
-    const machine = atMachine ?? dashMachine;
-    const folder = labelSlug(path.split(/[\\/]/).filter(Boolean).at(-1) ?? path);
-    return `${tool}@${machine ? `${machine}-` : ''}${folder}-${number}`;
-  }
-  const human = /^([^\s()]+)\s*\(human\)$/.exec(given);
-  if (human?.[1]) return `human:${human[1]}`;
-  // A bare `name@machine` that is not a window label (`tool@folder-n`) is an agent.
-  if (
-    /^[a-z0-9][a-z0-9-]*@[a-z0-9][a-z0-9-]*$/.test(given) &&
-    !/^(?:claude|codex|gemini|opencode|agent)@.+-[1-9][0-9]*$/.test(given)
-  ) {
-    return `agent:${given}`;
-  }
-  return given;
-};
+export { recipientFor } from '@quorum/core';
 
 /** One readable line for a body: the text of a note, else a short summary of the type's fields. */
 const bodyText = (message: Message): string => {

@@ -31,8 +31,8 @@ const isInfo = (value: unknown): value is AttachmentInfo => {
   return (
     typeof v.attachment === 'string' &&
     typeof v.agent === 'string' &&
+    // A paired session (D-20) has no workspace until its first link.
     Array.isArray(v.workspaces) &&
-    v.workspaces.length > 0 &&
     v.workspaces.every((w) => typeof w === 'string') &&
     typeof v.vendor === 'string' &&
     typeof v.root === 'string' &&

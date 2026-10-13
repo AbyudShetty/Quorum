@@ -51,7 +51,7 @@ export interface AppOptions {
    * The relay link (ARCHITECTURE §8.4), when remote access goes through the relay: requests on its
    * connections are remote, and its address goes into join codes.
    */
-  relay?: () => Pick<RelayHome, 'linkUrl' | 'clientOf'> | undefined;
+  relay?: () => Pick<RelayHome, 'linkUrl' | 'clientOf' | 'peerOf'> | undefined;
   /** Called on every request, e.g. for idle shutdown. */
   onActivity?: () => void;
   /** Requests per minute per client address on routes that need no token (INV-23). */
@@ -199,6 +199,8 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
   /** Join and device sign-in need no token: guessing costs (INV-23). Polls come every 3 s. */
   const joinLimit = new RateLimiter(10, 60_000);
   const deviceLimit = new RateLimiter(40, 60_000);
+  /** Server to server, per calling server (D-20): messages, link changes. */
+  const federationLimit = new RateLimiter(600, 60_000);
 
   const caller = (request: FastifyRequest): Caller => {
     try {
@@ -474,6 +476,61 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
     quorum.endSession(caller(request), request.params.session);
     return reply.code(204).send();
   });
+
+  // --- session pairing (D-20, PAIRING.md): what the commands typed in a session do ----------
+
+  app.post('/v1/quorum-ids', async (request, reply) => {
+    const created = await quorum.createQuorumId(caller(request), request.body);
+    return reply.code(created.created ? 201 : 200).send(created);
+  });
+  app.get('/v1/links', (request) => quorum.links(caller(request)));
+  app.post('/v1/links', async (request, reply) => {
+    const created = await quorum.requestLink(caller(request), request.body);
+    return reply.code(created.state === 'linked' ? 200 : 202).send(created);
+  });
+  app.post('/v1/links/allow', (request) => quorum.allowLinks(caller(request), request.body));
+  app.post('/v1/links/detach', (request) => quorum.detachLinks(caller(request), request.body));
+  app.post('/v1/links/block', async (request, reply) => {
+    quorum.blockSession(caller(request), request.body);
+    return reply.code(204).send();
+  });
+  app.post('/v1/links/send', async (request, reply) =>
+    reply.code(201).send(quorum.sendToLinks(caller(request), request.body)),
+  );
+  app.get('/v1/links/export', async (request, reply) =>
+    reply
+      .header('content-type', 'text/markdown; charset=utf-8')
+      .send(quorum.exportSession(caller(request))),
+  );
+
+  // Server to server, only from a connection that proved its server key (TLS client key through
+  // the relay, D-20). Answers "no such ID" alike for unknown and blocked sessions.
+  const peerOf = (request: FastifyRequest): string => {
+    const peer = options.relay?.()?.peerOf(request.raw.socket);
+    if (!peer) {
+      throw new DomainError(
+        'forbidden',
+        'federation.peer_only',
+        'Only another Quorum server can call this, through the relay.',
+        'Nothing to do: Quorum servers call this themselves.',
+      );
+    }
+    federationLimit.take(peer, 'server-to-server requests');
+    return peer;
+  };
+  app.post('/v1/federation/link', async (request, reply) =>
+    reply.code(202).send(quorum.receiveLink(peerOf(request), request.body)),
+  );
+  app.post('/v1/federation/accept', (request) =>
+    quorum.receiveAccept(peerOf(request), request.body),
+  );
+  app.post('/v1/federation/unlink', async (request, reply) => {
+    quorum.receiveUnlink(peerOf(request), request.body);
+    return reply.code(204).send();
+  });
+  app.post('/v1/federation/message', async (request, reply) =>
+    reply.code(201).send(quorum.receiveMessage(peerOf(request), request.body)),
+  );
 
   app.post<{ Params: { agent: string } }>('/v1/agents/:agent/revoke', async (request, reply) => {
     quorum.revokeAgent(caller(request), request.params.agent);

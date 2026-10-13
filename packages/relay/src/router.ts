@@ -47,10 +47,79 @@ export interface RoomSocket {
   close(code: number, reason: string): void;
 }
 
+/** Where an ID lives (DECISIONS D-20): its home's key fingerprint and the salt it was made with. */
+export interface PhonebookEntry {
+  home: string;
+  salt: string;
+}
+
+/**
+ * The relay's phone book: Quorum ID → home. The only thing the relay keeps. Entries are written
+ * only by the home they point to (over its proven control connection) and only for IDs derived
+ * from its own key, so nobody can claim another server's ID.
+ */
+export interface Phonebook {
+  get(id: string): Promise<PhonebookEntry | undefined>;
+  put(id: string, entry: PhonebookEntry): Promise<void>;
+}
+
 export interface Room {
   /** Sockets in this room: all, one kind, or one kind of one connection. */
   sockets(filter?: { kind: SocketMeta['kind']; conn?: string }): RoomSocket[];
+  readonly phonebook: Phonebook;
 }
+
+/** QRM-XXXX-XXXX-XXXX: 60 bits of SHA-256, Crockford base32 (packages/core/src/quorum-id.ts). */
+export const QUORUM_ID = /^QRM-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/** The ID a home key fingerprint and salt give (the same computation as @quorum/core). */
+export const quorumIdOf = async (home: string, salt: string): Promise<string> => {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', encoder.encode(`quorum-id/1\n${home}\n${salt}`)),
+  );
+  let bits = 0;
+  let value = 0;
+  let out = '';
+  for (const byte of digest) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5 && out.length < 12) {
+      out += CROCKFORD.charAt((value >>> (bits - 5)) & 31);
+      bits -= 5;
+    }
+    value &= (1 << bits) - 1;
+    if (out.length === 12) break;
+  }
+  return `QRM-${out.slice(0, 4)}-${out.slice(4, 8)}-${out.slice(8, 12)}`;
+};
+
+/** At most this many IDs per registration message. */
+export const MAX_REGISTER = 100;
+
+/** Store the IDs a proven home sends that really are derived from its key; returns those stored. */
+export const registerIds = async (
+  phonebook: Phonebook,
+  home: string,
+  given: unknown[],
+): Promise<string[]> => {
+  const stored: string[] = [];
+  for (const item of given.slice(0, MAX_REGISTER)) {
+    const { id, salt } = (item ?? {}) as { id?: unknown; salt?: unknown };
+    if (typeof id !== 'string' || typeof salt !== 'string' || !QUORUM_ID.test(id)) continue;
+    if (!/^[A-Za-z0-9_-]{22}$/.test(salt) || (await quorumIdOf(home, salt)) !== id) continue;
+    const current = await phonebook.get(id);
+    if (current?.home !== home || current.salt !== salt) await phonebook.put(id, { home, salt });
+    stored.push(id);
+  }
+  return stored;
+};
+
+/** A lookup: where the ID lives, or undefined ("no such ID"). */
+export const lookupId = async (
+  phonebook: Phonebook,
+  id: string,
+): Promise<PhonebookEntry | undefined> => (QUORUM_ID.test(id) ? phonebook.get(id) : undefined);
 
 /** What to do with a new WebSocket: refuse it, or keep it with this meta, then greet and act. */
 export type Arrival =
@@ -204,7 +273,10 @@ export const onMessage = async (
       socket.send(JSON.stringify({ type: 'ready' }));
       return;
     }
-    if (message.type === 'refuse' && typeof message.conn === 'string') {
+    if (message.type === 'register' && Array.isArray(message.ids)) {
+      const registered = await registerIds(room.phonebook, meta.home, message.ids);
+      socket.send(JSON.stringify({ type: 'registered', ids: registered }));
+    } else if (message.type === 'refuse' && typeof message.conn === 'string') {
       for (const waiting of room.sockets({ kind: 'b', conn: message.conn })) {
         waiting.close(CLOSE.refused, 'The server refused this connection.');
       }

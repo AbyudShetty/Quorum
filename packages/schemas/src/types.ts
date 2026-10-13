@@ -468,6 +468,102 @@ export interface EventRecord {
   hash: string;
 }
 
+// --- session pairing (DECISIONS D-20, PAIRING.md) -------------------------------------------
+
+export interface QuorumIdCreate {
+  vendor: Vendor;
+  vendor_session_id: string;
+  root: string;
+  credentials?: boolean;
+}
+
+export interface QuorumIdCreated {
+  id: string;
+  agent: AgentRef;
+  attachment?: string;
+  credentials?: TokenPair;
+  created: boolean;
+}
+
+export interface LinkCreate {
+  to: string;
+}
+
+export interface LinkCreated {
+  state: 'requested' | 'linked' | 'queued';
+}
+
+export interface LinkSelect {
+  id?: string;
+}
+
+export interface LinkBlock {
+  id: string;
+}
+
+export interface LinkInfo {
+  id: string;
+  state: 'requested' | 'pending' | 'linked';
+  tool: string;
+  machine: string;
+  path: string;
+  label: string;
+  workspace?: string;
+}
+
+export interface LinkList {
+  id?: string;
+  links: LinkInfo[];
+}
+
+export interface LinkSend {
+  to: string[];
+  type: MessageType;
+  type_version?: number;
+  body: Record<string, unknown>;
+  thread?: string;
+  reply_to?: string;
+  refs?: string[];
+}
+
+export interface LinkSent {
+  sent: { to: string; id: string; workspace: string }[];
+}
+
+export interface PeerSession {
+  id: string;
+  salt: string;
+  tool: string;
+  machine: string;
+  path: string;
+  label: string;
+}
+
+export interface FederatedLink {
+  from: PeerSession;
+  to: string;
+}
+
+export interface FederatedUnlink {
+  from: string;
+  to: string;
+}
+
+export interface FederatedMessage {
+  from: string;
+  to: string;
+  message: {
+    id: string;
+    type: MessageType;
+    type_version: number;
+    created_at: string;
+    body: Record<string, unknown>;
+    thread?: string;
+    reply_to?: string;
+    refs?: string[];
+  };
+}
+
 export interface ApiPayloads {
   health: Health;
   helloRequest: HelloRequest;
@@ -503,5 +599,18 @@ export interface ApiPayloads {
   agentList: AgentList;
   localDiscovery: LocalDiscovery;
   localBootstrapFile: LocalBootstrapFile;
+  quorumIdCreate: QuorumIdCreate;
+  quorumIdCreated: QuorumIdCreated;
+  linkCreate: LinkCreate;
+  linkCreated: LinkCreated;
+  linkSelect: LinkSelect;
+  linkBlock: LinkBlock;
+  linkList: LinkList;
+  linkSend: LinkSend;
+  linkSent: LinkSent;
+  peerSession: PeerSession;
+  federatedLink: FederatedLink;
+  federatedUnlink: FederatedUnlink;
+  federatedMessage: FederatedMessage;
   event: EventRecord;
 }

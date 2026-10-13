@@ -2,27 +2,28 @@
 
 Lightweight ADRs. Each records the decision, why, how to undo it, and what would make us revisit it. Decisions listed in plan §17 "Open decisions", anything marked **open** here, and any plan change are made **jointly by both maintainers (abyud and abhijna)**; while abhijna is away, abyud decides them and abhijna reviews on return (D-19). AI agents never decide them.
 
-| #    | Decision                                                                                          | Status                                                   | Date       |
-| ---- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ---------- |
-| D-1  | Name: command `quorum`, npm package `@quorumhq/quorum`                                            | decided (abyud, 2026-10-13) — abhijna to review          | 2026-10-01 |
-| D-2  | TypeScript on Node.js for the core                                                                | accepted (§17.2)                                         | 2026-10-01 |
-| D-3  | Apache-2.0 licence                                                                                | accepted (§17.3)                                         | 2026-10-01 |
-| D-4  | Server-rendered UI with HTMX                                                                      | accepted (§17.4)                                         | 2026-10-01 |
-| D-5  | Default cross-network connection: the Quorum relay (Tailscale, Cloudflare Tunnel as alternatives) | decided (abyud, 2026-10-13, by D-18) — abhijna to review | 2026-10-01 |
-| D-6  | A2A interop stays in Phase 6                                                                      | open (§17.6) — revisit if users ask                      | 2026-10-01 |
-| D-7  | Toolchain: Node 22/24 LTS, TypeScript 6.0, ESLint + typescript-eslint, Prettier, Vitest           | accepted                                                 | 2026-10-01 |
-| D-8  | Re-sequence: Phase 1 = Claude Code ↔ Codex on one machine (local mode); Phase 1b = cross-machine  | accepted provisionally — revisit at Phase 0 spec review  | 2026-10-01 |
-| D-9  | Wake-on-message is a per-attachment user choice                                                   | accepted                                                 | 2026-10-01 |
-| D-10 | Passkey (WebAuthn user verification) for high/critical approvals                                  | accepted                                                 | 2026-10-01 |
-| D-11 | Client credentials in the OS keychain via `@napi-rs/keyring`                                      | accepted                                                 | 2026-10-01 |
-| D-12 | Agent identity: stable per attachment by default, changeable on demand                            | accepted                                                 | 2026-10-01 |
-| D-13 | Local-mode transport: loopback TCP + tokens + server identity pinning                             | accepted (outline approved)                              | 2026-10-01 |
-| D-14 | Answers to the spec open questions                                                                | decided (abyud and abhijna, 2026-10-02)                  | 2026-10-01 |
-| D-15 | No branch protection on main for now; no agent runs git — agents hand humans the commands         | accepted by abyud — abhijna to confirm                   | 2026-10-02 |
-| D-16 | Phase 0 closed with E1/E2 and E4 waived (specs accepted on trust; simulated interviews)           | accepted (both); specs stay changeable                   | 2026-10-02 |
-| D-17 | Windows are addressable: numbered session labels                                                  | accepted by abyud — abhijna to confirm                   | 2026-10-06 |
-| D-18 | Easy setup: npm install, a free end-to-end-encrypted relay, asking before mail is read            | decided (abyud) — abhijna to review                      | 2026-10-13 |
-| D-19 | While abhijna is away, abyud decides alone; track split and RFC step on hold                      | decided (abyud) — until abhijna returns                  | 2026-10-13 |
+| #    | Decision                                                                                           | Status                                                   | Date       |
+| ---- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ---------- |
+| D-1  | Name: command `quorum`, npm package `@quorumhq/quorum`                                             | decided (abyud, 2026-10-13) — abhijna to review          | 2026-10-01 |
+| D-2  | TypeScript on Node.js for the core                                                                 | accepted (§17.2)                                         | 2026-10-01 |
+| D-3  | Apache-2.0 licence                                                                                 | accepted (§17.3)                                         | 2026-10-01 |
+| D-4  | Server-rendered UI with HTMX                                                                       | accepted (§17.4)                                         | 2026-10-01 |
+| D-5  | Default cross-network connection: the Quorum relay (Tailscale, Cloudflare Tunnel as alternatives)  | decided (abyud, 2026-10-13, by D-18) — abhijna to review | 2026-10-01 |
+| D-6  | A2A interop stays in Phase 6                                                                       | open (§17.6) — revisit if users ask                      | 2026-10-01 |
+| D-7  | Toolchain: Node 22/24 LTS, TypeScript 6.0, ESLint + typescript-eslint, Prettier, Vitest            | accepted                                                 | 2026-10-01 |
+| D-8  | Re-sequence: Phase 1 = Claude Code ↔ Codex on one machine (local mode); Phase 1b = cross-machine   | accepted provisionally — revisit at Phase 0 spec review  | 2026-10-01 |
+| D-9  | Wake-on-message is a per-attachment user choice                                                    | accepted                                                 | 2026-10-01 |
+| D-10 | Passkey (WebAuthn user verification) for high/critical approvals                                   | accepted                                                 | 2026-10-01 |
+| D-11 | Client credentials in the OS keychain via `@napi-rs/keyring`                                       | accepted                                                 | 2026-10-01 |
+| D-12 | Agent identity: stable per attachment by default, changeable on demand                             | accepted                                                 | 2026-10-01 |
+| D-13 | Local-mode transport: loopback TCP + tokens + server identity pinning                              | accepted (outline approved)                              | 2026-10-01 |
+| D-14 | Answers to the spec open questions                                                                 | decided (abyud and abhijna, 2026-10-02)                  | 2026-10-01 |
+| D-15 | No branch protection on main for now; no agent runs git — agents hand humans the commands          | accepted by abyud — abhijna to confirm                   | 2026-10-02 |
+| D-16 | Phase 0 closed with E1/E2 and E4 waived (specs accepted on trust; simulated interviews)            | accepted (both); specs stay changeable                   | 2026-10-02 |
+| D-17 | Windows are addressable: numbered session labels                                                   | accepted by abyud — abhijna to confirm                   | 2026-10-06 |
+| D-18 | Easy setup: npm install, a free end-to-end-encrypted relay, asking before mail is read             | decided (abyud) — abhijna to review                      | 2026-10-13 |
+| D-19 | While abhijna is away, abyud decides alone; track split and RFC step on hold                       | decided (abyud) — until abhijna returns                  | 2026-10-13 |
+| D-20 | Session pairing: `/quorum-id`, `/quorum-attach`; every laptop its own server; replaces invite/join | decided (abyud) — abhijna to review                      | 2026-10-13 |
 
 ---
 
@@ -185,3 +186,17 @@ Decisions are joint, so abhijna confirms or challenges these during the E2 revie
 - **Decision (abyud, 2026-10-13):** abhijna is away with no return date. Until then abyud's decisions on open items and plan changes are final, recorded here as "abhijna to review"; abyud builds both tracks, so the Track A / Track B split (TEAM_PLAN §2) and the RFC step for shared contracts (TEAM_PLAN §5.3) are on hold. Protocol changes are still written down (schemas versioned, MESSAGE_SPEC, CHANGELOG) so they can be reviewed.
 - **Unchanged:** the invariants (INV-n), no git work by agents (D-15), never deciding for a human.
 - **Ends when:** abhijna returns; anything decided meanwhile can be reopened then.
+
+## D-20 Session pairing replaces invite and join
+
+- **Decision (abyud, 2026-10-13; abhijna to review):** after the first relay runs, setting up was still too much (an invite per folder, a home machine that must stay on, mail held by a fragile per-window flag). Instead, sessions pair directly, like phone contacts. Full design: [PAIRING.md](PAIRING.md).
+  - Only `npm install -g`; the commands then exist in every Claude Code (`/quorum-…`) and Codex (`$quorum-…`) session: `id`, `attach <id>`, `detach`, `block <id>`, `export`, plus `allow` to accept a request (added while designing: an answer has to be typed by the person, like the commands).
+  - A session joins only by running `id` or `attach`. IDs are short (`QRM-XXXX-XXXX-XXXX`), permanent and self-certifying (derived from the laptop's key; the relay's phone book cannot lie undetected). The relay now stores that phone book (ID → laptop), a deliberate change from "stores nothing"; it never learns who is linked to whom and never sees messages.
+  - The other person approves a link; requests wait until that session is open. Blocked and unknown IDs get the same "no such ID". Detaching needs nobody's approval. Attaching twice does nothing.
+  - Every laptop runs its own server; servers exchange signed link requests and messages through the relay (TLS to pinned keys, INV-33), each keeping its own copy; the sender retries while the other laptop is off. This brings plan Phase 7's "federation between Quorum servers" forward, in a minimal pairwise form.
+  - Groups are links between pairs, all equal; roles come from the humans' prompts, not from the agents.
+  - `export` writes `quorum-<tool><n>.md` (e.g. `quorum-claude2.md`) in the folder, kept out of git, with all of that session's conversations; re-running updates it.
+  - Removed: `attach`, `invite`, `join`, `join-code`, `remote`, `login <link>`, `workspace`, Tailscale/Cloudflare front ends, and asking before mail is read. Kept: `status`, `ui`, `stop`, `relay`, `verify`, `uninstall`.
+- **Why safe:** commands are handled by hooks from what the person typed (Claude Code `UserPromptExpansion`, only person-typed commands; Codex `UserPromptSubmit`), blocked before the model runs. Agents cannot type prompts, so they cannot link, approve or detach themselves (INV-30). Verified live on both vendors.
+- **Supersedes:** the invite/join and asking-before-reading parts of D-18; D-17's numbering and display stay.
+- **Revisit if:** a vendor stops letting hooks see or block typed commands (then: a plain `quorum: id` prefix), or groups need a shared group ID instead of pairwise links.

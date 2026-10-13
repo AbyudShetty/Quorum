@@ -10,5 +10,8 @@
   "bin": {
     "quorum": "bin/quorum.js"
   },
-  "keywords": ["ai", "agents", "claude-code", "codex", "mcp", "coordination", "human-in-the-loop"]
+  "keywords": ["ai", "agents", "claude-code", "codex", "mcp", "coordination", "human-in-the-loop"],
+  "scripts": {
+    "postinstall": "node bin/quorum.js setup --quiet"
+  }
 }

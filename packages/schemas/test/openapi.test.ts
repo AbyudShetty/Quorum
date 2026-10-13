@@ -78,7 +78,8 @@ describe('OpenAPI /v1 document', () => {
     }
   });
 
-  // Each of the others needs a one-time secret in the body instead (bootstrap, join or device code).
+  // Each of the others needs a one-time secret in the body instead (bootstrap, join or device code),
+  // or, for server to server (federation*, D-20), a TLS client key proven through the relay.
   it('only health, hello, token refresh and one-time-code exchanges work without a token (INV-23)', () => {
     const open = operations
       .filter(({ op }) => op.security.length === 0)
@@ -86,6 +87,10 @@ describe('OpenAPI /v1 document', () => {
       .sort();
     expect(open).toEqual([
       'collectDeviceLogin',
+      'federationAccept',
+      'federationLink',
+      'federationMessage',
+      'federationUnlink',
       'getHealth',
       'hello',
       'join',
@@ -104,6 +109,7 @@ describe('OpenAPI /v1 document', () => {
       'approveDeviceLogin',
       'createAttachment',
       'createJoinCode',
+      'createQuorumId',
       'createUiLink',
       'createWorkspace',
       'deleteAttachment',
