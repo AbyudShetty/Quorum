@@ -155,5 +155,7 @@ describe('SqliteEventStore specifics', () => {
     );
     await expect(a.append(WS, [stale])).rejects.toBeInstanceOf(ChainConflictError);
     expect(verifyChain(WS, await a.read(WS))).toMatchObject({ ok: true, count: 2 });
-  });
+    // Longer than the 5 s busy timeout: a lock wait on a slow CI disk then ends in SQLite's own
+    // "database is locked" error, which says what happened, instead of a bare test timeout.
+  }, 20_000);
 });

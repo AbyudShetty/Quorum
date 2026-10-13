@@ -153,10 +153,12 @@ const migrate = (db: Db): void => {
 export const openDatabase = (file: string): Db => {
   const db = new Database(file);
   try {
+    // First, so every step below (switching to WAL included) waits for another connection's
+    // lock instead of failing at once.
+    db.pragma('busy_timeout = 5000');
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = FULL');
     db.pragma('foreign_keys = ON');
-    db.pragma('busy_timeout = 5000');
     migrate(db);
     return db;
   } catch (error) {
