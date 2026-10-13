@@ -146,6 +146,8 @@ export interface CliEnv {
   vendorPid?: number;
   /** How long `quorum mcp` waits for its window's session-start hook (default 4 s). */
   adoptTimeoutMs?: number;
+  /** How long a pairing command may take before it answers that it gave up (default 40 s). */
+  commandLimitMs?: number;
   /** Stop a verified local server process (default: SIGTERM). Tests replace it. */
   killServer?: (pid: number) => void;
   /** The person's home folder, where ~/.claude and ~/.codex live (tests). */
@@ -1656,9 +1658,15 @@ const hookNeverFails = async (args: string[], env: CliEnv): Promise<number> => {
  * folder (INV-25), like `quorum login`.
  */
 const ensureHuman = async (env: CliEnv): Promise<QuorumClient> => {
-  if (await env.store.load(HUMAN_CREDENTIAL_KEY)) return humanClient(env);
   const dataDir = dataDirOf(env);
-  await removeRemoteServer(dataDir);
+  if (await loadRemoteServer(dataDir)) {
+    // Pairing always uses this laptop's own server (D-20). A sign-in to another machine's server
+    // left by `quorum login <link>` would send the commands there: drop it and its credentials.
+    await removeRemoteServer(dataDir);
+    await env.store.remove(HUMAN_CREDENTIAL_KEY);
+  } else if (await env.store.load(HUMAN_CREDENTIAL_KEY)) {
+    return humanClient(env);
+  }
   await env.startServer?.(dataDir);
   const file = await readBootstrapCode(dataDir);
   if (!file)
@@ -1693,6 +1701,43 @@ const savePairedSession = async (
   });
 };
 
+/** Under the 60 s after which Claude Code and Codex give up on a hook, with room to exit. */
+const COMMAND_LIMIT_MS = 40_000;
+
+/** Kept small: when it passes this, it starts again (the previous one stays as commands.log.1). */
+const COMMAND_LOG_MAX = 256 * 1024;
+
+/**
+ * The steps of a pairing command and how long each took, in `<data>/hooks/commands.log` (next to errors.log), so a command
+ * that failed on someone's laptop can say where. Step names and errors only: never tokens or mail.
+ */
+const commandLog = (dataDir: string, what: string) => {
+  const file = join(dataDir, 'hooks', 'commands.log');
+  const started = Date.now();
+  const lines: string[] = [];
+  return {
+    file,
+    note: (text: string) => {
+      lines.push(
+        `${new Date().toISOString()} ${what} +${String(Date.now() - started)}ms ${text.replace(/\s+/g, ' ')}`,
+      );
+    },
+    write: async () => {
+      try {
+        await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+        if (((await stat(file).catch(() => undefined))?.size ?? 0) > COMMAND_LOG_MAX) {
+          await rm(`${file}.1`, { force: true });
+          await writeFile(`${file}.1`, await readFile(file));
+          await rm(file, { force: true });
+        }
+        await appendFile(file, `${lines.join('\n')}\n`);
+      } catch {
+        // The log is a help, never a reason for the command to fail.
+      }
+    },
+  };
+};
+
 /**
  * `quorum hook <vendor> <event>` without `--attachment`: Quorum's user-level hooks, in every session
  * (D-20, PAIRING.md). A typed pairing command is done here and its prompt blocked; a session that
@@ -1709,7 +1754,9 @@ const pairingHook = async (
   if (event === 'command' || event === 'prompt') {
     const command = parseQuorumCommand(input);
     if (command) {
-      const text = await runQuorumCommand({
+      const log = commandLog(dataDir, `${vendor} ${command.name}`);
+      let step = 'start';
+      const run = runQuorumCommand({
         vendor,
         command,
         input,
@@ -1718,12 +1765,31 @@ const pairingHook = async (
         saveSession: (created, root, v) => savePairedSession(env, created, root, v),
         agent: (attachment) => connect(env, attachment),
         ...(env.vendorPid === undefined ? {} : { vendorPid: env.vendorPid }),
+        step: (name) => {
+          step = name;
+          log.note(name);
+        },
       }).catch((error: unknown) => {
+        log.note(`error: ${String(error)}`);
         if (error instanceof NeedsActionError || error instanceof ApiError) {
           return `Quorum: ${error.message}`;
         }
-        throw error;
+        return `Quorum: that did not work (${error instanceof Error ? error.message : String(error)}). Details are in ${log.file}.`;
       });
+      // Vendors give up on a hook after 60 s and show only "hook timed out": stop well before.
+      let timer: NodeJS.Timeout | undefined;
+      const late = new Promise<string>((done) => {
+        timer = setTimeout(() => {
+          log.note(`gave up at ${step}`);
+          done(
+            `Quorum: that took too long and was stopped (at step "${step}"). Try again; if it keeps happening, send ${log.file}.`,
+          );
+        }, env.commandLimitMs ?? COMMAND_LIMIT_MS);
+      });
+      const text = await Promise.race([run, late]);
+      clearTimeout(timer);
+      log.note('done');
+      await log.write();
       env.out(`${commandOutput(text)}\n`);
       return 0;
     }

@@ -139,6 +139,8 @@ export interface CommandContext {
   /** The vendor process this hook belongs to. Default: our parent process. */
   vendorPid?: number;
   now?: () => number;
+  /** Called as each step starts (`sign-in`, `create-id`, …), so a slow command can say where. */
+  step?: (name: string) => void;
 }
 
 /** A link as people read it: `codex@laptop-b - ~\proj\web - 2 (QRM-…)`. */
@@ -205,7 +207,9 @@ const join_ = async (
   const root = cwdOf(context.input);
   const vendor: Vendor = context.vendor;
   if (!session) {
+    context.step?.('sign-in');
     const human = await context.human();
+    context.step?.('create-id');
     let made = await human.createQuorumId({
       vendor,
       vendor_session_id: sessionId(context.input),
@@ -221,6 +225,7 @@ const join_ = async (
       });
     }
     if (!made.attachment) throw new Error('The server gave no attachment for the new ID.');
+    context.step?.('save-session');
     await context.saveSession(made, root, vendor);
     session = { id: made.id, attachment: made.attachment };
     sessions[key] = session;
@@ -233,6 +238,7 @@ const join_ = async (
   let window = state.sessions[vendorSession];
   let label = window ? state.windows?.[window]?.label : undefined;
   if (!window) {
+    context.step?.('register-window');
     const client = await context.agent(session.attachment);
     const git = await findGit(root).catch(() => undefined);
     const registered = await client.createSession({
@@ -272,6 +278,7 @@ export const runQuorumCommand = async (context: CommandContext): Promise<string>
       }
     }
     const { session, label } = await join_(context);
+    context.step?.(command.name === 'id' ? 'links' : 'request-link');
     const client = await context.agent(session.attachment);
     if (command.name === 'id') {
       const links = (await client.links()).links;
@@ -299,6 +306,7 @@ export const runQuorumCommand = async (context: CommandContext): Promise<string>
 
   const session = await pairedSession(context.dataDir, vendor, context.input);
   if (!session) return `Quorum: ${notJoined}`;
+  context.step?.(command.name);
   const client = await context.agent(session.attachment);
 
   if (command.name === 'allow') {

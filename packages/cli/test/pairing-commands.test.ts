@@ -6,12 +6,17 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MemoryCredentialStore, QuorumClient } from '@quorum/adapter-mcp';
+import {
+  loadRemoteServer,
+  MemoryCredentialStore,
+  QuorumClient,
+  saveRemoteServer,
+} from '@quorum/adapter-mcp';
 import { closeRelayConnections } from '@quorum/local';
 import { type Relay, startRelay } from '@quorum/relay';
 import { type LocalServer, startLocalServer } from '@quorum/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type CliEnv, main } from '../src/index.js';
+import { type CliEnv, HUMAN_CREDENTIAL_KEY, main } from '../src/index.js';
 
 let relay: Relay;
 let root: string;
@@ -231,6 +236,49 @@ describe('pairing commands typed in sessions (D-20)', () => {
     });
     expect(String(out?.reason)).toBe(
       'Quorum: This session is not in Quorum yet: type /quorum-id first.',
+    );
+  });
+});
+
+describe('pairing commands on a laptop with leftovers, or stuck', () => {
+  it('a sign-in to another machine left by `quorum login <link>` is dropped: this laptop is used', async () => {
+    const c = await machine('laptop-c');
+    await saveRemoteServer(c.dataDir, {
+      url: 'https://old-tunnel.invalid',
+      instance_id: 'in_old',
+      public_key: 'AAAA',
+    });
+    await c.store.save(HUMAN_CREDENTIAL_KEY, {
+      access_token: 'old',
+      refresh_token: 'old',
+      access_expires_at: Date.now() + 60_000,
+    });
+    const out = await hook(c, 'codex', 'prompt', {
+      session_id: 'codex-c-1',
+      cwd: folder('old'),
+      prompt: '$quorum-id',
+    });
+    expect(String(out?.reason)).toMatch(/Quorum ID of this session \(codex@old-1\): QRM-/);
+    expect(await loadRemoteServer(c.dataDir)).toBeUndefined();
+  });
+
+  it('a command that gets stuck answers before the vendor gives up, naming the step', async () => {
+    const d = join(root, 'laptop-d');
+    const out: string[] = [];
+    await main(['hook', 'codex', 'prompt'], {
+      out: (t) => out.push(t),
+      err: () => undefined,
+      store: new MemoryCredentialStore(),
+      dataDir: d,
+      startServer: () => new Promise(() => undefined), // a server that never comes up
+      commandLimitMs: 200,
+      stdin: () =>
+        Promise.resolve(JSON.stringify({ session_id: 's', cwd: d, prompt: '$quorum-id' })),
+    });
+    const reason = (JSON.parse(out.join('')) as { reason: string }).reason;
+    expect(reason).toContain('took too long and was stopped (at step "sign-in")');
+    expect(readFileSync(join(d, 'hooks', 'commands.log'), 'utf8')).toMatch(
+      /codex id \+\d+ms gave up at sign-in/,
     );
   });
 });

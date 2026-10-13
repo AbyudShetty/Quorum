@@ -44,6 +44,10 @@ The commands are caught by Quorum's hook **from the text the person typed**, bef
 
 `npm install -g` runs a setup step that writes, at user level: Quorum's hooks (`~/.claude/settings.json`, `~/.codex/hooks.json`), its MCP server (`quorum mcp`, for the `quorum_*` tools), the six commands (`~/.claude/commands/quorum-*.md`, `~/.codex/skills/quorum-*/SKILL.md`). Hooks of sessions without an ID exit at once. Codex asks the person once to trust the new hooks. Where install scripts are turned off, the first `quorum` command does the same. `quorum uninstall` removes all of it (npm no longer runs anything on uninstall).
 
+The commands always use this laptop's own server. A sign-in to another machine's server, left by the old `quorum login <link>`, is dropped.
+
+A command stops after 40 s and says which step it was on. This keeps it under the 60 s after which Claude Code and Codex give up on a hook and show only "hook timed out". Each command's steps and timings are written to `<data>/hooks/commands.log`: step names and errors only, never tokens or mail.
+
 ## 5. What goes away
 
 `quorum attach`, `invite`, `join`, `join-code`, `remote`, `login <link>`, `login approve`, `workspace`, the per-folder vendor config they wrote, Tailscale/Cloudflare front ends, and asking before mail is read (an approved link replaces it). Kept: `status`, `ui`, `stop`, `relay`, `verify`, `uninstall`.
