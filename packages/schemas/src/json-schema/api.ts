@@ -30,6 +30,13 @@ const schema = (name: string, body: Record<string, unknown>) => ({
 /** A Quorum ID (D-20): QRM- and 12 Crockford base32 characters. */
 const QUORUM_ID = '^QRM-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$';
 
+/**
+ * A folder as another laptop shows it: one line of plain text. Control characters (line breaks,
+ * escapes), invisible and direction-changing format characters and the Unicode line separators are
+ * refused, because the text is shown to an agent and a person before any link exists (INV-9).
+ */
+const SHOWN_FOLDER = '^[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$';
+
 /** A session as its home server describes it to another server (D-20). */
 const peerSession = {
   type: 'object',
@@ -40,7 +47,7 @@ const peerSession = {
     salt: base64url(16),
     tool: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,31}$' },
     machine: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,31}$' },
-    path: { type: 'string', minLength: 1, maxLength: 4096 },
+    path: { type: 'string', minLength: 1, maxLength: 4096, pattern: SHOWN_FOLDER },
     label: {
       type: 'string',
       pattern: '^[a-z][a-z0-9-]{0,31}@[a-z0-9][a-z0-9-]{0,95}-[1-9][0-9]{0,3}$',
@@ -544,7 +551,7 @@ export const apiSchemas = {
             state: { enum: ['requested', 'pending', 'linked'] },
             tool: common('name'),
             machine: common('name'),
-            path: { type: 'string', minLength: 1, maxLength: 4096 },
+            path: { type: 'string', minLength: 1, maxLength: 4096, pattern: SHOWN_FOLDER },
             label: common('sessionLabel'),
             workspace: common('workspaceId'),
           },

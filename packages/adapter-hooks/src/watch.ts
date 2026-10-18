@@ -153,6 +153,34 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     let pending: Promise<WatchResult | undefined> | undefined;
     let result: WatchResult | undefined;
     const lastSeen = new Map<string, number>();
+    let ticks = 0;
+    /** A trigger arrived while a check was running: that check may have missed the new mail. */
+    let again = false;
+    /** Read through a call: it changes while a check runs, which narrowing cannot see. */
+    const askedAgain = () => again;
+    /** Check for a wake now; if one is already running, run it once more when it ends. */
+    const kick = () => {
+      if (pending) {
+        again = true;
+        return;
+      }
+      pending = (async () => {
+        let found: WatchResult | undefined;
+        do {
+          again = false;
+          found = await tryWake();
+        } while (!found && askedAgain() && !stopped());
+        return found;
+      })().finally(() => {
+        pending = undefined;
+      });
+      void pending.then((r) => {
+        if (r && !result) {
+          result = r;
+          stop.abort();
+        }
+      });
+    };
 
     // One stream per workspace, reconnecting after a drop (server restart) from the last seq seen.
     const watchWorkspace = async (workspace: string) => {
@@ -164,15 +192,7 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
             (message) => {
               lastSeen.set(workspace, message.seq);
               if (message.from === context.attachment.agent) return;
-              pending ??= tryWake().finally(() => {
-                pending = undefined;
-              });
-              void pending.then((r) => {
-                if (r && !result) {
-                  result = r;
-                  stop.abort();
-                }
-              });
+              kick();
             },
             { signal: stop.signal, ...(last === undefined ? {} : { lastEventId: last }) },
           );
@@ -203,16 +223,12 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
         workspaces.push(workspace);
         streams.push(watchWorkspace(workspace));
         // Mail sent before we listened (the link was made moments ago).
-        pending ??= tryWake().finally(() => {
-          pending = undefined;
-        });
-        void pending.then((r) => {
-          if (r && !result) {
-            result = r;
-            stop.abort();
-          }
-        });
+        kick();
       }
+      // Safety net: the stream does not replay mail that arrived between the check above and the
+      // moment it opened, so look again on the first ticks and then every few ticks.
+      ticks += 1;
+      if (ticks <= 2 || ticks % 5 === 0) kick();
     }
     await Promise.allSettled(streams);
     await pending;

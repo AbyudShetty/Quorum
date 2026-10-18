@@ -4032,7 +4032,8 @@
                 "path": {
                   "type": "string",
                   "minLength": 1,
-                  "maxLength": 4096
+                  "maxLength": 4096,
+                  "pattern": "^[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$"
                 },
                 "label": {
                   "$ref": "urn:quorum:schema:common:1#/$defs/sessionLabel"
@@ -4171,7 +4172,8 @@
               "path": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 4096
+                "maxLength": 4096,
+                "pattern": "^[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]+$"
               },
               "label": {
                 "type": "string",

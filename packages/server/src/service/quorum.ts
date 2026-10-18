@@ -115,6 +115,9 @@ const homeShortened = (path: string, home: string): string => {
     : path;
 };
 
+/** A folder as sent to another laptop: no control or invisible characters (the schema refuses them). */
+const shownFolder = (path: string): string => path.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '?');
+
 /** `claude@api-1` → `claude@abyud-laptop-api-1`: the form that is unique across machines. */
 const longLabel = (label: string, machine: string): string => label.replace('@', `@${machine}-`);
 
@@ -1724,7 +1727,7 @@ export class Quorum {
       salt: row.salt,
       tool,
       machine: this.#options.machine,
-      path: window?.display_root ?? homeShortened(row.root, homedir()),
+      path: shownFolder(window?.display_root ?? homeShortened(row.root, homedir())),
       label: window?.label ?? `${tool}@${labelSlug(folderName(row.root) || 'folder')}-1`,
     };
   }
