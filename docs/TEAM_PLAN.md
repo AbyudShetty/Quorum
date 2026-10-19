@@ -19,7 +19,7 @@ Extra "machines" without new hardware: a WSL2 Ubuntu instance on each laptop (Li
 
 ## 2. Track allocation (by what each machine runs best)
 
-> **On hold while abhijna is away (DECISIONS D-19, 2026-10-13):** abyud builds both tracks and decides alone; the RFC step (§5.3) is skipped, but every contract change is still written down for abhijna to review on return.
+> From 2026-10-13 to 2026-10-19 abyud built both tracks while abhijna was away (DECISIONS D-19); the split and the RFC step (§5.3) apply again.
 
 | Track                              | Owner            | Why this machine                                                                                                                                                                                                                          |
 | ---------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
