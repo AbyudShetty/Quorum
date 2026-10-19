@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -171,6 +172,26 @@ describe('start lock (one local server per user)', () => {
       );
       expect(attempts.filter((a) => a.acquired)).toHaveLength(1);
     }
+  });
+
+  it('leaves a crashed lock alone while another starter is replacing it', async () => {
+    const dir = lockDir();
+    writeFileSync(lockPath(dir), crashedLock);
+    const replacing = `${String(process.pid)}\n${'2'.repeat(8)}-2222-2222-2222-${'2'.repeat(12)}\n`;
+    writeFileSync(`${lockPath(dir)}.takeover`, replacing);
+    expect((await acquireStartLock(dir, deadIs999999)).acquired).toBe(false);
+    expect(readFileSync(lockPath(dir), 'utf8')).toBe(crashedLock);
+    expect(readFileSync(`${lockPath(dir)}.takeover`, 'utf8')).toBe(replacing);
+  });
+
+  it('clears a takeover left by a process that died during it, so the next start succeeds', async () => {
+    const dir = lockDir();
+    writeFileSync(lockPath(dir), crashedLock);
+    writeFileSync(`${lockPath(dir)}.takeover`, crashedLock);
+    expect((await acquireStartLock(dir, deadIs999999)).acquired).toBe(false);
+    const next = await acquireStartLock(dir, deadIs999999);
+    expect(next.acquired).toBe(true);
+    expect(existsSync(`${lockPath(dir)}.takeover`)).toBe(false);
   });
 
   it('never releases a lock that someone else now holds', async () => {
