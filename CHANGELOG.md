@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added (Phase 1b)
 
+- **`docs/NETWORKING_PROPOSAL.md` (D-5, proposal only):** layered transport (same network, hole punching, relay), signed address records for re-pairing, the terms of the free tunnel services, the spike plan and a monitoring plan for the hosted relay. Nothing is decided and no code changes.
+
 - **Link requests answered in a dialog (D-21):**
   - When a session is asked to link, Quorum's new `quorum_requests` tool opens an MCP elicitation dialog that only the person answers ("… wants to link with this session": Not now / Allow / Block), and the agent is told to call it.
   - The default is Not now: a dialog declined, dismissed, timed out or accepted without a choice (Codex's bypass mode) links nothing. INV-34 is amended accordingly.
