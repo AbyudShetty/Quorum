@@ -93,6 +93,11 @@ All notable changes to this project are documented here. The format follows [Kee
 - `@quorum/schemas`: JSON Schemas (draft 2020-12) for the common definitions, all ten message bodies, submitted and delivered envelopes, the error response and `quorum.policy.yaml` v1; matching TypeScript types; validators returning path/rule/message issues; 100 tests covering the spec rules (INV-1, INV-5, INV-6, INV-7, INV-16, INV-27, INV-31, the 96 KiB body limit). New dependency: `ajv` (MIT), already planned in ARCHITECTURE §11.
 - Workspace scaffolding: first package `@quorum/schemas` (exports `SPEC_VERSION`), a standard package layout enforced by `tests/repo/packages.test.ts`, `npm run build` (TypeScript project references) in `check` and CI, and a `quorum-source` export condition so typecheck and tests use workspace sources without building. See CONTRIBUTING "Adding a package".
 
+### Changed
+
+- **Decisions reviewed by abhijna (2026-10-19):** D-15, D-17, D-20 (ID rotation to be added before release) and D-21 (after a live Codex bypass test) accepted; D-19 ended; D-1 and D-5 open again (no hosted-relay default). See DECISIONS.md.
+- **A peer's folder is cut to 160 characters where it is shown** (link request, wake text, `quorum_requests`, `quorum_status`), through one shared `peerLine`, so a stranger cannot fill a prompt with text.
+
 ### Fixed
 
 - **Text from another laptop could carry line breaks into an agent's view (INV-9, D-20):** the folder a session shows to another laptop (`path` in a session face and in the link list) was any string up to 4096 characters, and it is shown to the receiving agent and person in the link request, the wake text and the `quorum_requests` dialog before any link exists. The schema now refuses control characters (line breaks, escapes), invisible and direction-changing format characters and line/paragraph separators, so a stranger's request with such a folder is rejected; a laptop replaces them with `?` in its own folder when it sends. Ordinary folders (spaces, accents, Windows paths) are unaffected. `openapi.v1.json` regenerated.

@@ -78,5 +78,6 @@ export {
   createPairingMcpServer,
   PAIRING_INSTRUCTIONS,
   type PairedTarget,
+  peerLine,
   type PairingMcpDependencies,
 } from './pairing-mcp.js';

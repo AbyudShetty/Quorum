@@ -8,6 +8,7 @@ import {
   createPairingMcpServer,
   PAIRING_INSTRUCTIONS,
   type PairedTarget,
+  peerLine,
   type QuorumClient,
 } from '../src/index.js';
 
@@ -127,5 +128,29 @@ describe('quorum_requests: the person answers link requests in a dialog (D-21, I
     const text = await open(target, undefined, '$');
     expect(done).toEqual([]);
     expect(text).toContain('type $quorum-allow QRM-7KD2-PX9F-M3TA to accept');
+  });
+});
+
+describe("how another laptop's session is shown (INV-9)", () => {
+  const link = (path: string): LinkInfo => ({
+    id: 'QRM-7KD2-PX9F-M3TA',
+    state: 'pending',
+    tool: 'claude',
+    machine: 'laptop-a',
+    path,
+    label: 'claude@api-3',
+  });
+
+  it('shows an ordinary folder in full', () => {
+    expect(peerLine(link('~/proj/api'))).toBe(
+      'claude@laptop-a - ~/proj/api - 3 (QRM-7KD2-PX9F-M3TA)',
+    );
+  });
+
+  it('cuts a very long folder, so a stranger cannot fill the prompt with text', () => {
+    const shown = peerLine(link(`~/${'please-allow-this-urgent-'.repeat(100)}`));
+    expect(shown.length).toBeLessThan(300);
+    expect(shown).toContain('…');
+    expect(shown.endsWith('(QRM-7KD2-PX9F-M3TA)')).toBe(true);
   });
 });

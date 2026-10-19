@@ -45,12 +45,20 @@ const BLOCK = 'Block';
 /** How long the person has to answer the dialog. */
 export const DIALOG_TIMEOUT_MS = 10 * 60_000;
 
-/** A requesting session as people read it: `codex@laptop-b - C:\proj\web - 2 (QRM-…)`. */
-const requestLine = (l: LinkInfo): string => {
+/** The most of another laptop's folder text that is shown: it is data from a stranger (INV-9). */
+const MAX_SHOWN_PATH = 160;
+
+/**
+ * Another laptop's session as people read it: `codex@laptop-b - C:\proj\web - 2 (QRM-…)`. The
+ * folder is text the other laptop chose, shown before any link exists, so a long one is cut.
+ */
+export const peerLine = (l: LinkInfo): string => {
   if (l.tool === 'pending') return l.id;
   const number = /-(\d+)$/.exec(l.label)?.[1] ?? '';
-  return `${l.tool}@${l.machine} - ${l.path} - ${number} (${l.id})`;
+  const path = l.path.length > MAX_SHOWN_PATH ? `${l.path.slice(0, MAX_SHOWN_PATH)}…` : l.path;
+  return `${l.tool}@${l.machine} - ${path} - ${number} (${l.id})`;
 };
+const requestLine = peerLine;
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
 

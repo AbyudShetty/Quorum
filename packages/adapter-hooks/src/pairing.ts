@@ -16,7 +16,7 @@
 // Sessions that never ran a command are not in Quorum: their hooks return at once.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type AttachmentInfo, findGit, type QuorumClient } from '@quorum/adapter-mcp';
+import { type AttachmentInfo, findGit, peerLine, type QuorumClient } from '@quorum/adapter-mcp';
 import { parseQuorumId } from '@quorum/core';
 import { writePrivateFile } from '@quorum/local';
 import type { LinkInfo, QuorumIdCreated, Vendor } from '@quorum/schemas';
@@ -146,11 +146,7 @@ export interface CommandContext {
 }
 
 /** A link as people read it: `codex@laptop-b - ~\proj\web - 2 (QRM-…)`. */
-export const linkLine = (link: LinkInfo): string => {
-  if (link.tool === 'pending') return link.id;
-  const number = /-(\d+)$/.exec(link.label)?.[1] ?? '';
-  return `${link.tool}@${link.machine} - ${link.path} - ${number} (${link.id})`;
-};
+export const linkLine = (link: LinkInfo): string => peerLine(link);
 
 const describeLinks = (vendor: HookVendor, links: readonly LinkInfo[]): string[] => {
   const linked = links.filter((l) => l.state === 'linked');
