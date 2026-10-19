@@ -95,7 +95,6 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- **Decisions reviewed by abhijna (2026-10-19):** D-15, D-17, D-20 (ID rotation to be added before release) and D-21 (after a live Codex bypass test) accepted; D-19 ended; D-1 and D-5 open again (no hosted-relay default). See DECISIONS.md.
 - **A peer's folder is cut to 160 characters where it is shown** (link request, wake text, `quorum_requests`, `quorum_status`), through one shared `peerLine`, so a stranger cannot fill a prompt with text.
 
 ### Fixed

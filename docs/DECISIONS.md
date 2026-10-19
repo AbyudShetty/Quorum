@@ -188,6 +188,7 @@ Decisions are joint, so abhijna confirms or challenges these during the E2 revie
 - **Unchanged:** the invariants (INV-n), no git work by agents (D-15), never deciding for a human.
 - **Ends when:** abhijna returns; anything decided meanwhile can be reopened then.
 - **Ended 2026-10-19:** abhijna returned and reviewed D-1 and D-15 to D-21. Accepted: D-15, D-17, D-20 (IDs must become rotatable before release) and D-21 (after one live test with Codex in bypass mode). Still being discussed: D-1 (whether the names are free) and D-5/D-18 (not depending on the hosted relay). The track split and the RFC step apply again.
+- **Also settled at the review (abhijna, 2026-10-19):** the dropped "ask before mail is read" (D-18) is accepted through D-20, since approving a link is the consent; a peer's folder text, shown before any link exists, is cut to 160 characters and may not carry control or invisible characters; and removing the old commands (Phase 1b step 7) waits until the two-laptop exit run passes, so there is a fallback if pairing fails.
 
 ## D-20 Session pairing replaces invite and join
 
