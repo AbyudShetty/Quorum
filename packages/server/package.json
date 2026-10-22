@@ -21,7 +21,7 @@
     "@quorum/schemas": "0.0.0",
     "@quorum/web": "0.0.0",
     "better-sqlite3": "^13.0.3",
-    "fastify": "^5.12.5"
+    "fastify": "^5.12.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0"
