@@ -2,7 +2,13 @@
 // belongs to which vendor session, and when presence was last reported. Kept per attachment in the
 // private data directory; nothing secret. A lost update (two hooks at once) costs at most one extra
 // heartbeat or a session the server expires by itself.
-import { mkdir, readFile } from 'node:fs/promises';
+//
+// The idle watcher's claim is not in that file but in one of its own per vendor session: the Stop
+// hook and the watcher it starts run at the same moment, and the Stop hook's rewrite of the shared
+// file erased the claim, so the watcher stood down within seconds and the session never woke
+// (seen live, 2026-10-22).
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writePrivateFile } from '@quorum/local';
 
@@ -11,11 +17,6 @@ export interface HookState {
   sessions: Record<string, string>;
   /** When a heartbeat was last sent (ms since epoch). */
   lastHeartbeatMs?: number;
-  /**
-   * Vendor session id → token of the one idle watcher allowed to run for it. A newer watcher, a
-   * new prompt or the session's end replaces or removes the token, and the old watcher exits.
-   */
-  watchers?: Record<string, string>;
   /**
    * Quorum session id → its window: the vendor session key, the label and the vendor process.
    * `quorum mcp` runs in the same vendor process and adopts that session, so one window is one
@@ -66,19 +67,12 @@ export const loadHookState = async (dataDir: string, attachment: string): Promis
     const value = parsed as {
       sessions?: unknown;
       lastHeartbeatMs?: unknown;
-      watchers?: unknown;
       windows?: unknown;
     };
     const sessions: Record<string, string> = {};
     if (typeof value.sessions === 'object' && value.sessions !== null) {
       for (const [key, id] of Object.entries(value.sessions)) {
         if (typeof id === 'string') sessions[key] = id;
-      }
-    }
-    const watchers: Record<string, string> = {};
-    if (typeof value.watchers === 'object' && value.watchers !== null) {
-      for (const [key, token] of Object.entries(value.watchers)) {
-        if (typeof token === 'string') watchers[key] = token;
       }
     }
     const windows: Record<string, HookWindow> = {};
@@ -105,7 +99,6 @@ export const loadHookState = async (dataDir: string, attachment: string): Promis
     }
     return {
       sessions,
-      ...(Object.keys(watchers).length > 0 ? { watchers } : {}),
       ...(Object.keys(windows).length > 0 ? { windows } : {}),
       ...(typeof value.lastHeartbeatMs === 'number'
         ? { lastHeartbeatMs: value.lastHeartbeatMs }
@@ -129,4 +122,44 @@ export const saveHookState = async (
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   });
   await writePrivateFile(statePath(dataDir, attachment), `${JSON.stringify(state)}\n`);
+};
+
+const watcherPath = (dataDir: string, attachment: string, key: string): string =>
+  join(
+    dataDir,
+    'hooks',
+    'watchers',
+    `${safe(attachment)}-${createHash('sha256').update(key).digest('hex').slice(0, 16)}`,
+  );
+
+/**
+ * Make `token` the one idle watcher allowed to run for vendor session `key`. A watcher already
+ * running for it sees the new token and stands down.
+ */
+export const claimWatcher = async (
+  dataDir: string,
+  attachment: string,
+  key: string,
+  token: string,
+): Promise<void> => {
+  await mkdir(join(dataDir, 'hooks', 'watchers'), { recursive: true, mode: 0o700 });
+  await writePrivateFile(watcherPath(dataDir, attachment, key), token);
+};
+
+/** Is `token` still the watcher for vendor session `key`? */
+export const isWatcher = async (
+  dataDir: string,
+  attachment: string,
+  key: string,
+  token: string,
+): Promise<boolean> =>
+  (await readFile(watcherPath(dataDir, attachment, key), 'utf8').catch(() => undefined)) === token;
+
+/** A new prompt or the session's end: the idle watcher for `key` stands down. */
+export const dismissWatcher = async (
+  dataDir: string,
+  attachment: string,
+  key: string,
+): Promise<void> => {
+  await rm(watcherPath(dataDir, attachment, key), { force: true });
 };

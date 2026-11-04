@@ -26,7 +26,13 @@ import {
 } from '@quorum/adapter-mcp';
 import { createIdFactory } from '@quorum/core';
 import type { DeliveredEnvelope, SubmittedEnvelope } from '@quorum/schemas';
-import { type HookState, type HookWindow, loadHookState, saveHookState } from './state.js';
+import {
+  dismissWatcher,
+  type HookState,
+  type HookWindow,
+  loadHookState,
+  saveHookState,
+} from './state.js';
 
 export type HookVendor = 'claude-code' | 'codex';
 export const HOOK_VENDORS: readonly HookVendor[] = ['claude-code', 'codex'];
@@ -511,7 +517,7 @@ const onSessionEnd = async (client: HookClient, context: HookContext, state: Hoo
   ]);
   if (key) {
     Reflect.deleteProperty(state.sessions, key);
-    if (state.watchers) Reflect.deleteProperty(state.watchers, key); // the idle watcher stands down
+    await dismissWatcher(context.dataDir, context.attachment.attachment, key); // it stands down
     if (session && state.windows) Reflect.deleteProperty(state.windows, session);
   }
   return NOTHING;
@@ -554,8 +560,8 @@ export const runHook = async (context: HookContext): Promise<HookResult> => {
       case 'post-tool': {
         // A new prompt means the session is busy again: the idle watcher stands down.
         const key = sessionKey(context.input);
-        if (context.event === 'prompt' && key && state.watchers) {
-          Reflect.deleteProperty(state.watchers, key);
+        if (context.event === 'prompt' && key) {
+          await dismissWatcher(context.dataDir, context.attachment.attachment, key);
         }
         await maybeHeartbeat(client, context, state, 'working');
         const current = client.session ? state.windows?.[client.session] : undefined;

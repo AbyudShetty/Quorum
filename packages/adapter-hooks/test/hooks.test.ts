@@ -317,6 +317,24 @@ describe('idle-wake watcher (spike S1, INV-29)', () => {
   };
   const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  it('keeps watching when the Stop hook, started at the same moment, rewrites the shared state', async () => {
+    // Seen live (2026-10-22): the Stop hook read the hook state before the watcher claimed it and
+    // wrote its copy back after, erasing the claim; the watcher stood down and never woke anyone.
+    const sender = await attach('race-from', 'codex', 'off');
+    const claude = await attach('race-to', 'claude-code', 'direct');
+    await register(claude, 'race-session');
+    const stopHookCopy = await loadHookState(server.dataDir, claude.attachment);
+    const watching = watch(claude, { session: 'race-session', unregistered: true });
+    await tick(150);
+    stopHookCopy.lastHeartbeatMs = Date.now(); // the Stop hook's change, then its write
+    await saveHookState(server.dataDir, claude.attachment, stopHookCopy);
+    await tick(300); // several checks of "am I still the watcher?"
+    await note(sender, [claude.agent], 'still there?');
+    const woke = await watching;
+    expect(woke.exitCode).toBe(2);
+    expect(woke.output).toContain('still there?');
+  });
+
   it('wakes an idle session with direct mail once the server grants it', async () => {
     const sender = await attach('watch-from', 'codex', 'off');
     const claude = await attach('watch-to', 'claude-code', 'direct');

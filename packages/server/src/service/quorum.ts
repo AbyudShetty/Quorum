@@ -1429,7 +1429,34 @@ export class Quorum {
     workspace: string,
     input: unknown,
   ): { status: 200 | 201; body: MessageAccepted } {
+    return this.#sendMessage(caller, workspace, input);
+  }
+
+  #sendMessage(
+    caller: Caller,
+    workspace: string,
+    input: unknown,
+    enqueue?: () => void,
+  ): { status: 200 | 201; body: MessageAccepted } {
     const log = this.#workspaceFor(caller, workspace);
+    // Pairing workspaces keep their history after unlinking, but never accept new mail
+    // without an approved link. The ordinary workspace API must enforce this too.
+    if (caller.kind === 'agent') {
+      const own = this.#registry.quorumIdOfAgent(caller.id);
+      if (
+        own &&
+        !this.#registry
+          .linksInWorkspace(workspace)
+          .some((link) => link.local === own.id && link.state === 'linked')
+      ) {
+        throw new DomainError(
+          'forbidden',
+          'pairing.not_linked',
+          'This session is no longer linked in this workspace.',
+          'Ask your human to link the sessions again.',
+        );
+      }
+    }
     const heartbeat =
       typeof input === 'object' &&
       input !== null &&
@@ -1497,7 +1524,10 @@ export class Quorum {
       }
     });
 
-    this.#commit(() => ({ result: undefined, events: [[workspace, outcome.event]] }));
+    this.#commit(() => {
+      enqueue?.();
+      return { result: undefined, events: [[workspace, outcome.event]] };
+    });
     const stored = log.byId(outcome.envelope.id) as StoredMessage;
     return {
       status: 201,
@@ -1717,6 +1747,12 @@ export class Quorum {
     return row;
   }
 
+  /** An inactive identity cannot acquire new links or receive mail through federation. */
+  #activeId(id: string): QuorumIdRow | undefined {
+    const row = this.#registry.quorumId(id);
+    return row && this.#registry.agent(row.agent)?.status === 'active' ? row : undefined;
+  }
+
   /** How a session is shown to the sessions linked to it: tool, machine, folder, window label. */
   #face(row: QuorumIdRow): PeerSession {
     const agent = this.#registry.agent(row.agent);
@@ -1750,6 +1786,19 @@ export class Quorum {
     if (known) {
       const agent = this.#registry.agent(known.agent);
       if (!agent) throw new Error(`Quorum ID ${known.id} has no agent`);
+      const platform = process.platform === 'win32' ? 'win32' : 'posix';
+      if (
+        agent.owner !== caller.id ||
+        pathKey(known.root, platform) !== pathKey(root, platform) ||
+        agent.status !== 'active'
+      ) {
+        throw new DomainError(
+          'forbidden',
+          'pairing.identity_mismatch',
+          'This vendor session is already bound to another owner, folder, or inactive identity.',
+          'Resume the original session in its attached folder, or start a new session.',
+        );
+      }
       const ref = { id: agent.id, address: agent.address };
       const attachment = this.#registry.attachmentOfAgent(agent.id)?.id;
       if (!body.credentials) {
@@ -1902,6 +1951,7 @@ export class Quorum {
     const now = this.#now();
     const target = this.#registry.quorumId(to);
     if (target) {
+      if (!this.#activeId(to)) throw this.#noSuchId(to);
       // Both sessions on this laptop: no relay, both rows here.
       if (this.#registry.isBlocked(target.id, own.id)) throw this.#noSuchId(to);
       const home = this.#home();
@@ -1943,6 +1993,12 @@ export class Quorum {
     const outboxId = this.#ids.id('event').replace(/^ev_/, 'fo_');
     // Re-read after the await: everything from here to the commit runs synchronously.
     const previous = this.#registry.link(own.id, to);
+    if (previous?.state === 'linked') return { state: 'linked' };
+    if (previous?.state === 'pending') {
+      this.allowLinks(caller, { id: to });
+      return { state: 'linked' };
+    }
+    if (!this.#activeId(own.id)) throw this.#noSuchId(to);
     this.#commit(() => {
       this.#registry.unblock(own.id, to);
       this.#registry.upsertLink(
@@ -2182,7 +2238,13 @@ export class Quorum {
   #linkFor(links: readonly LinkRow[], recipient: string): LinkRow | undefined {
     const given = recipient.trim();
     const label = recipientFor(given);
-    return links.find((l) => {
+    // IDs and full agent addresses are unambiguous even if another peer chose a matching label.
+    const exact = links.find((l) => {
+      const agent = l.remote_agent ? this.#registry.agent(l.remote_agent) : undefined;
+      return l.remote === given || agent?.address === given;
+    });
+    if (exact) return exact;
+    const matches = links.filter((l) => {
       const agent = l.remote_agent ? this.#registry.agent(l.remote_agent) : undefined;
       const candidates = [
         l.remote,
@@ -2192,6 +2254,15 @@ export class Quorum {
       ];
       return candidates.includes(given) || candidates.includes(label);
     });
+    if (matches.length > 1) {
+      throw new DomainError(
+        'invalid',
+        'message.ambiguous_recipient',
+        `${given} matches more than one linked session.`,
+        `Use the Quorum ID: ${matches.map((l) => l.remote).join(', ')}.`,
+      );
+    }
+    return matches[0];
   }
 
   /** `quorum_send` to linked sessions: one message per link, each in that link's workspace. */
@@ -2234,35 +2305,38 @@ export class Quorum {
         ...(body.reply_to ? { reply_to: body.reply_to } : {}),
         ...(body.refs ? { refs: body.refs } : {}),
       };
-      this.sendMessage(caller, link.workspace, envelope);
-      if (link.remote_home !== home) {
-        const now = this.#now();
-        this.#commit(() => {
-          this.#registry.enqueueOutbox({
-            id: this.#ids.id('event').replace(/^ev_/, 'fo_'),
-            remote_home: link.remote_home,
-            kind: 'message',
-            payload: JSON.stringify({
-              from: own.id,
-              to: link.remote,
-              message: {
-                id: envelope.id,
-                type: envelope.type,
-                type_version: envelope.type_version,
-                created_at: envelope.created_at,
-                body: envelope.body,
-                ...(body.thread ? { thread: body.thread } : {}),
-                ...(body.reply_to ? { reply_to: body.reply_to } : {}),
-                ...(body.refs ? { refs: body.refs } : {}),
-              },
-            }),
-            attempts: 0,
-            next_at: now,
-            created_at: now,
-          });
-          return { result: undefined, events: [] };
-        });
-      }
+      this.#sendMessage(
+        caller,
+        link.workspace,
+        envelope,
+        link.remote_home !== home
+          ? () => {
+              const now = this.#now();
+              this.#registry.enqueueOutbox({
+                id: this.#ids.id('event').replace(/^ev_/, 'fo_'),
+                remote_home: link.remote_home,
+                kind: 'message',
+                payload: JSON.stringify({
+                  from: own.id,
+                  to: link.remote,
+                  message: {
+                    id: envelope.id,
+                    type: envelope.type,
+                    type_version: envelope.type_version,
+                    created_at: envelope.created_at,
+                    body: envelope.body,
+                    ...(body.thread ? { thread: body.thread } : {}),
+                    ...(body.reply_to ? { reply_to: body.reply_to } : {}),
+                    ...(body.refs ? { refs: body.refs } : {}),
+                  },
+                }),
+                attempts: 0,
+                next_at: now,
+                created_at: now,
+              });
+            }
+          : undefined,
+      );
       sent.push({ to: link.remote, id: envelope.id, workspace: link.workspace });
     }
     this.#options.federation?.queued();
@@ -2274,10 +2348,11 @@ export class Quorum {
   /** Another server asks one of our sessions to link. */
   receiveLink(peer: string, input: unknown): { state: LinkState } {
     const { from, to } = this.#check('federatedLink', input);
-    const target = this.#registry.quorumId(to);
+    const target = this.#activeId(to);
     if (
       !target ||
       !checkQuorumId(from.id, peer, from.salt) ||
+      (this.#registry.mirrorAgent(from.id)?.status ?? 'active') !== 'active' ||
       this.#registry.isBlocked(target.id, from.id)
     ) {
       throw this.#noSuchId(to);
@@ -2340,9 +2415,16 @@ export class Quorum {
   /** Another server says its session accepted ours. */
   receiveAccept(peer: string, input: unknown): { state: LinkState } {
     const { from, to } = this.#check('federatedLink', input);
-    const own = this.#registry.quorumId(to);
+    const own = this.#activeId(to);
     const link = own && this.#registry.link(own.id, from.id);
-    if (!own || !link || link.remote_home !== peer || !checkQuorumId(from.id, peer, from.salt)) {
+    if (
+      !own ||
+      !link ||
+      link.state === 'pending' ||
+      link.remote_home !== peer ||
+      !checkQuorumId(from.id, peer, from.salt) ||
+      (this.#registry.mirrorAgent(from.id)?.status ?? 'active') !== 'active'
+    ) {
       throw this.#noSuchId(to);
     }
     if (link.state === 'linked') return { state: 'linked' };
@@ -2375,13 +2457,14 @@ export class Quorum {
   receiveMessage(peer: string, input: unknown): { id: string } {
     const { from, to, message } = this.#check('federatedMessage', input);
     const link = this.#registry.link(to, from);
-    const own = this.#registry.quorumId(to);
+    const own = this.#activeId(to);
     const local = own && this.#registry.agent(own.agent);
     const mirror = link?.remote_agent ? this.#registry.agent(link.remote_agent) : undefined;
     if (!link || link.state !== 'linked' || link.remote_home !== peer || !link.workspace) {
       throw this.#noSuchId(to);
     }
-    if (!local || !mirror) throw this.#noSuchId(to);
+    if (!local || mirror?.status !== 'active') throw this.#noSuchId(to);
+    this.#messageLimit.take(mirror.id, 'messages');
     const log = this.#logs.get(link.workspace);
     if (!log) throw this.#noSuchId(to);
     const window = this.#registry.latestSessionOf(mirror.id);

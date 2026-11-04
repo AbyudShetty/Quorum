@@ -72,6 +72,11 @@ export interface PairedSession {
   shown?: string[];
   /** When the idle session was woken for link requests (ms), for the hourly cap. */
   asked?: number[];
+  /**
+   * IDs this session asked to link with, until the person is told the other side accepted (the
+   * requester otherwise never learned it, seen live 2026-10-22).
+   */
+  asking?: string[];
 }
 
 const pairingPath = (dataDir: string): string => join(dataDir, 'hooks', 'pairing.json');
@@ -100,6 +105,24 @@ export const savePairing = async (
 ): Promise<void> => {
   await mkdir(join(dataDir, 'hooks'), { recursive: true, mode: 0o700 });
   await writePrivateFile(pairingPath(dataDir), `${JSON.stringify(sessions)}\n`);
+};
+
+/**
+ * Change one session's entry: read the file, change, write at once. Hooks run at the same moment (the
+ * watcher checks every 2 s), so a copy read at a hook's start must not be written back at its end.
+ */
+const updateSession = async <T>(
+  dataDir: string,
+  key: string,
+  change: (session: PairedSession) => T,
+): Promise<T | undefined> => {
+  const sessions = await loadPairing(dataDir);
+  const session = sessions[key];
+  if (!session) return undefined;
+  const before = JSON.stringify(session);
+  const result = change(session);
+  if (JSON.stringify(session) !== before) await savePairing(dataDir, sessions);
+  return result;
 };
 
 /** The paired session behind a hook's input, if this session joined Quorum. */
@@ -289,6 +312,13 @@ export const runQuorumCommand = async (context: CommandContext): Promise<string>
     if (target === session.id) return "Quorum: that is this session's own ID.";
     try {
       const outcome = await client.requestLink(target ?? '');
+      if (outcome.state !== 'linked' && target) {
+        // Tell the person when the other side accepts (takeLinkNews).
+        const key = sessionKey(vendor, context.input) ?? '';
+        await updateSession(context.dataDir, key, (s) => {
+          if (!s.asking?.includes(target)) s.asking = [...(s.asking ?? []), target];
+        });
+      }
       return {
         requested: `Quorum: asked ${target ?? ''} to link with this session (${session.id}). You will see when their person allows it.`,
         queued: `Quorum: ${target ?? ''} is on a laptop that is not reachable right now; the request goes out when it is back.`,
@@ -378,6 +408,64 @@ export const takeRequestWake = async (
   session.shown = [...(session.shown ?? []), ...fresh.map((l) => l.id)];
   await savePairing(dataDir, sessions);
   return fresh;
+};
+
+/**
+ * The links this session asked for that the other side has accepted since the person was last told.
+ * Requests made before `asking` existed are picked up from their `requested` state. With `take`,
+ * they are marked told.
+ */
+export const takeLinkNews = async (
+  dataDir: string,
+  key: string,
+  links: readonly LinkInfo[],
+  options: { take?: boolean } = {},
+): Promise<LinkInfo[]> =>
+  (await updateSession(dataDir, key, (session) => {
+    const asking = [...(session.asking ?? [])];
+    for (const l of links) if (l.state === 'requested' && !asking.includes(l.id)) asking.push(l.id);
+    const accepted = links.filter((l) => l.state === 'linked' && asking.includes(l.id));
+    const told = options.take === false ? [] : accepted.map((l) => l.id);
+    const left = asking.filter((id) => !told.includes(id));
+    if (left.length > 0) session.asking = left;
+    else Reflect.deleteProperty(session, 'asking');
+    return accepted;
+  })) ?? [];
+
+/** The line that tells the person a link they asked for is made. */
+export const acceptedNotice = (links: readonly LinkInfo[]): string =>
+  links
+    .map((l) => `Quorum: ${linkLine(l)} accepted your link request. Your agent can now message it.`)
+    .join('\n');
+
+/** What the agent is told when a link it asked for is made: tell the person. */
+export const acceptedAsk = (links: readonly LinkInfo[]): string =>
+  [
+    ...links.map(
+      (l) =>
+        `Quorum: ${linkLine(l)} accepted this session's link request; the two are now linked and can message each other (quorum_send).`,
+    ),
+    'Tell your human this in one line, then carry on with what you were doing.',
+  ].join('\n');
+
+/**
+ * At a prompt or session start: the requests not yet shown in this run (marked shown) and the links
+ * accepted since the person was last told (marked told). Read and written at once (updateSession).
+ */
+export const takePromptNews = async (
+  dataDir: string,
+  key: string,
+  links: readonly LinkInfo[],
+  options: { restart?: boolean } = {},
+): Promise<{ requests: LinkInfo[]; accepted: LinkInfo[] }> => {
+  const requests =
+    (await updateSession(dataDir, key, (session) => {
+      if (options.restart) session.shown = []; // shown once per run (again after a resume)
+      const fresh = newRequests(session, links);
+      if (fresh.length > 0) session.shown = [...(session.shown ?? []), ...fresh.map((l) => l.id)];
+      return fresh;
+    })) ?? [];
+  return { requests, accepted: await takeLinkNews(dataDir, key, links) };
 };
 
 /** Requests waiting for this session that the person has not been shown yet in this run. */

@@ -495,9 +495,24 @@ export class Registry {
 
   dueOutbox(now: string, limit = 50): OutboxRow[] {
     return this.#all(
-      'SELECT * FROM federation_outbox WHERE next_at <= ? ORDER BY created_at LIMIT ?',
+      // Only each destination's oldest item may leave. A retrying request/accept must not be
+      // overtaken by a later message or unlink, including when their timestamps are equal or the
+      // wall clock moved backwards. SQLite rowid records insertion order across restarts.
+      `SELECT current.* FROM federation_outbox AS current
+       WHERE current.next_at <= ? AND NOT EXISTS (
+         SELECT 1 FROM federation_outbox AS earlier
+         WHERE earlier.remote_home = current.remote_home AND earlier.rowid < current.rowid
+       ) ORDER BY current.rowid LIMIT ?`,
       now,
       limit,
+    );
+  }
+
+  /** The next item for one destination, including an item waiting for its retry time. */
+  outboxHead(remoteHome: string): OutboxRow | undefined {
+    return this.#get(
+      'SELECT * FROM federation_outbox WHERE remote_home = ? ORDER BY rowid LIMIT 1',
+      remoteHome,
     );
   }
 

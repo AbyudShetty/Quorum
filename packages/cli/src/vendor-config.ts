@@ -11,7 +11,12 @@ import { access, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promis
 import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findGit } from '@quorum/adapter-mcp';
-import { HOOK_EVENT_NAMES, type HookEvent, HOOK_EVENTS } from '@quorum/adapter-hooks';
+import {
+  HOOK_EVENT_NAMES,
+  type HookEvent,
+  HOOK_EVENTS,
+  WATCH_HOOK_TIMEOUT_S,
+} from '@quorum/adapter-hooks';
 
 /**
  * How vendors start `quorum`. Two forms:
@@ -343,6 +348,7 @@ export const writeVendorConfig = async (
           type: 'command',
           ...execForm(command, ['hook', 'claude-code', 'watch', '--attachment', attachment]),
           asyncRewake: true,
+          timeout: WATCH_HOOK_TIMEOUT_S,
         },
       })),
       dataDir ? dataDirDenyRules(dataDir) : [],

@@ -37,6 +37,7 @@ import {
 } from '@quorum/local';
 import {
   type AttachmentCreated,
+  type LinkInfo,
   type QuorumIdCreated,
   MESSAGE_TYPES,
   type MessageType,
@@ -89,9 +90,12 @@ import {
   type PairedSession,
   parseQuorumCommand,
   requestAsk,
+  acceptedAsk,
+  acceptedNotice,
   requestNotice,
   runQuorumCommand,
-  savePairing,
+  takeLinkNews,
+  takePromptNews,
   takeRequestWake,
   withContext,
   withNotice,
@@ -1561,13 +1565,15 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
         requests: {
           waiting: async () => {
             const session = (await loadPairing(dataDir))[key];
+            if (wakeOff || !session) return false;
             const links = (await target.client.links()).links;
-            return !wakeOff && !!session && newRequests(session, links).length > 0;
+            if (newRequests(session, links).length > 0) return true;
+            // Or a link this session asked for was accepted.
+            return (await takeLinkNews(dataDir, key, links, { take: false })).length > 0;
           },
           take: async () => {
             const links = (await target.client.links()).links;
-            const asking = await takeRequestWake(dataDir, key, links, { wakeOff });
-            return asking.length > 0 ? requestAsk('codex', asking) : undefined;
+            return wakeNews('codex', dataDir, key, links, wakeOff);
           },
         },
       }).catch(() => undefined);
@@ -1800,8 +1806,29 @@ const watchRefresh = async (
 ): Promise<{ workspaces: string[]; wake?: string }> => {
   const links = (await client.links()).links;
   const workspaces = linkedAttachment(saved, links).workspaces;
-  const asking = await takeRequestWake(dataDir, key, links, { wakeOff: saved.wake === 'off' });
-  return asking.length > 0 ? { workspaces, wake: requestAsk(vendor, asking) } : { workspaces };
+  const wake = await wakeNews(vendor, dataDir, key, links, saved.wake === 'off');
+  return wake ? { workspaces, wake } : { workspaces };
+};
+
+/**
+ * The text to wake an idle session with, if any: someone asks to link (open the dialog), or a link
+ * this session asked for was accepted. Never when the session's wake mode is off (INV-29): then the
+ * next prompt shows them.
+ */
+const wakeNews = async (
+  vendor: HookVendor,
+  dataDir: string,
+  key: string,
+  links: readonly LinkInfo[],
+  wakeOff: boolean,
+): Promise<string | undefined> => {
+  const asking = await takeRequestWake(dataDir, key, links, { wakeOff });
+  const accepted = await takeLinkNews(dataDir, key, links, { take: !wakeOff });
+  const parts = [
+    ...(asking.length > 0 ? [requestAsk(vendor, asking)] : []),
+    ...(!wakeOff && accepted.length > 0 ? [acceptedAsk(accepted)] : []),
+  ];
+  return parts.length > 0 ? parts.join('\n\n') : undefined;
 };
 
 /**
@@ -1900,16 +1927,18 @@ const pairingHook = async (
   });
   let stdout = result.stdout;
   if (event === 'session-start' || event === 'prompt') {
-    // Requests waiting for this session: shown once per run (again after a resume).
-    if (event === 'session-start') session.shown = [];
-    const fresh = newRequests(session, links);
-    if (fresh.length > 0) {
-      stdout = withNotice(vendor, HOOK_EVENT_NAMES[event], stdout, requestNotice(vendor, fresh));
+    // Requests waiting for this session: shown once per run (again after a resume). And links it
+    // asked for that were accepted since the person was last told.
+    const news = await takePromptNews(dataDir, key, links, { restart: event === 'session-start' });
+    const eventName = HOOK_EVENT_NAMES[event];
+    if (news.requests.length > 0) {
+      stdout = withNotice(vendor, eventName, stdout, requestNotice(vendor, news.requests));
       // The agent opens Quorum's dialog for the person (INV-34: only they can answer it).
-      stdout = withContext(HOOK_EVENT_NAMES[event], stdout, requestAsk(vendor, fresh));
-      session.shown = [...(session.shown ?? []), ...fresh.map((l) => l.id)];
+      stdout = withContext(eventName, stdout, requestAsk(vendor, news.requests));
     }
-    await savePairing(dataDir, sessions);
+    if (news.accepted.length > 0) {
+      stdout = withNotice(vendor, eventName, stdout, acceptedNotice(news.accepted));
+    }
   }
   if (stdout) env.out(`${stdout}\n`);
   return 0;
@@ -1919,7 +1948,7 @@ const pairingHook = async (
 const setupMarker = (dataDir: string): string => join(dataDir, 'setup.json');
 
 /** Raised whenever setup writes something new, so an updated Quorum sets itself up again. */
-const SETUP_REVISION = 2;
+const SETUP_REVISION = 3;
 
 /**
  * `quorum setup [--quiet]` (D-20, PAIRING.md §4): Quorum in every Claude Code and Codex session.

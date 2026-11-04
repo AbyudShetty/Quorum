@@ -354,4 +354,83 @@ describe('waking an idle session for requests and new links (D-21)', () => {
     expect(mail.code).toBe(2);
     expect(mail.text).toContain('wake up, A');
   }, 60_000);
+
+  /** B's Codex session joins; its ID, once the phone book has it. */
+  const joinB = async (session: string) => {
+    const out = await hook(b, 'codex', 'prompt', {
+      session_id: session,
+      cwd: folderB,
+      prompt: '$quorum-id',
+    });
+    const id = /QRM-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}/.exec(String(out?.reason))?.[0] ?? '';
+    await until(
+      async () => (await fetch(`${relay.url.replace('ws://', 'http://')}/v1/lookup/${id}`)).status,
+      (s) => s === 200,
+      'B in the phone book',
+    );
+    return id;
+  };
+  /** B's person allows by typing (retried until the request has reached B). */
+  const allowAtB = (session: string) =>
+    until(
+      () =>
+        hook(b, 'codex', 'prompt', { session_id: session, cwd: folderB, prompt: '$quorum-allow' }),
+      (o) => String(o?.reason).includes('Quorum: allowed.'),
+      'allowed at B',
+    );
+  const attachFromA = (session: string, id: string) => ({
+    session_id: session,
+    cwd: folderA,
+    hook_event_name: 'UserPromptExpansion',
+    command_name: 'quorum-attach',
+    command_args: id,
+  });
+
+  it('the person who asked to link is told when it is accepted: the idle session wakes, once', async () => {
+    // Seen live (2026-10-22): A attached, B allowed, and A never learned it.
+    const idB = await joinB('codex-b-accept');
+    const watching = watch(a, attachFromA('claude-a-accept', idB));
+    const asked = await hook(a, 'claude-code', 'command', attachFromA('claude-a-accept', idB));
+    expect(String(asked?.reason)).toContain('You will see when their person allows it');
+    await allowAtB('codex-b-accept');
+
+    const woke = await watching;
+    expect(woke.code).toBe(2);
+    expect(woke.text).toContain(`(${idB}) accepted this session's link request`);
+    expect(woke.text).toContain('Tell your human this in one line');
+    // Told once: the next prompt does not repeat it.
+    expect(
+      await hook(a, 'claude-code', 'prompt', {
+        session_id: 'claude-a-accept',
+        cwd: folderA,
+        prompt: 'ok',
+      }),
+    ).toBeUndefined();
+    // The person who allowed is not told that someone accepted.
+    const atB = await hook(b, 'codex', 'prompt', {
+      session_id: 'codex-b-accept',
+      cwd: folderB,
+      prompt: 'next',
+    });
+    expect(JSON.stringify(atB ?? {})).not.toContain('accepted');
+  }, 60_000);
+
+  it('without a watcher, the next prompt tells the person who asked', async () => {
+    const idB = await joinB('codex-b-accept-2');
+    await hook(a, 'claude-code', 'command', attachFromA('claude-a-accept-2', idB));
+    await allowAtB('codex-b-accept-2');
+    const told = await until(
+      () =>
+        hook(a, 'claude-code', 'prompt', {
+          session_id: 'claude-a-accept-2',
+          cwd: folderA,
+          prompt: 'anything?',
+        }),
+      (o) => String(o?.systemMessage).includes('accepted your link request'),
+      'accepted notice at A',
+    );
+    expect(String(told?.systemMessage)).toMatch(
+      new RegExp(`^Quorum: codex@laptop-b - .*\\(${idB}\\) accepted your link request`),
+    );
+  }, 60_000);
 });

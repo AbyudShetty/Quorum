@@ -3,7 +3,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createIdFactory } from '@quorum/core';
+import { createIdFactory, serverFingerprint } from '@quorum/core';
 import { readBootstrapCode } from '@quorum/local';
 import type { FastifyInstance } from 'fastify';
 import {
@@ -14,6 +14,7 @@ import {
   loadOrCreateInstance,
   openDatabase,
   Quorum,
+  type QuorumOptions,
   Registry,
   SqliteEventStore,
 } from '../src/index.js';
@@ -56,6 +57,7 @@ export const startHarness = async (
     agentOnlyMessagesBeforePause?: number;
     dir?: string;
     offset?: { ms: number };
+    federation?: QuorumOptions['federation'];
   } = {},
 ): Promise<Harness> => {
   const dir = overrides.dir ?? mkdtempSync(join(tmpdir(), 'quorum-server-'));
@@ -76,6 +78,8 @@ export const startHarness = async (
     machine: 'lab',
     ownerName: 'owner',
     clock,
+    home: serverFingerprint(instance.publicKey),
+    ...(overrides.federation ? { federation: overrides.federation } : {}),
     ...(overrides.messagesPerMinute ? { messagesPerMinute: overrides.messagesPerMinute } : {}),
     ...(overrides.wakesPerHour ? { wakesPerHour: overrides.wakesPerHour } : {}),
     ...(overrides.agentOnlyMessagesBeforePause

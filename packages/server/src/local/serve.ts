@@ -221,8 +221,8 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
         ...(options.federationIntervalMs ? { intervalMs: options.federationIntervalMs } : {}),
       });
       federation = started;
-      cleanups.push(() => {
-        started.close();
+      cleanups.push(async () => {
+        await started.close();
         link.close();
       });
       return started;
@@ -280,6 +280,9 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
       timers.push(
         setInterval(
           () => {
+            // The first ID may be created after startup. Other laptops cannot restart this
+            // server, so the default idle policy must follow its current pairing state.
+            if (options.idleShutdownMs === undefined && quorum.quorumIds().length > 0) return;
             if (quorum.notifier.size === 0 && Date.now() - lastActivity >= idleMs) void close();
           },
           Math.min(60_000, idleMs),

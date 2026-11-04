@@ -29,6 +29,8 @@ Typing works too: `/quorum-allow [<id>]` (`$quorum-allow` in Codex), the sixth c
 
 Requests wake an idle session at most 5 times an hour, and never when wake mode is off. The person still sees every request at the next prompt.
 
+**Being told.** The person who attached is told once when the other side allows: an idle Claude Code session (or Codex, through its waker) wakes and says so in one line; otherwise the next prompt shows `Quorum: codex@laptop-b - ~\proj\web - 2 (QRM-…) accepted your link request.` Never a wake when wake mode is off.
+
 **Groups.** Links are between two sessions and are all equal. A session linked to several others is the "orchestrator" shape; sessions all linked to each other are peers. Who leads is said by the humans in their prompts, not decided by the agents (plan §4.1).
 
 ## 2. Why the commands are safe

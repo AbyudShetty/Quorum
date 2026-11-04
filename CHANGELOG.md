@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Phase 1b server pairing authorization: a remote requester cannot approve its own pending request;
+  detached links cannot send through the ordinary workspace API; existing session identities require
+  the original owner and folder; revoked local and mirror agents cannot resume federation. Ambiguous
+  peer aliases are refused and federated messages obey per-agent limits (INV-7/12/13/15/30/34).
+- Cross-machine sends commit the local message and delivery queue together. Federation keeps each
+  destination in order through retries, shares concurrent attempts, and settles active sends before
+  closing storage (INV-8/20/34). A server joined after startup stays up under the default idle policy;
+  relay shutdown releases connections and stalled TLS handshakes time out (INV-15/33). Regression
+  tests and review notes: `docs/PHASE_1B_HARDENING.md`; Track B follow-ups are drafted separately.
+
 ### Added (Phase 1b)
 
 - **`docs/NETWORKING_PROPOSAL.md` (D-5, proposal only):** layered transport (same network, hole punching, relay), signed address records for re-pairing, the terms of the free tunnel services, the spike plan and a monitoring plan for the hosted relay. Nothing is decided and no code changes.
@@ -100,6 +112,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - **A peer's folder is cut to 160 characters where it is shown** (link request, wake text, `quorum_requests`, `quorum_status`), through one shared `peerLine`, so a stranger cannot fill a prompt with text.
 
 ### Fixed
+
+- **Idle sessions mostly did not wake for mail (seen live, 2026-10-22):** two causes. (1) The watcher kept its "I am the watcher" mark in the shared hook state file, and the Stop hook, which Claude Code runs at the same moment, wrote back its own older copy of that file, erasing the mark; the watcher then stood down within seconds. The mark now has its own file per session (`<data>/hooks/watchers/`). (2) Claude Code enforces a hook's `timeout` on `asyncRewake` hooks, 600 s by default, so a watcher was killed 10 minutes after a turn ended and later mail never woke the session. The watcher's hook entries now have an 8-hour-and-a-minute timeout, matching its own lifetime; `quorum setup` writes it (setup revision 3). A regression test reproduces the erased mark.
+- **The person who attached never learned that the other side allowed (seen live, 2026-10-22):** a session now remembers the IDs it asked to link with; when one is linked, an idle session wakes once to say so (Claude Code's watcher, Codex's waker), or the next prompt shows `… accepted your link request`. Not for links the person allowed themselves, and never a wake with wake mode off (INV-29). Pairing state is now read and written in one step per change, so hooks running at once no longer undo each other's marks.
 
 - **Text from another laptop could carry line breaks into an agent's view (INV-9, D-20):** the folder a session shows to another laptop (`path` in a session face and in the link list) was any string up to 4096 characters, and it is shown to the receiving agent and person in the link request, the wake text and the `quorum_requests` dialog before any link exists. The schema now refuses control characters (line breaks, escapes), invisible and direction-changing format characters and line/paragraph separators, so a stranger's request with such a folder is rejected; a laptop replaces them with `?` in its own folder when it sends. Ordinary folders (spaces, accents, Windows paths) are unaffected. `openapi.v1.json` regenerated.
 - **Idle-wake watcher could miss mail (Track B):** a watcher that found nothing at start, then opened its stream, never saw mail that arrived in between (the stream does not replay), and a trigger that arrived during a running check joined that check instead of starting a new one. It now re-checks on its first ticks and every few ticks, and runs a check again when a trigger arrived during one. The pairing-commands wake test failed about half the runs before; 0 of 12 after.

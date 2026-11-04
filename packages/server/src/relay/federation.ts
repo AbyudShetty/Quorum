@@ -20,13 +20,16 @@ export interface FederationOptions {
   intervalMs?: number;
   /** Base fetch for the phone book lookups (tests). */
   fetch?: typeof fetch;
+  /** Server-to-server transport seam for tests. Defaults to TLS with pinned server keys. */
+  transport?: typeof fetch;
   now?: () => Date;
 }
 
 export interface Federation extends FederationPort {
   /** Send everything that is due now. */
   drain(): Promise<void>;
-  close(): void;
+  /** Abort and settle active sends before the database is closed. Queued items stay durable. */
+  close(): Promise<void>;
 }
 
 type Outcome = 'delivered' | 'refused' | 'unreachable';
@@ -35,16 +38,32 @@ type Outcome = 'delivered' | 'refused' | 'unreachable';
 const backoffMs = (attempts: number): number => Math.min(5_000 * 2 ** attempts, 600_000);
 
 export const startFederation = (options: FederationOptions): Federation => {
-  const send = createQuorumFetch(options.fetch ?? fetch, { identity: options.identity });
+  const send =
+    options.transport ?? createQuorumFetch(options.fetch ?? fetch, { identity: options.identity });
   const now = options.now ?? (() => new Date());
   const relayHost = new URL(options.relay).host;
-  const inFlight = new Set<string>();
+  const inFlight = new Map<string, Promise<Outcome>>();
+  const stopping = new AbortController();
   let closed = false;
+  // Shutdown can run during a transport await; read through a call to avoid stale narrowing.
+  const isClosed = () => closed;
 
-  const deliver = async (row: OutboxRow): Promise<Outcome> => {
-    if (inFlight.has(row.id)) return 'unreachable';
-    inFlight.add(row.id);
-    try {
+  const deliver = (id: string): Promise<Outcome> => {
+    if (closed) return Promise.resolve('unreachable');
+    const active = inFlight.get(id);
+    if (active) return active;
+    // Re-read rather than use a drain's stale snapshot: a concurrent flush may have removed it.
+    const row = options.registry.outboxItem(id);
+    if (!row) return Promise.resolve('delivered');
+    if (
+      row.next_at > now().toISOString() ||
+      options.registry.outboxHead(row.remote_home)?.id !== row.id
+    ) {
+      return Promise.resolve('unreachable');
+    }
+    // Put the promise in the map before starting any I/O, so flush and drain share one attempt.
+    const attempt = Promise.resolve().then(async (): Promise<Outcome> => {
+      if (isClosed()) return 'unreachable';
       let status: number;
       try {
         const response = await send(
@@ -53,7 +72,7 @@ export const startFederation = (options: FederationOptions): Federation => {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: row.payload,
-            signal: AbortSignal.timeout(20_000),
+            signal: AbortSignal.any([stopping.signal, AbortSignal.timeout(20_000)]),
           },
         );
         status = response.status;
@@ -61,14 +80,18 @@ export const startFederation = (options: FederationOptions): Federation => {
       } catch {
         status = 0;
       }
+      // A send can finish while shutdown is awaiting it. Keep its durable row for replay rather
+      // than touching a database that the caller may be about to close (INV-20).
+      if (isClosed()) return 'unreachable';
       if (status >= 200 && status < 300) {
         options.registry.outboxDelivered(row.id);
         return 'delivered';
       }
       if (status === 404 || status === 400) {
         // No such ID there (or blocked), or a request that will never be valid: give up.
-        options.registry.outboxDelivered(row.id);
+        // If updating the service fails, leave the row available for a later, idempotent retry.
         options.onRefused?.(row);
+        options.registry.outboxDelivered(row.id);
         return 'refused';
       }
       options.registry.outboxRetry(
@@ -76,61 +99,57 @@ export const startFederation = (options: FederationOptions): Federation => {
         new Date(now().getTime() + backoffMs(row.attempts)).toISOString(),
       );
       return 'unreachable';
-    } finally {
+    });
+    const tracked = attempt.finally(() => {
       inFlight.delete(row.id);
-    }
+    });
+    inFlight.set(row.id, tracked);
+    return tracked;
   };
 
-  // One drain at a time; a call while one runs makes it look again before it stops.
-  let running = false;
-  let again = false;
-  /** Read through a call: `drain` calls during the awaits set it, which narrowing cannot see. */
-  const lookAgain = () => again;
-  const drain = async (): Promise<void> => {
-    if (running) {
-      again = true;
-      return;
-    }
-    running = true;
-    try {
-      do {
-        again = false;
-        for (;;) {
-          if (closed) return;
-          const due = options.registry
-            .dueOutbox(now().toISOString())
-            .filter((r) => !inFlight.has(r.id));
-          if (due.length === 0) break;
-          // In order, so a link's answer never overtakes its request. Items that could not be
-          // delivered are due again later, so this ends when nothing is due now.
-          for (const row of due) await deliver(row);
-        }
-      } while (lookAgain());
-    } finally {
-      running = false;
-    }
+  // Concurrent callers await the same drain. Destinations may progress in parallel, while every
+  // individual destination remains ordered. Bound each batch to eight connections.
+  let running: Promise<void> | undefined;
+  const drain = (): Promise<void> => {
+    if (closed) return Promise.resolve();
+    if (running) return running;
+    const work = async () => {
+      for (;;) {
+        if (closed) return;
+        const due = options.registry.dueOutbox(now().toISOString(), 8);
+        if (due.length === 0) break;
+        // Include in-flight heads: deliver joins their promises rather than skipping to a later
+        // item. New rows queued during these awaits are found on the next iteration.
+        await Promise.all(due.map((row) => deliver(row.id)));
+      }
+    };
+    running = work().finally(() => {
+      running = undefined;
+    });
+    return running;
   };
 
-  const timer = setInterval(() => {
-    void drain();
-  }, options.intervalMs ?? 15_000);
+  const backgroundDrain = () => {
+    // A storage/service error leaves the item queued. Background callbacks must not reject out
+    // of the event loop and crash the server; the next timer retries it.
+    void drain().catch(() => undefined);
+  };
+
+  const timer = setInterval(backgroundDrain, options.intervalMs ?? 15_000);
   timer.unref();
 
   return {
     lookup: (id) => lookupQuorumId(options.relay, id, options.fetch ?? fetch),
-    flush: async (outboxId) => {
-      const row = options.registry.outboxItem(outboxId);
-      return row ? deliver(row) : 'delivered';
-    },
+    flush: deliver,
     queued: () => {
-      setImmediate(() => {
-        void drain();
-      });
+      if (!closed) setImmediate(backgroundDrain);
     },
     drain,
-    close: () => {
+    close: async () => {
       closed = true;
       clearInterval(timer);
+      stopping.abort();
+      await Promise.allSettled([...(running ? [running] : []), ...inFlight.values()]);
     },
   };
 };

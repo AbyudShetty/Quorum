@@ -20,6 +20,8 @@ export interface RelayHomeOptions {
   maxConnections?: number;
   /** New connections per other-machine address per minute. Default 60. */
   perClientPerMinute?: number;
+  /** Maximum time to finish TLS after a relay connection opens. Default 10 s. */
+  handshakeTimeoutMs?: number;
   /** This server's Quorum IDs (D-20), registered in the relay's phone book on every connect. */
   quorumIds?: () => readonly { id: string; salt: string }[];
 }
@@ -60,7 +62,9 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
   let backoffMs = 1000;
   let retry: NodeJS.Timeout | undefined;
   let keepalive: NodeJS.Timeout | undefined;
-  const waiters = new Set<() => void>();
+  const waiters = new Set<(error?: Error) => void>();
+  const sockets = new Set<RelaySocket>();
+  const tlsSockets = new Set<TLSSocket>();
 
   const allowed = (client: string): boolean => {
     const now = Date.now();
@@ -86,11 +90,24 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
       counted = false;
     };
     const ws = openRelaySocket(`${options.relay}/v1/accept/${home}/${conn}`);
-    ws.on('close', done);
+    sockets.add(ws);
+    const timeout = setTimeout(() => {
+      ws.terminate();
+    }, options.handshakeTimeoutMs ?? 10_000);
+    timeout.unref();
+    ws.on('close', () => {
+      clearTimeout(timeout);
+      sockets.delete(ws);
+      done();
+    });
     ws.on('error', () => {
       // `close` follows
     });
     ws.on('open', () => {
+      if (closed) {
+        ws.terminate();
+        return;
+      }
       // A calling server presents its own key; people's tools present none (both are fine).
       const tls = new TLSSocket(webSocketStream(ws), {
         isServer: true,
@@ -99,12 +116,22 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
         rejectUnauthorized: false,
       });
       clients.set(tls, client);
+      tlsSockets.add(tls);
       tls.on('error', () => {
         tls.destroy();
       });
-      tls.on('close', done);
+      tls.on('close', () => {
+        tlsSockets.delete(tls);
+        ws.terminate();
+        done();
+      });
       // Only a finished handshake reaches the HTTP server.
       tls.once('secure', () => {
+        clearTimeout(timeout);
+        if (closed) {
+          tls.destroy();
+          return;
+        }
         const key = tls.getPeerX509Certificate()?.publicKey.export({ format: 'jwk' });
         if (key?.crv === 'Ed25519' && key.x) peers.set(tls, serverFingerprint(key.x));
         options.server.emit('connection', tls);
@@ -127,6 +154,7 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
     const ws = openRelaySocket(`${options.relay}/v1/home/${home}`);
     control = ws;
     ws.on('message', (data, isBinary) => {
+      if (closed) return;
       if (isBinary) return;
       let message: Record<string, unknown>;
       try {
@@ -184,21 +212,24 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
     linkUrl: relayLinkUrl(options.relay, home),
     state: () => state,
     ready: (timeoutMs = 10_000) =>
-      state === 'ready'
-        ? Promise.resolve()
-        : new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => {
-              waiters.delete(wake);
-              reject(
-                new Error(`The relay at ${options.relay} did not accept this server in time.`),
-              );
-            }, timeoutMs);
-            const wake = () => {
-              clearTimeout(timer);
-              resolve();
-            };
-            waiters.add(wake);
-          }),
+      closed
+        ? Promise.reject(new Error('The relay home is closed.'))
+        : state === 'ready'
+          ? Promise.resolve()
+          : new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(() => {
+                waiters.delete(wake);
+                reject(
+                  new Error(`The relay at ${options.relay} did not accept this server in time.`),
+                );
+              }, timeoutMs);
+              const wake = (error?: Error) => {
+                clearTimeout(timer);
+                if (error) reject(error);
+                else resolve();
+              };
+              waiters.add(wake);
+            }),
     clientOf: (socket) =>
       typeof socket === 'object' && socket !== null ? clients.get(socket) : undefined,
     peerOf: (socket) =>
@@ -208,9 +239,14 @@ export const connectRelayHome = (options: RelayHomeOptions): RelayHome => {
     },
     close: () => {
       closed = true;
+      state = 'down';
       clearTimeout(retry);
       clearInterval(keepalive);
-      control?.close(1000);
+      for (const wake of waiters) wake(new Error('The relay home is closed.'));
+      waiters.clear();
+      for (const tls of tlsSockets) tls.destroy();
+      for (const socket of sockets) socket.terminate();
+      control?.terminate();
     },
   };
 };

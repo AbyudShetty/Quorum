@@ -22,8 +22,23 @@ export {
   MAX_CONTEXT_CHARS,
   runHook,
 } from './hooks.js';
-export { type HookState, isMailHeld, loadHookState, saveHookState } from './state.js';
-export { type WatchClient, type WatchContext, type WatchResult, watchForMail } from './watch.js';
+export {
+  claimWatcher,
+  dismissWatcher,
+  type HookState,
+  isMailHeld,
+  isWatcher,
+  loadHookState,
+  saveHookState,
+} from './state.js';
+export {
+  WATCH_HOOK_TIMEOUT_S,
+  WATCH_LIFETIME_MS,
+  type WatchClient,
+  type WatchContext,
+  type WatchResult,
+  watchForMail,
+} from './watch.js';
 export {
   type CodexSessions,
   type CodexWaker,
@@ -43,6 +58,8 @@ export {
 } from './adopt.js';
 export { type HookWindow } from './state.js';
 export {
+  acceptedAsk,
+  acceptedNotice,
   commandOutput,
   commandText,
   type CommandContext,
@@ -62,6 +79,8 @@ export {
   requestNotice,
   runQuorumCommand,
   savePairing,
+  takeLinkNews,
+  takePromptNews,
   takeRequestWake,
   withContext,
   withNotice,

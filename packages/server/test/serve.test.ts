@@ -3,7 +3,8 @@ import { createServer, type AddressInfo } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readBootstrapCode, readDiscovery, writeRemoteConfig } from '@quorum/local';
-import { afterAll, describe, expect, it } from 'vitest';
+import { startRelay } from '@quorum/relay';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   AlreadyRunningError,
   addressName,
@@ -80,6 +81,39 @@ describe('quorum serve --local (ARCHITECTURE §8.2)', { timeout: 60_000 }, () =>
     const server = await startLocalServer({ dataDir: dataDir(), idleShutdownMs: 300 });
     await server.closed;
     await expect(fetch(`http://127.0.0.1:${String(server.port)}/v1/health`)).rejects.toThrow();
+  });
+
+  it('stays reachable after its first session joins, even when it started without IDs', async () => {
+    const relay = await startRelay({ port: 0 });
+    // Advance the default 30-minute idle clock without waiting or shortening the public setting.
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    const dir = dataDir();
+    const server = await startLocalServer({ dataDir: dir, relay: relay.url });
+    let stopped = false;
+    void server.closed.then(() => {
+      stopped = true;
+    });
+    try {
+      const signedIn = server.quorum.signInOwner();
+      const caller = server.quorum.authenticate(signedIn.credentials.access_token);
+      const project = join(dir, '..', 'project');
+      mkdirSync(project);
+      await server.quorum.createQuorumId(caller, {
+        vendor: 'claude-code',
+        vendor_session_id: 'joined-after-start',
+        root: project,
+      });
+      vi.setSystemTime(Date.now() + 31 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      // A request must still work; merely checking the asynchronous close promise can race cleanup.
+      const health = await fetch(`${server.baseUrl}/v1/health`);
+      expect(health.status).toBe(200);
+      expect(stopped).toBe(false);
+    } finally {
+      await server.close();
+      vi.useRealTimers();
+      await relay.close();
+    }
   });
 });
 

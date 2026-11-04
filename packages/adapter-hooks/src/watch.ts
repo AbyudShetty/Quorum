@@ -17,7 +17,7 @@ import {
   IDLE_WAKE_INTRO,
   MAX_CONTEXT_CHARS,
 } from './hooks.js';
-import { isMailHeld, loadHookState, saveHookState } from './state.js';
+import { claimWatcher, isMailHeld, isWatcher, loadHookState } from './state.js';
 
 export type WatchClient = HookClient & {
   stream(
@@ -35,7 +35,7 @@ export interface WatchContext {
   /** The vendor's stdin JSON (`session_id` keys the watcher). */
   input: unknown;
   connect: () => Promise<WatchClient>;
-  /** Default 8 hours: a watcher never outlives a working day. */
+  /** Default 8 hours (WATCH_LIFETIME_MS): a watcher never outlives a working day. */
   maxLifetimeMs?: number;
   /** How often to check whether it was replaced (default 2 s). */
   checkEveryMs?: number;
@@ -56,6 +56,16 @@ export interface WatchResult {
 }
 
 const STAND_DOWN: WatchResult = { exitCode: 0, output: '' };
+
+/** How long a watcher runs at most. */
+export const WATCH_LIFETIME_MS = 8 * 60 * 60 * 1000;
+
+/**
+ * The `timeout` for the watcher's hook entry (seconds). Claude Code enforces it on `asyncRewake`
+ * hooks and defaults it to 600 s: a watcher killed after 10 minutes never woke a session for mail
+ * that came later (seen live, 2026-10-22). A minute past the watcher's own lifetime.
+ */
+export const WATCH_HOOK_TIMEOUT_S = WATCH_LIFETIME_MS / 1000 + 60;
 
 const sessionKey = (input: unknown): string => {
   const id =
@@ -86,11 +96,12 @@ const delay = (ms: number, signal: AbortSignal) =>
 export const watchForMail = async (context: WatchContext): Promise<WatchResult> => {
   const key = sessionKey(context.input);
   const token = randomBytes(12).toString('hex');
-  const register = await loadHookState(context.dataDir, context.attachment.attachment);
-  register.watchers = { ...register.watchers, [key]: token };
-  await saveHookState(context.dataDir, context.attachment.attachment, register).catch(
+  // In its own file: a claim kept in the shared hook state was erased by the Stop hook running at
+  // the same moment, and the watcher stood down at once (state.ts).
+  await claimWatcher(context.dataDir, context.attachment.attachment, key, token).catch(
     () => undefined,
   );
+  const register = await loadHookState(context.dataDir, context.attachment.attachment);
 
   let client: WatchClient;
   try {
@@ -113,10 +124,7 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
   const stop = new AbortController();
   /** Read through a call: the signal changes while we wait, which narrowing cannot see. */
   const stopped = () => stop.signal.aborted;
-  const stillMine = async () => {
-    const state = await loadHookState(context.dataDir, context.attachment.attachment);
-    return state.watchers?.[key] === token;
-  };
+  const stillMine = () => isWatcher(context.dataDir, context.attachment.attachment, key, token);
 
   const workspaces = [...context.attachment.workspaces];
   /** Ask the server for a wake in each workspace; on a grant, the mail as neat lines. */
@@ -149,7 +157,7 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     const first = await tryWake();
     if (first) return first;
 
-    const deadline = Date.now() + (context.maxLifetimeMs ?? 8 * 60 * 60 * 1000);
+    const deadline = Date.now() + (context.maxLifetimeMs ?? WATCH_LIFETIME_MS);
     let pending: Promise<WatchResult | undefined> | undefined;
     let result: WatchResult | undefined;
     const lastSeen = new Map<string, number>();
@@ -234,14 +242,8 @@ export const watchForMail = async (context: WatchContext): Promise<WatchResult> 
     await pending;
     return result ?? STAND_DOWN;
   } finally {
+    // The claim file stays: the next watcher overwrites it, and a new prompt or the session's end
+    // removes it. Removing it here could remove a newer watcher's claim.
     stop.abort();
-    // Leave the registration to whoever replaced us; remove it only if it is still ours.
-    const state = await loadHookState(context.dataDir, context.attachment.attachment);
-    if (state.watchers?.[key] === token) {
-      Reflect.deleteProperty(state.watchers, key);
-      await saveHookState(context.dataDir, context.attachment.attachment, state).catch(
-        () => undefined,
-      );
-    }
   }
 };

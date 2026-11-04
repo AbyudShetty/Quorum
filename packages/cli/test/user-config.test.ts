@@ -71,6 +71,14 @@ describe('quorum setup (user level)', () => {
       hooks: [{ args: [command.bin, 'hook', 'claude-code', 'watch'], asyncRewake: true }],
     });
     expect(hooks.UserPromptExpansion).toHaveLength(2);
+    // Claude Code enforces a timeout on asyncRewake hooks, 600 s by default: a watcher killed then
+    // never wakes the session for later mail (seen live, 2026-10-22). It must cover its 8 hours.
+    const watchers = Object.values(hooks)
+      .flat()
+      .flatMap((g) => g.hooks)
+      .filter((h) => (h as { asyncRewake?: boolean }).asyncRewake);
+    expect(watchers).toHaveLength(3); // SessionStart, Stop, next to a /quorum-* command
+    for (const w of watchers) expect((w as { timeout?: number }).timeout).toBe(8 * 60 * 60 + 60);
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd']) {
       expect(JSON.stringify(hooks[event])).not.toContain('--attachment');
     }

@@ -16,7 +16,7 @@
 // without --attachment; files and folders by their quorum- names.
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { HOOK_EVENT_NAMES, type HookEvent } from '@quorum/adapter-hooks';
+import { HOOK_EVENT_NAMES, type HookEvent, WATCH_HOOK_TIMEOUT_S } from '@quorum/adapter-hooks';
 import { dataDirDenyRules, type ConfigChange, type QuorumCommand } from './vendor-config.js';
 
 export interface UserConfigOptions {
@@ -206,6 +206,8 @@ export const writeUserConfig = async (options: UserConfigOptions): Promise<Confi
       type: 'command',
       ...execForm(command, ['hook', 'claude-code', 'watch']),
       asyncRewake: true,
+      // Claude Code enforces this on asyncRewake hooks (default 600 s): the watcher's lifetime.
+      timeout: WATCH_HOOK_TIMEOUT_S,
     };
     for (const event of ['SessionStart', 'Stop']) addHook(settings, event, watcher);
     addHook(settings, 'UserPromptExpansion', watcher, 'quorum-.*');

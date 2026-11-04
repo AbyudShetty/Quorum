@@ -82,6 +82,7 @@ describe('Claude Code: .claude/settings.local.json', () => {
       command: absolute.node,
       args: [absolute.bin, 'hook', 'claude-code', 'watch', '--attachment', ID],
       asyncRewake: true,
+      timeout: 8 * 60 * 60 + 60, // Claude Code would kill it after its default 600 s
     };
     expect(settings.hooks?.Stop?.[1]?.hooks[0]).toEqual(watcher);
     // A new window can be woken before its first prompt: the watcher also starts with the session.
