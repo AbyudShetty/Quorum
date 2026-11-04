@@ -30,6 +30,8 @@ export interface ContractTarget {
   bootstrap?: { dataDir: string; reissue(): Promise<void> };
   /** Move the server's clock forward (expiry and presence cases). */
   advanceClock?(ms: number): void;
+  /** Implements the additive session-pairing/rotation extension (API schema revision 1.1). */
+  pairing?: boolean;
   /** Stop the server and clean up. */
   close(): Promise<void>;
 }

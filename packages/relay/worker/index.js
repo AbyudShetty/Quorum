@@ -3,7 +3,8 @@
 // pairing logic is the same router the Node relay runs (../src/router.ts). WebSockets use the
 // Hibernation API: an idle home connection costs nothing, and each socket's role lives in its
 // attachment and tags, so nothing is lost when the object sleeps. Nothing is logged. The only
-// thing stored is the phone book (Quorum ID → home, D-20): one small Durable Object per ID.
+// durable data is the phone book (Quorum ID → home, D-20): one small Durable Object per ID.
+// Separate per-address objects keep short-lived rate counters and clean them up with alarms.
 /* global WebSocketPair, WebSocketRequestResponsePair */
 import {
   arriveAccept,
@@ -22,6 +23,18 @@ const json = (body, status = 200) =>
     status,
     headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
   });
+
+const rateLimits = { lookup: 30, upgrade: 120 };
+const WINDOW_MS = 60_000;
+
+/** One limiter per client, shared across isolates; its name cannot be a Quorum ID. */
+const limit = async (env, request, kind) => {
+  const client = request.headers.get('cf-connecting-ip') ?? 'unknown';
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(client));
+  const name = `limits:${Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('')}`;
+  const target = env.PHONEBOOK.get(env.PHONEBOOK.idFromName(name));
+  return target.fetch(`https://phonebook/limit/${kind}`, { method: 'POST' });
+};
 
 /** The phone book: each ID's entry lives in its own Durable Object (named by the ID). */
 const phonebookOf = (env) => {
@@ -60,13 +73,23 @@ export default {
     }
     const lookup = /^\/v1\/lookup\/([^/]+)$/.exec(url.pathname);
     if (request.method === 'GET' && lookup) {
-      const entry = await lookupId(phonebookOf(env), decodeURIComponent(lookup[1]));
+      let id;
+      try {
+        id = decodeURIComponent(lookup[1]);
+      } catch {
+        return json({ error: 'Malformed ID encoding.' }, 400);
+      }
+      const allowed = await limit(env, request, 'lookup');
+      if (allowed.status !== 204) return allowed;
+      const entry = await lookupId(phonebookOf(env), id);
       return entry ? json(entry) : json({ error: 'No such ID.' }, 404);
     }
     const target = route(url);
     if (!target || request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Not found.\n', { status: 404 });
     }
+    const allowed = await limit(env, request, 'upgrade');
+    if (allowed.status !== 204) return allowed;
     const room = env.ROOMS.get(env.ROOMS.idFromName(target.home));
     return room.fetch(request);
   },
@@ -172,11 +195,55 @@ export class Phonebook {
   }
 
   async fetch(request) {
+    const kind = /^\/limit\/(lookup|upgrade)$/.exec(new URL(request.url).pathname)?.[1];
+    if (request.method === 'POST' && kind) {
+      // Atomic even when two requests for one address arrive during storage I/O.
+      const outcome = await this.state.storage.transaction(async (storage) => {
+        const now = Date.now();
+        const key = `rate:${kind}`;
+        const previous = await storage.get(key);
+        const window =
+          previous && now - previous.start < WINDOW_MS ? previous : { start: now, count: 0 };
+        const retryAfter = Math.max(1, Math.ceil((window.start + WINDOW_MS - now) / 1000));
+        if (window.count >= rateLimits[kind]) return { allowed: false, retryAfter };
+        await storage.put(key, { start: window.start, count: window.count + 1 });
+        return { allowed: true, retryAfter };
+      });
+      // The limiter stores no history: discard counters after both windows have expired.
+      await this.state.storage.setAlarm(Date.now() + WINDOW_MS);
+      if (outcome.allowed) return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ error: 'Too many requests; try again in a minute.' }), {
+        status: 429,
+        headers: {
+          'content-type': 'application/json',
+          'cache-control': 'no-store',
+          'retry-after': String(outcome.retryAfter),
+        },
+      });
+    }
     if (request.method === 'PUT') {
       await this.state.storage.put('entry', await request.json());
       return new Response(null, { status: 204 });
     }
     const entry = await this.state.storage.get('entry');
     return entry ? json(entry) : json({ error: 'No such ID.' }, 404);
+  }
+
+  async alarm() {
+    // An already-scheduled alarm may overlap a fresh request. Delete only expired counters.
+    const next = await this.state.storage.transaction(async (storage) => {
+      const now = Date.now();
+      let next;
+      for (const kind of Object.keys(rateLimits)) {
+        const key = `rate:${kind}`;
+        const window = await storage.get(key);
+        if (!window) continue;
+        const expires = window.start + WINDOW_MS;
+        if (expires <= now) await storage.delete(key);
+        else next = next === undefined ? expires : Math.min(next, expires);
+      }
+      return next;
+    });
+    if (next !== undefined) await this.state.storage.setAlarm(next);
   }
 }

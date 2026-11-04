@@ -131,6 +131,21 @@ Expanded from plan §8 (STRIDE category in brackets).
 | **Agent approving as its human** [Elevation] _(same OS user)_                                       | An agent reads the human's session cookie or CLI credentials and approves its own `git.push`                                        | Passkey with user verification for high/critical approvals; deny-read rules for the data directory in agent settings; everything logged                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | INV-31, INV-2                  |
 | **Persuasion in rejection discussions** [Elevation via human]                                       | After a rejection, an agent argues persistently or misleadingly until the human gives in                                            | Agent messages rendered as untrusted text; wake budget and agent-only-loop pause; revised requests need full re-approval (new preview hash); only a human can end the discussion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | INV-9, INV-29, INV-32, INV-3   |
 
+### Session-ID retirement (INV-34)
+
+Human-only ID rotation extends the typed-command boundary: `/quorum-rotate` and
+`$quorum-rotate` cannot be invoked by an agent tool or received message. Human authentication
+also requires the existing active vendor-session, owner and canonical-folder binding (INV-12).
+Rotation commits retirement, unlinking, block migration, a retry receipt and its human audit
+event together (INV-8). It preserves credentials and append-only history (INV-11/20/25).
+
+A relay entry for a retired ID grants nothing. Old-ID requests and acceptances cannot restore
+links; old-ID inbound messages fail the ordinary no-such-ID check. Unsent handshakes are
+cancelled; in-flight handshakes and already accepted messages stay ordered before the unlink.
+Fresh-ID pairing needs new consent. Concurrent/replayed requests cannot silently rotate twice
+because `expected_id` and durable receipts guard the transition. Local blocks follow identity;
+no remote trust or identity alias is migrated. See [the RFC](rfcs/ID_ROTATION.md).
+
 ## 6. Assumptions and explicit non-goals (residual risk)
 
 These are limits we state openly rather than hide:

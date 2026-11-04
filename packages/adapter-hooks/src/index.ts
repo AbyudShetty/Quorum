@@ -82,7 +82,16 @@ export {
   takeLinkNews,
   takePromptNews,
   takeRequestWake,
+  updatePairing,
   withContext,
   withNotice,
   sessionKey as pairingKey,
 } from './pairing.js';
+export {
+  consumeToolProof,
+  MAX_PENDING_TOOL_PROOFS,
+  mintToolProof,
+  TOOL_PROOF_TTL_MS,
+  type ToolProofIdentity,
+  type ToolProofInput,
+} from './tool-proof.js';

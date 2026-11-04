@@ -140,6 +140,7 @@ export const startFederation = (options: FederationOptions): Federation => {
 
   return {
     lookup: (id) => lookupQuorumId(options.relay, id, options.fetch ?? fetch),
+    inFlightIds: () => [...inFlight.keys()],
     flush: deliver,
     queued: () => {
       if (!closed) setImmediate(backgroundDrain);

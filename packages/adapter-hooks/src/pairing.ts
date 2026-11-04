@@ -3,6 +3,7 @@
 // command in it:
 //
 //   /quorum-id               (Codex: $quorum-id)              this session joins; shows its ID
+//   /quorum-rotate           (Codex: $quorum-rotate)          replaces this session's ID; unlinks peers
 //   /quorum-attach <id>      (Codex: $quorum-attach <id>)     ask that session's person to link
 //   /quorum-allow [id]       (Codex: $quorum-allow [id])      accept a waiting request (or all)
 //   /quorum-detach [id]      (Codex: $quorum-detach [id])     unlink (one, or all); nobody is asked
@@ -18,12 +19,21 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type AttachmentInfo, findGit, peerLine, type QuorumClient } from '@quorum/adapter-mcp';
 import { parseQuorumId } from '@quorum/core';
-import { writePrivateFile } from '@quorum/local';
+import { withFileLock, writePrivateFile } from '@quorum/local';
+import { createHash } from 'node:crypto';
 import type { LinkInfo, QuorumIdCreated, Vendor } from '@quorum/schemas';
 import type { HookVendor } from './hooks.js';
 import { loadHookState, saveHookState } from './state.js';
 
-export const QUORUM_COMMANDS = ['id', 'attach', 'allow', 'detach', 'block', 'export'] as const;
+export const QUORUM_COMMANDS = [
+  'id',
+  'rotate',
+  'attach',
+  'allow',
+  'detach',
+  'block',
+  'export',
+] as const;
 export type QuorumCommandName = (typeof QUORUM_COMMANDS)[number];
 
 export interface QuorumCommand {
@@ -89,22 +99,79 @@ export const sessionKey = (vendor: string, input: unknown): string | undefined =
 };
 
 export const loadPairing = async (dataDir: string): Promise<Record<string, PairedSession>> => {
+  let raw: string;
   try {
-    const parsed = JSON.parse(await readFile(pairingPath(dataDir), 'utf8')) as unknown;
-    return typeof parsed === 'object' && parsed !== null
-      ? (parsed as Record<string, PairedSession>)
-      : {};
-  } catch {
-    return {};
+    raw = await readFile(pairingPath(dataDir), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw error;
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error('Quorum pairing state is malformed; restore it before changing session links.');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Quorum pairing state is malformed; restore it before changing session links.');
+  }
+  for (const value of Object.values(parsed)) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('Quorum pairing state contains an invalid session.');
+    }
+    const session = value as Partial<PairedSession>;
+    if (
+      typeof session.id !== 'string' ||
+      !session.id ||
+      typeof session.attachment !== 'string' ||
+      !session.attachment ||
+      (session.shown !== undefined &&
+        (!Array.isArray(session.shown) || !session.shown.every((id) => typeof id === 'string'))) ||
+      (session.asking !== undefined &&
+        (!Array.isArray(session.asking) ||
+          !session.asking.every((id) => typeof id === 'string'))) ||
+      (session.asked !== undefined &&
+        (!Array.isArray(session.asked) ||
+          !session.asked.every((at) => typeof at === 'number' && Number.isFinite(at))))
+    ) {
+      throw new Error('Quorum pairing state contains an invalid session.');
+    }
+  }
+  return parsed as Record<string, PairedSession>;
 };
 
-export const savePairing = async (
+const writePairing = async (
   dataDir: string,
   sessions: Record<string, PairedSession>,
 ): Promise<void> => {
   await mkdir(join(dataDir, 'hooks'), { recursive: true, mode: 0o700 });
   await writePrivateFile(pairingPath(dataDir), `${JSON.stringify(sessions)}\n`);
+};
+
+/** Serialize the complete read/change/write across hooks, MCP processes and idle watchers. */
+export const updatePairing = async <T>(
+  dataDir: string,
+  change: (sessions: Record<string, PairedSession>) => T,
+): Promise<T> => {
+  await mkdir(dataDir, { recursive: true, mode: 0o700 });
+  return withFileLock(dataDir, 'pairing-state', async () => {
+    const sessions = await loadPairing(dataDir);
+    const before = JSON.stringify(sessions);
+    const result = change(sessions);
+    if (JSON.stringify(sessions) !== before) await writePairing(dataDir, sessions);
+    return result;
+  });
+};
+
+/** Replace the complete state (initialization/tests); production mutations use updatePairing. */
+export const savePairing = async (
+  dataDir: string,
+  sessions: Record<string, PairedSession>,
+): Promise<void> => {
+  await updatePairing(dataDir, (current) => {
+    for (const key of Object.keys(current)) Reflect.deleteProperty(current, key);
+    Object.assign(current, sessions);
+  });
 };
 
 /**
@@ -115,15 +182,12 @@ const updateSession = async <T>(
   dataDir: string,
   key: string,
   change: (session: PairedSession) => T,
-): Promise<T | undefined> => {
-  const sessions = await loadPairing(dataDir);
-  const session = sessions[key];
-  if (!session) return undefined;
-  const before = JSON.stringify(session);
-  const result = change(session);
-  if (JSON.stringify(session) !== before) await savePairing(dataDir, sessions);
-  return result;
-};
+): Promise<T | undefined> =>
+  updatePairing(dataDir, (sessions) => {
+    const session = sessions[key];
+    if (!session) return undefined;
+    return change(session);
+  });
 
 /** The paired session behind a hook's input, if this session joined Quorum. */
 export const pairedSession = async (
@@ -143,7 +207,7 @@ export interface CommandContext {
   input: unknown;
   dataDir: string;
   /** The person's own client (local sign-in happens here if needed). */
-  human: () => Promise<Pick<QuorumClient, 'createQuorumId'>>;
+  human: () => Promise<Pick<QuorumClient, 'createQuorumId' | 'rotateQuorumId'>>;
   /** Keep a new session's credentials (keychain) and its attachment record (data folder). */
   saveSession: (created: QuorumIdCreated, root: string, vendor: Vendor) => Promise<void>;
   /** The session's own client. */
@@ -217,7 +281,7 @@ const cwdOf = (input: unknown): string => {
  * Make sure this session has joined: its ID (created by the person's own client the first time),
  * its credentials saved, and its window registered (so it has a number like claude@api-2).
  */
-const join_ = async (
+const joinUnlocked = async (
   context: CommandContext,
 ): Promise<{ session: PairedSession; label: string | undefined; created: boolean }> => {
   const key = sessionKey(context.vendor, context.input);
@@ -249,8 +313,10 @@ const join_ = async (
     context.step?.('save-session');
     await context.saveSession(made, root, vendor);
     session = { id: made.id, attachment: made.attachment };
-    sessions[key] = session;
-    await savePairing(context.dataDir, sessions);
+    const joined = session;
+    await updatePairing(context.dataDir, (current) => {
+      current[key] = joined;
+    });
     created = made.created;
   }
   // Register (or find) this window, as the session-start hook would.
@@ -284,49 +350,123 @@ const join_ = async (
   return { session, label, created };
 };
 
+const withSessionLock = async <T>(context: CommandContext, work: () => Promise<T>): Promise<T> => {
+  const key = sessionKey(context.vendor, context.input);
+  if (!key) throw new Error('The hook input has no session id.');
+  await mkdir(context.dataDir, { recursive: true, mode: 0o700 });
+  const digest = createHash('sha256').update(key).digest('hex');
+  // Joining, ID refresh and rotation span server calls. Keep one session's entire operation
+  // ordered without holding the shared state lock while waiting for the network.
+  return withFileLock(context.dataDir, `pairing-join-${digest}`, work, {
+    timeoutMs: 35_000,
+    staleMs: 120_000,
+  });
+};
+
+const join_ = (context: CommandContext) => withSessionLock(context, () => joinUnlocked(context));
+
+/** Repair a cached ID after a committed rotation whose response/local write was lost. */
+const rememberCurrentId = async (
+  context: CommandContext,
+  session: PairedSession,
+  id: string | undefined,
+): Promise<PairedSession> => {
+  if (!id || parseQuorumId(id) !== id) {
+    throw new Error("The server did not return this session's current Quorum ID.");
+  }
+  const key = sessionKey(context.vendor, context.input) ?? '';
+  const updated = await updateSession(context.dataDir, key, (saved) => {
+    if (saved.attachment !== session.attachment)
+      throw new Error("This session's attachment changed.");
+    if (saved.id !== id) {
+      saved.id = id;
+      Reflect.deleteProperty(saved, 'shown');
+      Reflect.deleteProperty(saved, 'asked');
+      Reflect.deleteProperty(saved, 'asking');
+    }
+    return saved;
+  });
+  if (!updated) throw new Error('This session is no longer in Quorum.');
+  return updated;
+};
+
 /** Run a typed command; the text is shown to the person (the prompt itself is blocked). */
 export const runQuorumCommand = async (context: CommandContext): Promise<string> => {
   const { vendor, command } = context;
   const say = (name: QuorumCommandName) => commandText(vendor, name);
   const notJoined = `This session is not in Quorum yet: type ${say('id')} first.`;
 
-  if (command.name === 'id' || command.name === 'attach') {
-    let target: string | undefined;
-    if (command.name === 'attach') {
-      target = parseQuorumId(command.args);
-      if (!target) {
-        return `Quorum: give the other session's ID, e.g. ${say('attach')} QRM-7KD2-PX9F-M3TA.`;
-      }
-    }
-    const { session, label } = await join_(context);
-    context.step?.(command.name === 'id' ? 'links' : 'request-link');
-    const client = await context.agent(session.attachment);
-    if (command.name === 'id') {
-      const links = (await client.links()).links;
+  if (command.name === 'id') {
+    if (command.args)
+      return `Quorum: ${say('id')} takes no arguments. Use ${say('rotate')} for a new ID.`;
+    return withSessionLock(context, async () => {
+      const { session, label } = await joinUnlocked(context);
+      context.step?.('links');
+      const client = await context.agent(session.attachment);
+      const list = await client.links();
+      const current = await rememberCurrentId(context, session, list.id);
       return [
-        `Quorum ID of this session${label ? ` (${label})` : ''}: ${session.id}`,
-        `Give it to the other person; they type ${commandText('claude-code', 'attach')} ${session.id} in Claude Code, or ${commandText('codex', 'attach')} ${session.id} in Codex.`,
-        ...describeLinks(vendor, links),
+        `Quorum ID of this session${label ? ` (${label})` : ''}: ${current.id}`,
+        `Give it to the other person; they type ${commandText('claude-code', 'attach')} ${current.id} in Claude Code, or ${commandText('codex', 'attach')} ${current.id} in Codex.`,
+        ...describeLinks(vendor, list.links),
       ].join('\n');
+    });
+  }
+
+  if (command.name === 'rotate') {
+    if (command.args) return `Quorum: ${say('rotate')} takes no arguments.`;
+    return withSessionLock(context, async () => {
+      const session = await pairedSession(context.dataDir, vendor, context.input);
+      if (!session) return `Quorum: ${notJoined}`;
+      context.step?.('links');
+      const client = await context.agent(session.attachment);
+      const { id } = await client.links();
+      if (!id) throw new Error("The server did not return this session's current Quorum ID.");
+      context.step?.('sign-in');
+      const human = await context.human();
+      context.step?.('rotate-id');
+      const rotated = await human.rotateQuorumId({
+        vendor,
+        vendor_session_id: sessionId(context.input),
+        root: cwdOf(context.input),
+        expected_id: id,
+      });
+      await rememberCurrentId(context, session, rotated.id);
+      return [
+        `Quorum: this session's new ID is ${rotated.id}.`,
+        `The old ID ${rotated.previous_id} no longer works. All links were removed; share the new ID to pair again.`,
+        'Your conversation history and block list are preserved.',
+      ].join('\n');
+    });
+  }
+
+  if (command.name === 'attach') {
+    const target = parseQuorumId(command.args);
+    if (!target) {
+      return `Quorum: give the other session's ID, e.g. ${say('attach')} QRM-7KD2-PX9F-M3TA.`;
     }
+    const { session } = await join_(context);
+    context.step?.('request-link');
+    const client = await context.agent(session.attachment);
     if (target === session.id) return "Quorum: that is this session's own ID.";
     try {
-      const outcome = await client.requestLink(target ?? '');
-      if (outcome.state !== 'linked' && target) {
+      const outcome = await client.requestLink(target);
+      if (outcome.state !== 'linked') {
         // Tell the person when the other side accepts (takeLinkNews).
         const key = sessionKey(vendor, context.input) ?? '';
         await updateSession(context.dataDir, key, (s) => {
+          if (s.id !== session.id) return; // A rotation superseded this in-flight request.
           if (!s.asking?.includes(target)) s.asking = [...(s.asking ?? []), target];
         });
       }
       return {
-        requested: `Quorum: asked ${target ?? ''} to link with this session (${session.id}). You will see when their person allows it.`,
-        queued: `Quorum: ${target ?? ''} is on a laptop that is not reachable right now; the request goes out when it is back.`,
-        linked: `Quorum: linked with ${target ?? ''}. Your agent can now message it.`,
+        requested: `Quorum: asked ${target} to link with this session (${session.id}). You will see when their person allows it.`,
+        queued: `Quorum: ${target} is on a laptop that is not reachable right now; the request goes out when it is back.`,
+        linked: `Quorum: linked with ${target}. Your agent can now message it.`,
       }[outcome.state];
     } catch (error) {
       if ((error as { code?: string }).code === 'pairing.no_such_id') {
-        return `Quorum: there is no session ${target ?? ''}. Check the ID with the person who gave it to you.`;
+        return `Quorum: there is no session ${target}. Check the ID with the person who gave it to you.`;
       }
       throw error;
     }
@@ -396,18 +536,18 @@ export const takeRequestWake = async (
   options: { wakeOff?: boolean; now?: number } = {},
 ): Promise<LinkInfo[]> => {
   if (options.wakeOff) return [];
-  const sessions = await loadPairing(dataDir);
-  const session = sessions[key];
-  if (!session) return [];
-  const fresh = newRequests(session, links);
-  if (fresh.length === 0) return [];
-  const now = options.now ?? Date.now();
-  const recent = (session.asked ?? []).filter((at) => now - at < 3_600_000);
-  if (recent.length >= REQUEST_WAKES_PER_HOUR) return []; // the next prompt still shows them
-  session.asked = [...recent, now];
-  session.shown = [...(session.shown ?? []), ...fresh.map((l) => l.id)];
-  await savePairing(dataDir, sessions);
-  return fresh;
+  return (
+    (await updateSession(dataDir, key, (session) => {
+      const fresh = newRequests(session, links);
+      if (fresh.length === 0) return [];
+      const now = options.now ?? Date.now();
+      const recent = (session.asked ?? []).filter((at) => now - at < 3_600_000);
+      if (recent.length >= REQUEST_WAKES_PER_HOUR) return [];
+      session.asked = [...recent, now];
+      session.shown = [...(session.shown ?? []), ...fresh.map((l) => l.id)];
+      return fresh;
+    })) ?? []
+  );
 };
 
 /**

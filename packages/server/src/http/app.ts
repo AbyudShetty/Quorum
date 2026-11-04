@@ -483,6 +483,9 @@ export const buildApp = (options: AppOptions): FastifyInstance => {
     const created = await quorum.createQuorumId(caller(request), request.body);
     return reply.code(created.created ? 201 : 200).send(created);
   });
+  app.post('/v1/quorum-ids/rotate', (request) =>
+    quorum.rotateQuorumId(caller(request), request.body),
+  );
   app.get('/v1/links', (request) => quorum.links(caller(request)));
   app.post('/v1/links', async (request, reply) => {
     const created = await quorum.requestLink(caller(request), request.body);

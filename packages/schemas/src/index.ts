@@ -16,7 +16,7 @@ export {
   SUBMITTED_ENVELOPE_ID,
   submittedEnvelopeSchema,
 } from './json-schema/envelope.js';
-export { API_SCHEMA_IDS, apiSchemas, VENDORS } from './json-schema/api.js';
+export { API_SCHEMA_IDS, API_SCHEMA_VERSION, apiSchemas, VENDORS } from './json-schema/api.js';
 export { ERROR_RESPONSE_ID, errorResponseSchema } from './json-schema/error.js';
 export { openApiDocument } from './openapi.js';
 export { POLICY_ID, policySchema } from './json-schema/policy.js';

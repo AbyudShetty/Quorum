@@ -66,7 +66,16 @@ for (const dir of INTERNAL) {
     await cp(join(from, entry), join(to, entry), {
       recursive: true,
       // Source maps and type declarations are for development; the package runs the JavaScript.
-      filter: (path) => !/\.(map|d\.ts|tsbuildinfo)$/.test(path),
+      filter: async (path) => {
+        if (/\.(map|d\.ts|tsbuildinfo)$/.test(path)) return false;
+        // tsc leaves outputs from deleted/moved sources behind. Never ship obsolete code just
+        // because this laptop's dist directory predates a move (a clean CI build would not).
+        const built = relative(join(from, 'dist'), path);
+        if (!built.startsWith('..') && path.endsWith('.js')) {
+          return exists(join(from, 'src', built.replace(/\.js$/, '.ts')));
+        }
+        return true;
+      },
     });
   }
   for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {

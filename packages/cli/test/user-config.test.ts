@@ -3,7 +3,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { MemoryCredentialStore } from '@quorum/adapter-mcp';
 import { afterAll, describe, expect, it } from 'vitest';
+import { ensureSetUp } from '../src/cli.js';
 import { removeUserConfig, writeUserConfig } from '../src/user-config.js';
 import type { QuorumCommand } from '../src/vendor-config.js';
 
@@ -29,6 +31,24 @@ const json = (file: string) => JSON.parse(readFileSync(file, 'utf8')) as Record<
 type Groups = { matcher?: string; hooks: Record<string, unknown>[] }[];
 
 describe('quorum setup (user level)', () => {
+  it('upgrades an existing setup marker so installed sessions receive the rotation command', async () => {
+    const h = home();
+    const data = join(h, 'data');
+    mkdirSync(data);
+    writeFileSync(join(data, 'setup.json'), JSON.stringify({ bin: command.bin, revision: 4 }));
+    await ensureSetUp({
+      home: h,
+      dataDir: data,
+      quorumCommand: () => Promise.resolve(command),
+      store: new MemoryCredentialStore(),
+      out: () => undefined,
+      err: () => undefined,
+    });
+    expect(existsSync(join(h, '.claude', 'commands', 'quorum-rotate.md'))).toBe(true);
+    expect(existsSync(join(h, '.codex', 'skills', 'quorum-rotate', 'SKILL.md'))).toBe(true);
+    expect(json(join(data, 'setup.json')).revision).toBe(5);
+  });
+
   it('puts hooks, the tools and the commands into Claude Code and Codex, keeping what is there', async () => {
     const h = home();
     mkdirSync(join(h, '.claude'), { recursive: true });
@@ -98,11 +118,22 @@ describe('quorum setup (user level)', () => {
     });
     const idCommand = readFileSync(join(h, '.claude', 'commands', 'quorum-id.md'), 'utf8');
     expect(idCommand).toContain('disable-model-invocation: true');
+    const rotateCommand = readFileSync(join(h, '.claude', 'commands', 'quorum-rotate.md'), 'utf8');
+    expect(rotateCommand).toContain('disable-model-invocation: true');
+    expect(rotateCommand).toContain('Replace this session');
     expect(readFileSync(join(h, '.claude', 'commands', 'quorum-attach.md'), 'utf8')).toContain(
       'argument-hint: "<QRM-id>"',
     );
 
     const codexHooks = json(join(h, '.codex', 'hooks.json')).hooks as Record<string, Groups>;
+    expect(hooks.PreToolUse?.[0]).toMatchObject({
+      matcher: '^mcp__quorum__quorum_(send|inbox|status|requests)$',
+      hooks: [{ args: [command.bin, 'hook', 'claude-code', 'pre-tool'], timeout: 10 }],
+    });
+    expect(codexHooks.PreToolUse?.[0]).toMatchObject({
+      matcher: '^mcp__quorum__quorum_(send|inbox|status|requests)$',
+      hooks: [{ command: 'quorum.cmd hook codex pre-tool', timeout: 10 }],
+    });
     expect(codexHooks.UserPromptSubmit?.[0]?.hooks[0]?.command).toBe(
       'quorum.cmd hook codex prompt',
     );
@@ -116,6 +147,12 @@ describe('quorum setup (user level)', () => {
     const skill = readFileSync(join(h, '.codex', 'skills', 'quorum-attach', 'SKILL.md'), 'utf8');
     expect(skill).toContain('name: quorum-attach');
     expect(skill).toContain('$quorum-attach <QRM-id>');
+    const rotateSkill = readFileSync(
+      join(h, '.codex', 'skills', 'quorum-rotate', 'SKILL.md'),
+      'utf8',
+    );
+    expect(rotateSkill).toContain('name: quorum-rotate');
+    expect(rotateSkill).toContain('$quorum-rotate');
   });
 
   it('leaves a settings file it cannot read alone', async () => {
@@ -145,6 +182,8 @@ describe('quorum uninstall (user level)', () => {
     expect(json(join(h, '.claude.json'))).toEqual({ numStartups: 7, mcpServers: {} });
     expect(existsSync(join(h, '.claude', 'commands', 'quorum-id.md'))).toBe(false);
     expect(existsSync(join(h, '.codex', 'skills', 'quorum-id'))).toBe(false);
+    expect(existsSync(join(h, '.claude', 'commands', 'quorum-rotate.md'))).toBe(false);
+    expect(existsSync(join(h, '.codex', 'skills', 'quorum-rotate'))).toBe(false);
     expect(json(join(h, '.codex', 'hooks.json'))).toEqual({});
     expect(readFileSync(join(h, '.codex', 'config.toml'), 'utf8')).not.toContain('quorum');
   });

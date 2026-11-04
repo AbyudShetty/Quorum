@@ -340,6 +340,99 @@ describe('session pairing across two laptops (D-20)', () => {
   });
 });
 
+describe('ID rotation across two laptops', () => {
+  it('unlinks the retired ID and requires fresh approval while retaining conversations', async () => {
+    const one = await newSession(a, 'claude-code', 'rotating', 'claude-rotating');
+    const two = await newSession(b, 'codex', 'rotation-peer', 'codex-rotation-peer');
+    await registered(one.id);
+    await registered(two.id);
+    expect((await as(one, 'POST', '/v1/links', { to: two.id })).status).toBe(202);
+    await until(
+      () => linksOf(two),
+      (links) => links[0]?.state === 'pending',
+      'rotation request',
+    );
+    expect((await as(two, 'POST', '/v1/links/allow', { id: one.id })).status).toBe(200);
+    await until(
+      () => linksOf(one),
+      (links) => links[0]?.state === 'linked',
+      'rotation approval',
+    );
+    expect(
+      (
+        await as(one, 'POST', '/v1/links/send', {
+          to: [two.id],
+          type: 'note',
+          body: { text: 'before rotation' },
+        })
+      ).status,
+    ).toBe(201);
+    await until(
+      () => inboxTexts(two),
+      (texts) => texts.some((text) => text.endsWith('before rotation')),
+      'pre-rotation mail',
+    );
+    const input = {
+      vendor: 'claude-code',
+      vendor_session_id: 'claude-rotating',
+      root: join(root, 'laptop-a-projects', 'rotating'),
+      expected_id: one.id,
+    };
+    const result = await call(a, 'POST', '/v1/quorum-ids/rotate', { token: a.human, body: input });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ previous_id: one.id, detached: [two.id] });
+    const next = { ...one, id: result.body.id as string };
+    expect(await linksOf(next)).toEqual([]);
+    await until(
+      () => linksOf(two),
+      (links) => links.length === 0,
+      'retired peer unlink',
+    );
+    expect((await as(two, 'POST', '/v1/links', { to: one.id })).status).toBe(404);
+    expect((await as(next, 'GET', '/v1/links/export')).body).toContain('> before rotation');
+    expect((await as(two, 'GET', '/v1/links/export')).body).toContain('> before rotation');
+    await registered(next.id);
+    expect((await as(two, 'POST', '/v1/links', { to: next.id })).status).toBe(202);
+    await until(
+      () => linksOf(next),
+      (links) => links[0]?.state === 'pending',
+      'replacement approval request',
+    );
+    expect(
+      (
+        await as(two, 'POST', '/v1/links/send', {
+          to: [next.id],
+          type: 'note',
+          body: { text: 'not approved' },
+        })
+      ).status,
+    ).toBe(400);
+    expect((await as(next, 'POST', '/v1/links/allow', { id: two.id })).status).toBe(200);
+    await until(
+      () => linksOf(two),
+      (links) => links[0]?.state === 'linked',
+      'replacement approval',
+    );
+    expect(
+      (
+        await as(next, 'POST', '/v1/links/send', {
+          to: [two.id],
+          type: 'note',
+          body: { text: 'after fresh approval' },
+        })
+      ).status,
+    ).toBe(201);
+    await until(
+      () => inboxTexts(two),
+      (texts) => texts.some((text) => text.endsWith('after fresh approval')),
+      'replacement mail',
+    );
+    const retry = await call(a, 'POST', '/v1/quorum-ids/rotate', { token: a.human, body: input });
+    expect(retry.body).toEqual(result.body);
+    expect((await linksOf(next))[0]?.state).toBe('linked');
+  }, 60_000);
+});
+
 describe('server to server is only for servers, for their own sessions (D-20)', () => {
   it('turns away a caller without a server key, and a session ID not derived from the caller', async () => {
     const target = await newSession(b, 'codex', 'guarded', 'codex-guarded');

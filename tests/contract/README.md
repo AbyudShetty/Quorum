@@ -51,10 +51,16 @@ The OpenAPI document lists every status; these are the ones the suite pins down 
 
 Cases added after the first freeze (bootstrap sign-in, attachment PATCH and DELETE, the inbox default, folder and presence, sessions and shared-working-tree notices) need a little help from the target. `ContractTarget` has optional hooks; a target without one skips the cases that need it:
 
-| Hook                                | Used for                                                                            |
-| ----------------------------------- | ----------------------------------------------------------------------------------- |
-| `makeFolder(name)`                  | a folder the human can attach (it must exist on the server's machine in local mode) |
-| `bootstrap: { dataDir, reissue() }` | reading `local/bootstrap.json` and issuing a fresh code, as a restart does          |
-| `advanceClock(ms)`                  | code expiry and the 90 s presence timeout                                           |
+| Hook                                | Used for                                                                                        |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `makeFolder(name)`                  | a folder the human can attach (it must exist on the server's machine in local mode)             |
+| `bootstrap: { dataDir, reissue() }` | reading `local/bootstrap.json` and issuing a fresh code, as a restart does                      |
+| `advanceClock(ms)`                  | code expiry and the 90 s presence timeout                                                       |
+| `pairing: true`                     | API revision 1.1 session-ID rotation: stable identity, guarded retries and human/folder binding |
 
 Both the real server (`packages/server/test/contract.test.ts`) and the fake server (`tests/fakes/fake-server/contract.test.ts`) run the whole suite on every `npm test`.
+
+The rotation contract cases run against both targets. The fake implements local ID issuance,
+rotation receipts and current-ID reads; full pairing/federation, persistence, blocks and queue
+ordering are exercised against the real server. Rotation is additive to the HTTP schemas;
+message envelopes keep `spec: quorum/1`. See [the RFC](../../docs/rfcs/ID_ROTATION.md).

@@ -1,7 +1,7 @@
 // The hosted relay's glue (worker/index.js) driven through a stand-in for Cloudflare's Durable
 // Object state and WebSocketPair: roles kept in tags and attachments, as after hibernation.
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { newQuorumId } from '@quorum/core';
 import { homeProofMessage } from '../src/router.js';
 
@@ -61,7 +61,10 @@ const saved = {
 let RoomClass: new (state: FakeState, env?: unknown) => RoomLike;
 interface WorkerModule {
   default: { fetch(request: Request, env: unknown): Promise<Response> };
-  Phonebook: new (state: { storage: unknown }) => { fetch(request: Request): Promise<Response> };
+  Phonebook: new (state: { storage: unknown }) => {
+    fetch(request: Request): Promise<Response>;
+    alarm(): Promise<void>;
+  };
 }
 let worker: WorkerModule;
 let lastInside: FakeSocket;
@@ -102,6 +105,70 @@ const request = (path: string) =>
   new Request(`https://relay.example${path}`, {
     headers: { upgrade: 'websocket', 'cf-connecting-ip': '203.0.113.7' },
   });
+
+/** Persistent state shared by fresh Worker isolates and fresh Durable Object instances. */
+const hosted = () => {
+  const objects = new Map<string, InstanceType<WorkerModule['Phonebook']>>();
+  const stored = new Map<string, Map<string, unknown>>();
+  const alarms = new Map<string, number>();
+  let upgrades = 0;
+  const env = {
+    PHONEBOOK: {
+      idFromName: (name: string) => name,
+      get: (name: string) => {
+        let object = objects.get(name);
+        if (!object) {
+          const values = stored.get(name) ?? new Map<string, unknown>();
+          stored.set(name, values);
+          let running = Promise.resolve();
+          const storage = {
+            get: (key: string) => Promise.resolve(structuredClone(values.get(key))),
+            put: (key: string, value: unknown) => {
+              values.set(key, structuredClone(value));
+              return Promise.resolve();
+            },
+            delete: (key: string) => Promise.resolve(values.delete(key)),
+            setAlarm: (when: number) => {
+              alarms.set(name, when);
+              return Promise.resolve();
+            },
+            transaction: <T>(work: (target: unknown) => Promise<T>) => {
+              const next = running.then(() => work(storage));
+              running = next.then(
+                () => undefined,
+                () => undefined,
+              );
+              return next;
+            },
+          };
+          object = new worker.Phonebook({ storage });
+          objects.set(name, object);
+        }
+        const target = object;
+        return {
+          fetch: (input: string, init?: RequestInit) => target.fetch(new Request(input, init)),
+        };
+      },
+    },
+    ROOMS: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: () => {
+          upgrades++;
+          return Promise.resolve(new Response('room'));
+        },
+      }),
+    },
+  };
+  const call = (path: string, ip = '203.0.113.7', upgrade = false) =>
+    worker.default.fetch(
+      new Request(`https://relay.example${path}`, {
+        headers: { 'cf-connecting-ip': ip, ...(upgrade ? { upgrade: 'websocket' } : {}) },
+      }),
+      env,
+    );
+  return { env, objects, stored, alarms, call, upgrades: () => upgrades };
+};
 
 describe('hosted relay glue (worker/index.js)', () => {
   it('proves a home, pairs a connection and passes bytes, all through tags and attachments', async () => {
@@ -150,32 +217,7 @@ describe('hosted relay glue (worker/index.js)', () => {
 
 describe('hosted phone book (worker/index.js, D-20)', () => {
   it('keeps one Durable Object per ID, filled by the proven home, read by lookups', async () => {
-    const objects = new Map<string, InstanceType<WorkerModule['Phonebook']>>();
-    const env = {
-      PHONEBOOK: {
-        idFromName: (name: string) => name,
-        get: (name: string) => {
-          let object = objects.get(name);
-          if (!object) {
-            const stored = new Map<string, unknown>();
-            object = new worker.Phonebook({
-              storage: {
-                get: (key: string) => Promise.resolve(stored.get(key)),
-                put: (key: string, value: unknown) => {
-                  stored.set(key, value);
-                  return Promise.resolve();
-                },
-              },
-            });
-            objects.set(name, object);
-          }
-          const target = object;
-          return {
-            fetch: (input: string, init?: RequestInit) => target.fetch(new Request(input, init)),
-          };
-        },
-      },
-    };
+    const { env, objects } = hosted();
     const { privateKey } = generateKeyPairSync('ed25519');
     const publicKey = privateKey.export({ format: 'jwk' }).x ?? '';
     const home = createHash('sha256')
@@ -204,5 +246,72 @@ describe('hosted phone book (worker/index.js, D-20)', () => {
     expect(found.status).toBe(200);
     expect(await found.json()).toEqual({ home, salt: mine.salt });
     expect((await lookup(theirs.id)).status).toBe(404);
+  });
+});
+
+describe('hosted relay request limits (INV-15, D-20)', () => {
+  const missing = 'QRM-0000-0000-0000';
+
+  it('rejects malformed encoding without touching storage, and keeps answering health', async () => {
+    const h = hosted();
+    for (const suffix of ['%', '%E0%A4%A', '%FF']) {
+      expect((await h.call(`/v1/lookup/${suffix}`)).status).toBe(400);
+    }
+    expect(h.objects.size).toBe(0);
+    expect((await h.call('/health')).status).toBe(200);
+    expect((await h.call(`/v1/lookup/${missing}`)).status).toBe(404);
+  });
+
+  it('counts concurrent lookups per address across different IDs and fresh object instances', async () => {
+    const h = hosted();
+    const replies = await Promise.all(
+      Array.from({ length: 31 }, (_, i) =>
+        h.call(`/v1/lookup/${i % 2 ? missing : 'QRM-1111-1111-1111'}`),
+      ),
+    );
+    expect(replies.filter((r) => r.status === 404)).toHaveLength(30);
+    expect(replies.filter((r) => r.status === 429)).toHaveLength(1);
+    expect(replies.find((r) => r.status === 429)?.headers.get('retry-after')).toMatch(
+      /^[1-9][0-9]?$/,
+    );
+    h.objects.clear(); // simulate hibernation/recreation while retaining Durable Object storage
+    expect((await h.call(`/v1/lookup/${missing}`)).status).toBe(429);
+    expect((await h.call(`/v1/lookup/${missing}`, '203.0.113.8')).status).toBe(404);
+    expect([...h.stored.keys()].filter((key) => key.startsWith('limits:'))).toHaveLength(2);
+    expect([...h.stored.keys()].some((key) => key.includes('203.0.113'))).toBe(false);
+  });
+
+  it('limits upgrades before room forwarding, independently of the lookup budget', async () => {
+    const h = hosted();
+    for (let i = 0; i < 120; i++) {
+      expect((await h.call(`/v1/connect/${'A'.repeat(43)}`, undefined, true)).status).toBe(200);
+    }
+    const refused = await h.call(`/v1/home/${'B'.repeat(43)}`, undefined, true);
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get('retry-after')).toMatch(/^[1-9][0-9]?$/);
+    expect(h.upgrades()).toBe(120);
+    expect((await h.call(`/v1/lookup/${missing}`)).status).toBe(404);
+    expect((await h.call(`/v1/home/${'B'.repeat(43)}`, '203.0.113.8', true)).status).toBe(200);
+  });
+
+  it('resets expired windows and an old cleanup alarm does not delete a fresh window', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const h = hosted();
+      for (let i = 0; i < 30; i++) await h.call(`/v1/lookup/${missing}`);
+      expect((await h.call(`/v1/lookup/${missing}`)).status).toBe(429);
+      const object = [...h.objects.values()][0];
+      expect(object).toBeDefined();
+      clock.mockReturnValue(1_060_001);
+      expect((await h.call(`/v1/lookup/${missing}`)).status).toBe(404);
+      await object?.alarm();
+      expect([...h.stored.values()][0]?.get('rate:lookup')).toEqual({ start: 1_060_001, count: 1 });
+      expect([...h.alarms.values()][0]).toBe(1_120_001);
+      clock.mockReturnValue(1_120_002);
+      await object?.alarm();
+      expect([...h.stored.values()][0]?.size).toBe(0);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

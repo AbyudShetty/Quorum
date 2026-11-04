@@ -21,6 +21,6 @@
     "@quorum/core": "0.0.0",
     "@quorum/local": "0.0.0",
     "@quorum/schemas": "0.0.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   }
 }

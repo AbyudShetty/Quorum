@@ -54,6 +54,7 @@ import {
   type LinkSent,
   type PeerSession,
   type QuorumIdCreated,
+  type QuorumIdRotated,
   type LocalBootstrapResponse,
   type UiLink,
   type DeviceStarted,
@@ -158,6 +159,8 @@ export interface FederationPort {
   flush(outboxId: string): Promise<'delivered' | 'refused' | 'unreachable'>;
   /** Something was queued: deliver it soon. */
   queued(): void;
+  /** Rows already being transmitted must remain before a newly queued cancellation. */
+  inFlightIds?(): readonly string[];
 }
 
 const notFound = (code: string, message: string, fix: string) =>
@@ -231,6 +234,9 @@ export class Quorum {
   >();
   readonly #messageLimit: RateLimiter;
   readonly #heartbeatLimit: RateLimiter;
+  /** Cancels in-flight async requests when a newer detach/block supersedes them. No await
+   * survives a process restart, so these cancellation versions need not be persisted. */
+  readonly #linkCancellations = new Map<string, number>();
   readonly notifier = new Notifier();
 
   private constructor(options: QuorumOptions) {
@@ -1777,7 +1783,7 @@ export class Quorum {
     );
   }
 
-  /** `/quorum-id`, done by the human who typed it: this session's own agent and permanent ID. */
+  /** `/quorum-id`, done by the human who typed it: this session's own agent and current ID. */
   async createQuorumId(caller: Caller, input: unknown): Promise<QuorumIdCreated> {
     this.#requireHuman(caller);
     const body = this.#check('quorumIdCreate', input);
@@ -1820,7 +1826,7 @@ export class Quorum {
         ],
       }));
     }
-    const { id, salt } = newQuorumId(this.#home());
+    const { id, salt } = this.#freshQuorumId();
     const now = this.#now();
     const machine = this.#options.machine;
     const agentRow: AgentRow = {
@@ -1876,6 +1882,94 @@ export class Quorum {
     });
     this.#options.onQuorumId?.({ id, salt });
     return created;
+  }
+
+  #freshQuorumId(): { id: string; salt: string } {
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const candidate = newQuorumId(this.#home());
+      if (!this.#registry.quorumId(candidate.id) && !this.#registry.rotationOf(candidate.id)) {
+        return candidate;
+      }
+    }
+    throw new Error('Could not allocate a fresh Quorum ID.');
+  }
+
+  /** Human-typed /quorum-rotate: replace the public ID without changing the session's agent. */
+  async rotateQuorumId(caller: Caller, input: unknown): Promise<QuorumIdRotated> {
+    this.#requireHuman(caller);
+    const body = this.#check('quorumIdRotate', input);
+    const root = await this.#canonicalRoot(body.root);
+    // Re-read after canonicalizing: another request may have rotated, detached or revoked it.
+    const own = this.#registry.quorumIdOfVendorSession(body.vendor, body.vendor_session_id);
+    const agent = own && this.#registry.agent(own.agent);
+    const platform = process.platform === 'win32' ? 'win32' : 'posix';
+    if (
+      !own ||
+      !agent ||
+      agent.owner !== caller.id ||
+      agent.status !== 'active' ||
+      pathKey(own.root, platform) !== pathKey(root, platform)
+    ) {
+      throw new DomainError(
+        'forbidden',
+        'pairing.identity_mismatch',
+        'This session identity does not belong to this human and folder, or is inactive.',
+        'Resume the original active session in its attached folder.',
+      );
+    }
+    if (body.expected_id !== own.id) {
+      const receipt = this.#registry.rotationOf(body.expected_id);
+      if (receipt?.agent === own.agent && receipt.next_id === own.id) {
+        // A response lost after commit can be retried, even after a server restart.
+        this.#options.onQuorumId?.({ id: own.id, salt: own.salt });
+        this.#options.federation?.queued();
+        return {
+          previous_id: receipt.previous_id,
+          id: receipt.next_id,
+          detached: JSON.parse(receipt.detached) as string[],
+        };
+      }
+      throw new DomainError(
+        'conflict',
+        'pairing.id_changed',
+        'This session no longer has the ID expected by this rotation.',
+        'Read its current ID with /quorum-id (Codex: $quorum-id), then retry deliberately.',
+      );
+    }
+    const next = this.#freshQuorumId();
+    const now = this.#now();
+    const links = this.#registry.linksOf(own.id);
+    const result = { previous_id: own.id, id: next.id, detached: links.map((link) => link.remote) };
+    this.#commit(() => {
+      const cancelled = this.#registry.cancelPairingOutbox(
+        own.id,
+        this.#options.federation?.inFlightIds?.() ?? [],
+      );
+      const events = this.#unlink(own, links, now);
+      this.#registry.rotateQuorumId(own.id, next.id, next.salt);
+      this.#registry.insertRotation({
+        previous_id: own.id,
+        agent: own.agent,
+        next_id: next.id,
+        detached: JSON.stringify(result.detached),
+        rotated_at: now,
+      });
+      events.push([
+        SYSTEM_CHAIN,
+        this.#event(caller.address, 'quorum_id.rotated', {
+          previous_id: own.id,
+          id: next.id,
+          agent: agent.address,
+          detached: result.detached,
+          cancelled_handshakes: cancelled,
+        }),
+      ]);
+      return { result: undefined, events };
+    });
+    this.#cancelLinkRequest(own.id);
+    this.#options.onQuorumId?.(next);
+    this.#options.federation?.queued();
+    return result;
   }
 
   /** Every Quorum ID of this server with its salt (for the relay's phone book). */
@@ -1980,8 +2074,12 @@ export class Quorum {
       return { state: 'requested' };
     }
     const federation = this.#options.federation;
+    const version = this.#linkVersion(own.id, to);
     const where = federation ? await federation.lookup(to) : undefined;
     if (!where || where.home === this.#home()) throw this.#noSuchId(to);
+    if (!this.#activeId(own.id) || this.#linkVersion(own.id, to) !== version) {
+      throw this.#noSuchId(to);
+    }
     const placeholder: PeerSession = {
       id: to,
       salt: where.salt,
@@ -2021,12 +2119,15 @@ export class Quorum {
       };
     });
     const outcome = federation ? await federation.flush(outboxId) : 'unreachable';
+    if (!this.#activeId(own.id) || this.#linkVersion(own.id, to) !== version) {
+      throw this.#noSuchId(to);
+    }
+    // A simultaneous request/approval may already have linked us while this send was waiting.
+    // In particular an older refusal must never delete that newly approved link.
+    if (this.#registry.link(own.id, to)?.state === 'linked') return { state: 'linked' };
     if (outcome === 'refused') {
       // Unknown or blocked on the other side: forget the request, say "no such ID".
-      this.#commit(() => {
-        this.#registry.deleteLink(own.id, to);
-        return { result: undefined, events: [] };
-      });
+      this.linkRefused('link', JSON.stringify({ from: { id: own.id }, to }));
       throw this.#noSuchId(to);
     }
     return { state: outcome === 'delivered' ? 'requested' : 'queued' };
@@ -2179,6 +2280,15 @@ export class Quorum {
   }
 
   /** Remove links of this session (all, or one) and tell the other sides; nobody is asked. */
+  #linkVersion(local: string, remote: string): string {
+    return `${String(this.#linkCancellations.get(`${local}:*`) ?? 0)}:${String(this.#linkCancellations.get(`${local}:${remote}`) ?? 0)}`;
+  }
+
+  #cancelLinkRequest(local: string, remote?: string): void {
+    const key = `${local}:${remote ?? '*'}`;
+    this.#linkCancellations.set(key, (this.#linkCancellations.get(key) ?? 0) + 1);
+  }
+
   #unlink(own: QuorumIdRow, links: readonly LinkRow[], now: string): [string, NewEvent][] {
     const home = this.#home();
     const events: [string, NewEvent][] = [];
@@ -2212,6 +2322,7 @@ export class Quorum {
     const chosen = this.#registry.linksOf(own.id).filter((l) => !id || l.remote === id);
     const now = this.#now();
     this.#commit(() => ({ result: undefined, events: this.#unlink(own, chosen, now) }));
+    this.#cancelLinkRequest(own.id, id);
     this.#options.federation?.queued();
     return { detached: chosen.map((l) => l.remote) };
   }
@@ -2231,6 +2342,7 @@ export class Quorum {
       ]);
       return { result: undefined, events };
     });
+    this.#cancelLinkRequest(own.id, id);
     this.#options.federation?.queued();
   }
 
@@ -2451,6 +2563,7 @@ export class Quorum {
         ],
       };
     });
+    this.#cancelLinkRequest(to, from);
   }
 
   /** A message from a linked session on another laptop: stored here, for our session. */

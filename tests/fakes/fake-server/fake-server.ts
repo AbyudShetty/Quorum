@@ -16,6 +16,7 @@ import {
   helloMessage,
   MemoryEventStore,
   MessageLog,
+  newQuorumId,
   type Principal,
   type StoredMessage,
   folderName,
@@ -32,6 +33,10 @@ import {
   type ApiPayloadKind,
   type DeliveredEnvelope,
   type MessageType,
+  type QuorumIdCreate,
+  type QuorumIdCreated,
+  type QuorumIdRotate,
+  type QuorumIdRotated,
   validateApiPayload,
 } from '@quorum/schemas';
 
@@ -138,6 +143,30 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
     lease_enforcement: string;
   }
   const attachments = new Map<string, AttachmentRecord>();
+  // The rotation contract needs stable vendor-session identity, not a new account per request.
+  // This fake models the local identity boundary; federation remains covered by the real server.
+  const pairing = new Map<
+    string,
+    {
+      owner: Account;
+      account: Account;
+      root: string;
+      current: QuorumIdCreated;
+    }
+  >();
+  const rotations = new Map<string, { account: Account; result: QuorumIdRotated }>();
+  const pairingKey = (vendor: string, session: string) => JSON.stringify([vendor, session]);
+  const freshPairingId = () => {
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const candidate = newQuorumId(publicKeyB64).id;
+      if (
+        !rotations.has(candidate) &&
+        ![...pairing.values()].some((p) => p.current.id === candidate)
+      )
+        return candidate;
+    }
+    throw new Error('Could not allocate a fresh Quorum ID.');
+  };
   const clock = options.clock ?? Date.now;
   /** Last heartbeat per agent: online for 90 s after it, or until it says offline. */
   const heartbeats = new Map<string, { at: number; status: string }>();
@@ -441,6 +470,91 @@ export const startFakeServer = async (options: FakeServerOptions = {}): Promise<
 
     // Everything below needs a token.
     const account = authenticate(req);
+
+    if (method === 'POST' && (path === '/v1/quorum-ids' || path === '/v1/quorum-ids/rotate')) {
+      requireHuman(account);
+      const rotating = path.endsWith('/rotate');
+      const body = checkPayload(
+        rotating ? 'quorumIdRotate' : 'quorumIdCreate',
+        await readBody(req),
+      ) as unknown as QuorumIdCreate | QuorumIdRotate;
+      const key = pairingKey(body.vendor, body.vendor_session_id);
+      const known = pairing.get(key);
+      const platform = process.platform === 'win32' ? 'win32' : 'posix';
+      if (
+        (known &&
+          (known.owner !== account ||
+            known.account.revoked ||
+            pathKey(known.root, platform) !== pathKey(body.root, platform))) ||
+        (rotating && !known)
+      ) {
+        throw new DomainError(
+          'forbidden',
+          'pairing.identity_mismatch',
+          'This session identity does not belong to this human and folder, or is inactive.',
+          'Resume the original active session in its attached folder.',
+        );
+      }
+      if (rotating && known) {
+        const expected = (body as QuorumIdRotate).expected_id;
+        if (expected !== known.current.id) {
+          const receipt = rotations.get(expected);
+          if (receipt?.account === known.account && receipt.result.id === known.current.id) {
+            json(res, 200, receipt.result);
+            return;
+          }
+          throw new DomainError(
+            'conflict',
+            'pairing.id_changed',
+            'This session no longer has the expected ID.',
+            'Read the current ID and retry deliberately.',
+          );
+        }
+        const result = { previous_id: expected, id: freshPairingId(), detached: [] };
+        rotations.set(expected, { account: known.account, result });
+        known.current.id = result.id;
+        json(res, 200, result);
+        return;
+      }
+      if (known) {
+        json(res, 200, {
+          ...known.current,
+          created: false,
+          ...((body as QuorumIdCreate).credentials ? { credentials: issue(known.account) } : {}),
+        });
+        return;
+      }
+      const agent = newAccount(
+        'agent',
+        `agent:pair-${ids.ulid().toLowerCase()}@${account.address.slice(6)}`,
+        body.vendor,
+      );
+      const attachment = ids.id('attachment');
+      attachments.set(attachment, {
+        account: agent,
+        id: attachment,
+        root: body.root,
+        vendor: body.vendor,
+        workspaces: [],
+        wake: 'direct',
+        lease_enforcement: 'warn',
+      });
+      const current = {
+        id: freshPairingId(),
+        agent: { id: agent.id, address: agent.address },
+        attachment,
+        created: true,
+      };
+      pairing.set(key, { owner: account, account: agent, root: body.root, current });
+      json(res, 201, { ...current, credentials: issue(agent) });
+      return;
+    }
+
+    if (method === 'GET' && path === '/v1/links') {
+      const own = [...pairing.values()].find((p) => p.account === account);
+      json(res, 200, { ...(own ? { id: own.current.id } : {}), links: [] });
+      return;
+    }
 
     if (method === 'GET' && path === '/v1/workspaces') {
       const list = [...account.workspaces]

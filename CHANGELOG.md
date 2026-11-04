@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Human-only `/quorum-rotate` in Claude Code and `$quorum-rotate` in Codex; `/quorum-id` keeps
+  showing the current ID. Rotation retires the old ID, removes links and pending requests,
+  preserves history, blocks, credentials and the vendor window, and requires fresh consent.
+  API schema revision `1.1.0-draft`, OpenAPI route, migration 6 and durable expected-ID receipts
+  make concurrent/lost-response retries safe. The hook repairs stale saved IDs from the server.
+  Tests cover real/fake contracts, authorization, rollback, restart, queue races and both vendors.
+  Security: INV-7/8/11/12/20/25/30/34. See `docs/rfcs/ID_ROTATION.md`.
+
+### Fixed
+
+- Dependency audit findings: refresh compatible lockfile versions of body-parser, fast-uri,
+  Fastify, ip-address, qs, Vite and Zod. Scope patched minimatch 11 overrides to ESLint,
+  `@eslint/config-array` and `@typescript-eslint/typescript-estree`; their glob call sites use
+  APIs retained by minimatch 11, which supports the Node 22/24 runtime matrix. Keep the current
+  ESLint toolchain, install-script restrictions and CI audit threshold; no forced downgrade or
+  advisory suppression. No direct dependency is added; minimatch 11 brings its maintainer's
+  `@isaacs/nonrecursive-glob-match` transitive helper (BlueOak-1.0.0), replacing recursive glob
+  matching. Registry signature and attestation checks apply to the updated tree.
+  Packaged minimums also require patched Fastify `^5.12.8` and Zod `^4.6.7` for fresh installs.
+
+- Pairing MCP tools bind each invocation to the exact joined vendor session using a one-use,
+  argument-bound PreToolUse proof. Global last-active/PID identity fallbacks are removed; unjoined
+  windows and unsupported hooks fail closed. Setup revision 5 installs the binding hooks and
+  the seventh human command, rotation.
+- Concurrent pairing-state updates and duplicate joins are serialized. Named file locks use
+  PID/token ownership and guarded crash recovery rather than evicting live holders by age.
+  Malformed pairing state is preserved and refused (INV-7/12/25/29/34).
+- Both relay fronts reject malformed encoded lookup IDs without crashing. The hosted Worker
+  enforces per-address lookup and WebSocket admission limits across isolates with Retry-After
+  headers (INV-15). Packaged instructions now describe session pairing; final manual exit checks
+  and the ID-rotation RFC are documented.
+- A pairing lookup or delivery finishing late no longer undoes a newer block/detach or deletes
+  a newly approved link after an older refusal. Refused-request cleanup is recorded in the event
+  log, and queued link/unlink operations retain their ordering.
+- Release packaging excludes stale compiled modules left by deleted or moved TypeScript sources,
+  so a developer laptop does not ship extra obsolete code compared with a clean build.
+
 ### Fixed
 
 - Phase 1b server pairing authorization: a remote requester cannot approve its own pending request;

@@ -178,3 +178,22 @@ Still open on Track B's side: `login` cannot restart the local server until `quo
 ## 11. What is tested
 
 `packages/adapter-mcp/test`: framing and folder header (INV-9), identity check and squatter (INV-24), token refresh and rotation (INV-11), outbox (INV-20, INV-25), keychain round trip, heartbeats and presence, MCP tools including "no `approval_decision`, no `from` input" (INV-1, INV-7). `packages/cli/test`: every command against the fake server, including `login` never sending the bootstrap code to a server that fails the identity check, and `attach`/`detach`/`attach --update`. `tests/fakes/fake-server`: the fake passes `tests/contract`.
+
+## 12. Human session-ID rotation (API schema 1.1)
+
+Only a typed `/quorum-rotate` (Claude Code) or `$quorum-rotate` (Codex) rotates a joined session.
+It accepts no arguments, never joins a new session, and exposes no agent-callable rotation tool.
+`/quorum-id` retains its join/show behavior; it reads the authoritative current ID to repair stale
+hook state after a committed rotation whose response or local write was lost.
+
+`QuorumClient.rotateQuorumId` validates request and response against the shared schemas. It sends
+the canonical folder, vendor session and saved `expected_id` to the human-only endpoint. A retry
+with that same ID returns the original result while its replacement remains current. A 409
+requires reading the current ID and deliberately trying again; an adapter must not silently turn
+that conflict into another rotation. An older server's unsupported endpoint error is surfaced.
+
+The per-session lock covers the complete operation and cache update. Update state only after
+success; preserve agent/attachment/credentials/window label and conversation history, replace
+the public ID, and clear obsolete request/display marks. Rotation unlinks every peer, cancels
+pending requests and preserves blocks. Share the new ID and obtain fresh approval. The wire
+envelope remains `quorum/1`; see [the RFC](rfcs/ID_ROTATION.md) for durable retries and queue order.

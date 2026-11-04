@@ -149,6 +149,7 @@ export const startLocalServer = async (options: LocalServerOptions = {}): Promis
     const pairing: FederationPort = {
       lookup: (id) => startPairing().lookup(id),
       flush: (outboxId) => startPairing().flush(outboxId),
+      inFlightIds: () => federation?.inFlightIds?.() ?? [],
       queued: () => {
         startPairing().queued();
       },

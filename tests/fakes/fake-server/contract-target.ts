@@ -23,6 +23,7 @@ export const createTarget: CreateTarget = async () => {
     agentA: { address: agentA.address, token: agentA.token },
     agentB: { address: agentB.address, token: agentB.token },
     human,
+    pairing: true,
     // The fake never touches the disk for attach roots, so any absolute path will do.
     makeFolder: (name) => Promise.resolve(join(dataDir, `folder-${name}`)),
     bootstrap: { dataDir, reissue: () => server.issueBootstrap() },

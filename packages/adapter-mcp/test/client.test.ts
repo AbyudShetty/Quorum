@@ -168,3 +168,82 @@ describe('QuorumClient outages', () => {
     await client.inbox(world.workspace); // and recovers
   });
 });
+
+describe('QuorumClient human ID rotation', () => {
+  const urlOf = (input: Parameters<typeof fetch>[0]): string =>
+    typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const request = {
+    vendor: 'codex' as const,
+    vendor_session_id: 'vendor-session',
+    root: '/projects/rotation',
+    expected_id: 'QRM-1111-1111-1111',
+  };
+
+  it('sends the expected current ID unchanged and validates the new ID response', async () => {
+    world = await startWorld();
+    const calls: { method: string | undefined; body: unknown }[] = [];
+    const reply = { previous_id: request.expected_id, id: 'QRM-2222-2222-2222', detached: [] };
+    const client = await connectAs(world, {
+      fetch: (input, init) => {
+        if (urlOf(input).endsWith('/v1/quorum-ids/rotate')) {
+          calls.push({
+            method: init?.method,
+            body: typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined,
+          });
+          return Promise.resolve(Response.json(reply));
+        }
+        return fetch(input, init);
+      },
+    });
+    expect(await client.rotateQuorumId(request)).toEqual(reply);
+    expect(calls).toEqual([{ method: 'POST', body: request }]);
+  });
+
+  it('rejects malformed rotation input before sending a request', async () => {
+    world = await startWorld();
+    let rotations = 0;
+    const client = await connectAs(world, {
+      fetch: (input, init) => {
+        if (urlOf(input).endsWith('/v1/quorum-ids/rotate')) rotations += 1;
+        return fetch(input, init);
+      },
+    });
+    await expect(client.rotateQuorumId({ ...request, expected_id: 'not-an-id' })).rejects.toThrow(
+      'rotation request does not match',
+    );
+    expect(rotations).toBe(0);
+  });
+
+  it('refuses malformed success responses instead of handing an invalid ID to the hook', async () => {
+    world = await startWorld();
+    const client = await connectAs(world, {
+      fetch: (input, init) =>
+        urlOf(input).endsWith('/v1/quorum-ids/rotate')
+          ? Promise.resolve(Response.json({ previous_id: request.expected_id, id: 'broken' }))
+          : fetch(input, init),
+    });
+    await expect(client.rotateQuorumId(request)).rejects.toThrow('invalid rotation response');
+  });
+
+  it('preserves an older server unsupported-endpoint error without falling back to join', async () => {
+    world = await startWorld();
+    const paths: string[] = [];
+    const client = await connectAs(world, {
+      fetch: (input, init) => {
+        paths.push(urlOf(input));
+        return urlOf(input).endsWith('/v1/quorum-ids/rotate')
+          ? Promise.resolve(
+              Response.json(
+                {
+                  error: { code: 'route.not_found', message: 'No such route', permanent: true },
+                },
+                { status: 404 },
+              ),
+            )
+          : fetch(input, init);
+      },
+    });
+    await expect(client.rotateQuorumId(request)).rejects.toMatchObject({ status: 404 });
+    expect(paths.filter((path) => path.endsWith('/v1/quorum-ids'))).toEqual([]);
+  });
+});

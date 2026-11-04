@@ -16,4 +16,13 @@ It pairs a connection from another machine with the home server it asks for, and
 - `src/node.ts`: `startRelay()`, used by `quorum relay` to self-host (one dependency: `ws`, the standard WebSocket server for Node).
 - `worker/` and `wrangler.toml`: the hosted relay as a Cloudflare Worker with one Durable Object per home (free plan); see `worker/README.md`.
 
-Limits: frames up to 1 MiB, 64 open connections per home, new connections per address per minute (Node), and the home itself rate-limits connections per address.
+Limits: frames up to 1 MiB, 64 open connections per home, 120 new WebSocket requests and 30 ID
+lookups per client address per minute (Node defaults and the hosted Worker). A refused HTTP
+request returns 429 with `Retry-After`; malformed percent-encoded lookup IDs return 400.
+The home itself also rate-limits connections per address.
+
+The hosted Worker's counters use the existing `PHONEBOOK` Durable Object binding, with separate
+objects named `limits:<SHA-256(client address)>`. These cannot collide with Quorum IDs and enforce
+the budget across Worker isolates and object hibernation. Counter cleanup alarms remove expired
+windows without deleting a newly reset window; no raw client address or request history is stored.
+No new binding or migration is needed. Deploy the updated Worker before the Phase 1b exit run.

@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Quorum API",
-    "version": "1.0.0-draft",
+    "version": "1.1.0-draft",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -813,7 +813,7 @@
         "tags": [
           "pairing"
         ],
-        "summary": "D-20: give a session its own agent and permanent Quorum ID (`/quorum-id`).",
+        "summary": "D-20: give a session its own agent and stable Quorum ID (`/quorum-id`).",
         "description": "Called by the hook that caught `/quorum-id` typed by the person, with their token. The same vendor session always gets the same ID; credentials are returned only for a new ID or when `credentials` is asked for.",
         "security": [
           {
@@ -859,6 +859,61 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/v1/quorum-ids/rotate": {
+      "post": {
+        "operationId": "rotateQuorumId",
+        "tags": [
+          "pairing"
+        ],
+        "summary": "Assign a fresh public ID to an existing session (`/quorum-rotate`).",
+        "description": "Human-only, owner- and folder-bound. Invalidates the old ID, removes links and preserves history and the local block list. expected_id is a compare-and-swap guard: repeating the immediately preceding rotation returns the original result, but an expectation superseded by another rotation returns 409. No credentials are returned.",
+        "security": [
+          {
+            "humanToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuorumIdRotate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rotated, or the same immediately preceding rotation replayed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuorumIdRotated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -3923,6 +3978,75 @@
           },
           "created": {
             "type": "boolean"
+          }
+        }
+      },
+      "QuorumIdRotate": {
+        "$id": "urn:quorum:schema:api:quorum-id-rotate:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API quorum-id-rotate",
+        "type": "object",
+        "required": [
+          "vendor",
+          "vendor_session_id",
+          "root",
+          "expected_id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "vendor": {
+            "enum": [
+              "claude-code",
+              "codex",
+              "gemini-cli",
+              "opencode",
+              "generic"
+            ]
+          },
+          "vendor_session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)"
+          },
+          "expected_id": {
+            "type": "string",
+            "pattern": "^QRM-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+          }
+        }
+      },
+      "QuorumIdRotated": {
+        "$id": "urn:quorum:schema:api:quorum-id-rotated:1",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "quorum/1 API quorum-id-rotated",
+        "type": "object",
+        "required": [
+          "previous_id",
+          "id",
+          "detached"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "previous_id": {
+            "type": "string",
+            "pattern": "^QRM-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^QRM-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+          },
+          "detached": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^QRM-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+            }
           }
         }
       },

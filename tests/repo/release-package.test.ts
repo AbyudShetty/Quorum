@@ -2,7 +2,7 @@
 // from the built workspace packages by deploy/npm/pack.mjs. Needs `npm run build` first (as in
 // `npm run check`).
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -18,12 +18,18 @@ describe('release package (deploy/npm/pack.mjs)', () => {
 
   beforeAll(() => {
     out = mkdtempSync(join(tmpdir(), 'quorum-pack-'));
-    execFileSync(process.execPath, [
-      join(root, 'deploy/npm/pack.mjs'),
-      '--stage-only',
-      '--out',
-      out,
-    ]);
+    const obsolete = join(root, 'packages/server/dist/obsolete-pack-fixture.js');
+    writeFileSync(obsolete, 'throw new Error("stale output must never ship");\n');
+    try {
+      execFileSync(process.execPath, [
+        join(root, 'deploy/npm/pack.mjs'),
+        '--stage-only',
+        '--out',
+        out,
+      ]);
+    } finally {
+      rmSync(obsolete, { force: true });
+    }
     stage = join(out, 'stage');
     jsFiles = readdirSync(stage, { recursive: true, withFileTypes: true })
       .filter((e) => e.isFile() && e.name.endsWith('.js'))
@@ -53,6 +59,7 @@ describe('release package (deploy/npm/pack.mjs)', () => {
     expect(existsSync(join(stage, 'lib/cli/bin/quorum.js'))).toBe(true);
     expect(existsSync(join(stage, 'lib/server/dist/local/serve-main.js'))).toBe(true);
     expect(existsSync(join(stage, 'lib/fleet'))).toBe(false);
+    expect(existsSync(join(stage, 'lib/server/dist/obsolete-pack-fixture.js'))).toBe(false);
     const all = readdirSync(stage, { recursive: true }).map(String);
     expect(all.filter((f) => /(^|[\\/])(src|test)[\\/]|\.ts$|\.map$/.test(f))).toEqual([]);
   });

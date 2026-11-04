@@ -1,7 +1,7 @@
 // OpenAPI 3.1 description of the /v1 HTTP API: the contract between the server (Track A)
 // and the adapters, CLI and web UI (Track B). Additive changes only within v1 (ARCHITECTURE §5).
 // Component schemas keep their `$id`, so the URN references inside them resolve within this document.
-import { apiSchemas } from './json-schema/api.js';
+import { API_SCHEMA_VERSION, apiSchemas } from './json-schema/api.js';
 import { bodySchemas } from './json-schema/bodies.js';
 import { commonSchema } from './json-schema/common.js';
 import { deliveredEnvelopeSchema, submittedEnvelopeSchema } from './json-schema/envelope.js';
@@ -66,7 +66,7 @@ export const openApiDocument = {
   jsonSchemaDialect: 'https://json-schema.org/draft/2020-12/schema',
   info: {
     title: 'Quorum API',
-    version: '1.0.0-draft',
+    version: API_SCHEMA_VERSION,
     license: { name: 'Apache-2.0', identifier: 'Apache-2.0' },
     description: [
       'The `/v1` API of a Quorum server: the single contract for adapters, the CLI and the web UI.',
@@ -386,7 +386,7 @@ export const openApiDocument = {
       post: {
         operationId: 'createQuorumId',
         tags: ['pairing'],
-        summary: 'D-20: give a session its own agent and permanent Quorum ID (`/quorum-id`).',
+        summary: 'D-20: give a session its own agent and stable Quorum ID (`/quorum-id`).',
         description:
           'Called by the hook that caught `/quorum-id` typed by the person, with their token. The same vendor session always gets the same ID; credentials are returned only for a new ID or when `credentials` is asked for.',
         security: human,
@@ -395,6 +395,27 @@ export const openApiDocument = {
           '200': { description: 'The existing ID.', content: json('QuorumIdCreated') },
           '201': { description: 'A new ID.', content: json('QuorumIdCreated') },
           '400': errorRef('BadRequest'),
+          ...authErrors,
+        },
+      },
+    },
+    '/v1/quorum-ids/rotate': {
+      post: {
+        operationId: 'rotateQuorumId',
+        tags: ['pairing'],
+        summary: 'Assign a fresh public ID to an existing session (`/quorum-rotate`).',
+        description:
+          'Human-only, owner- and folder-bound. Invalidates the old ID, removes links and preserves history and the local block list. expected_id is a compare-and-swap guard: repeating the immediately preceding rotation returns the original result, but an expectation superseded by another rotation returns 409. No credentials are returned.',
+        security: human,
+        requestBody: { required: true, content: json('QuorumIdRotate') },
+        responses: {
+          '200': {
+            description: 'Rotated, or the same immediately preceding rotation replayed.',
+            content: json('QuorumIdRotated'),
+          },
+          '400': errorRef('BadRequest'),
+          '404': errorRef('NotFound'),
+          '409': errorRef('Conflict'),
           ...authErrors,
         },
       },
@@ -809,6 +830,8 @@ export const openApiDocument = {
       UiLink: apiSchemas.uiLink,
       QuorumIdCreate: apiSchemas.quorumIdCreate,
       QuorumIdCreated: apiSchemas.quorumIdCreated,
+      QuorumIdRotate: apiSchemas.quorumIdRotate,
+      QuorumIdRotated: apiSchemas.quorumIdRotated,
       LinkCreate: apiSchemas.linkCreate,
       LinkCreated: apiSchemas.linkCreated,
       LinkSelect: apiSchemas.linkSelect,

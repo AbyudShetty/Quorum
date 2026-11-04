@@ -14,6 +14,8 @@ import {
   type LinkSent,
   type QuorumIdCreate,
   type QuorumIdCreated,
+  type QuorumIdRotate,
+  type QuorumIdRotated,
   type SessionCreate,
   type SessionCreated,
   type DeliveredEnvelope,
@@ -567,9 +569,19 @@ export class QuorumClient {
 
   // --- session pairing (D-20, PAIRING.md) ---------------------------------------------------
 
-  /** `/quorum-id`, as the human who typed it: this session's own agent and permanent ID. */
+  /** `/quorum-id`, as the human who typed it: join or read this session's current ID. */
   async createQuorumId(request: QuorumIdCreate): Promise<QuorumIdCreated> {
     return (await this.call('POST', '/v1/quorum-ids', request)).body as QuorumIdCreated;
+  }
+
+  /** Human-only `/quorum-rotate`; expected_id makes a transport retry safe. */
+  async rotateQuorumId(request: QuorumIdRotate): Promise<QuorumIdRotated> {
+    const input = validateApiPayload('quorumIdRotate', request);
+    if (!input.ok) throw new TypeError('The rotation request does not match the API schema.');
+    const response = await this.call('POST', '/v1/quorum-ids/rotate', input.value);
+    const output = validateApiPayload('quorumIdRotated', response.body);
+    if (!output.ok) throw new TypeError('The server returned an invalid rotation response.');
+    return output.value;
   }
 
   /** This session's ID, links and waiting requests. */

@@ -122,6 +122,7 @@ import {
   writeVendorConfig,
 } from './vendor-config.js';
 import { removeUserConfig, writeUserConfig } from './user-config.js';
+import { preparePairingToolCall, resolvePairingToolCall } from './pairing-tools.js';
 
 export interface CliEnv {
   out: (text: string) => void;
@@ -1493,18 +1494,11 @@ const mcpWindow = async (
 
 /**
  * `quorum mcp --vendor <v>` without `--attachment`: the tools in every session (D-20). Claude Code
- * runs one per window (its process is our parent); Codex runs one for all its windows, which speaks
- * for the window used last. A session that never joined gets told how to.
+ * runs one per window; Codex can share one between windows. Each call is bound by the vendor's
+ * PreToolUse hook, never by process or activity order. Unjoined sessions cannot acquire a proof.
  */
 const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
   const dataDir = dataDirOf(env);
-  const vendorPid = env.vendorPid ?? process.ppid;
-  const clients = new Map<string, QuorumClient>();
-  const clientFor = async (attachment: string): Promise<QuorumClient> => {
-    let client = clients.get(attachment);
-    if (!client) clients.set(attachment, (client = await connect(env, attachment)));
-    return client;
-  };
   /** Paired sessions of this vendor with their windows, newest activity first. */
   const candidates = async () => {
     const sessions = await loadPairing(dataDir);
@@ -1533,16 +1527,17 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
   const targetOf = async (attachment: string, window: string) => {
     const saved = await loadAttachment(dataDir, attachment);
     if (!saved) return undefined;
-    const client = await clientFor(attachment);
+    // Each invocation owns its client, including during long dialogs. A shared mutable
+    // `session` could otherwise change while a different window's request was awaiting I/O.
+    const client = await connect(env, attachment);
     client.session = window;
     return { client, attachment: linkedAttachment(saved, (await client.links()).links) };
   };
   const server = createPairingMcpServer({
     prefix: vendor === 'codex' ? '$' : '/',
-    resolve: async () => {
-      const all = await candidates();
-      const mine = vendor === 'codex' ? all[0] : all.find((c) => c.vendorPid === vendorPid);
-      return mine ? targetOf(mine.attachment, mine.window) : undefined;
+    resolve: async (call) => {
+      const bound = await resolvePairingToolCall(dataDir, call.tool, call.args, vendor);
+      return bound ? targetOf(bound.attachment, bound.window) : undefined;
     },
   });
   // Codex has no hook to wake an idle window: this shared process does, for each paired session.
@@ -1948,7 +1943,7 @@ const pairingHook = async (
 const setupMarker = (dataDir: string): string => join(dataDir, 'setup.json');
 
 /** Raised whenever setup writes something new, so an updated Quorum sets itself up again. */
-const SETUP_REVISION = 3;
+const SETUP_REVISION = 5;
 
 /**
  * `quorum setup [--quiet]` (D-20, PAIRING.md §4): Quorum in every Claude Code and Codex session.
@@ -2047,7 +2042,9 @@ const hook = async (args: string[], env: CliEnv): Promise<number> => {
   const watch = vendor === 'claude-code' && event === 'watch';
   if (values.attachment === undefined && HOOK_VENDORS.includes(vendor as HookVendor)) {
     // Quorum's user-level hooks (D-20): every session, joined or not.
-    const known = event === 'command' || watch || HOOK_EVENTS.includes(event as HookEvent);
+    const preTool = event === 'pre-tool';
+    const known =
+      preTool || event === 'command' || watch || HOOK_EVENTS.includes(event as HookEvent);
     if (!known)
       throw new UsageError(
         `Use: quorum hook <${HOOK_VENDORS.join('|')}> <${HOOK_EVENTS.join('|')}|command|watch>.`,
@@ -2057,6 +2054,15 @@ const hook = async (args: string[], env: CliEnv): Promise<number> => {
       pairingInput = JSON.parse((await env.stdin?.()) ?? '');
     } catch {
       pairingInput = undefined;
+    }
+    if (preTool) {
+      const output = await preparePairingToolCall(
+        dataDirOf(env),
+        pairingInput,
+        vendor as HookVendor,
+      );
+      if (output) env.out(`${output}\n`);
+      return 0;
     }
     return pairingHook(vendor as HookVendor, event ?? '', pairingInput, env);
   }

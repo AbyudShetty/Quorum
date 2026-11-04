@@ -351,3 +351,16 @@ Answers recorded 2026-10-01 by abyud (D-14); abhijna confirms or challenges them
 1. ~~Multiple recipients for `request`~~ — **accepted:** exactly one recipient.
 2. ~~Body limit~~ — **decided: 96 KiB** (changed from the proposed 64 KiB); larger content goes into artifacts.
 3. ~~Ordering~~ — **accepted:** `created_at` is informational; `seq` orders.
+
+## 10. Session-ID rotation API revision
+
+The additive HTTP schema revision `1.1.0-draft` adds `quorumIdRotate` and `quorumIdRotated`
+payloads and `POST /v1/quorum-ids/rotate`. Both payload schemas start at version 1. No message
+envelope or relay payload changes, so `SPEC_VERSION` stays `quorum/1`.
+
+Only a human can rotate an active identity bound to their vendor session and canonical folder.
+The required `expected_id` supplies compare-and-swap semantics and durable retry receipts.
+Rotation retires the old public ID, unlinks all peers and requires new approval, retaining
+history, credentials, membership and blocks. A superseded retry gets `pairing.id_changed` (409).
+See [the rotation RFC](rfcs/ID_ROTATION.md) and the generated OpenAPI operation for the exact
+request/response and delivery-order guarantees.

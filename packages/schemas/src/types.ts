@@ -489,6 +489,20 @@ export interface LinkCreate {
   to: string;
 }
 
+/** Human-only /quorum-rotate; expected_id prevents a retry from rotating twice. */
+export interface QuorumIdRotate {
+  vendor: Vendor;
+  vendor_session_id: string;
+  root: string;
+  expected_id: string;
+}
+
+export interface QuorumIdRotated {
+  previous_id: string;
+  id: string;
+  detached: string[];
+}
+
 export interface LinkCreated {
   state: 'requested' | 'linked' | 'queued';
 }
@@ -601,6 +615,8 @@ export interface ApiPayloads {
   localBootstrapFile: LocalBootstrapFile;
   quorumIdCreate: QuorumIdCreate;
   quorumIdCreated: QuorumIdCreated;
+  quorumIdRotate: QuorumIdRotate;
+  quorumIdRotated: QuorumIdRotated;
   linkCreate: LinkCreate;
   linkCreated: LinkCreated;
   linkSelect: LinkSelect;

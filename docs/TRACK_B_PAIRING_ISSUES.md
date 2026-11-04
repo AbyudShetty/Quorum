@@ -1,5 +1,11 @@
 # Pairing review: issues for Track B
 
+**Implementation update, 2026-11-04:** the two findings below have code fixes and automated
+regressions. Pairing MCP calls now require a per-invocation proof from the exact vendor session's
+PreToolUse hook, with no last-active/PID fallback. Pairing-state mutations and joins use cross-process
+locks. See [adapter hardening](PHASE_1B_ADAPTER_HARDENING.md) for the implementation and remaining
+vendor-runtime validation. The original issue descriptions are retained below as review history.
+
 Drafts for Abyud to discuss with Abhijna, 2026-11-04. These are review findings, not authorization to
 edit Track B or change the shared contract. They must be resolved or explicitly assessed before
 claiming the Phase 1b exit criteria.

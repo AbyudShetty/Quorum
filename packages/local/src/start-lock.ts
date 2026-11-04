@@ -85,8 +85,8 @@ const heldBy = async (path: string): Promise<LockAttempt> => ({
 export const acquireStartLock = async (
   dataDir: string,
   alive: (pid: number) => boolean = isProcessAlive,
+  path = lockPath(dataDir),
 ): Promise<LockAttempt> => {
-  const path = lockPath(dataDir);
   const token = randomUUID();
   if (await tryCreate(path, token)) return held(path, token);
 

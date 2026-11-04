@@ -283,6 +283,120 @@ describe('pairing commands on a laptop with leftovers, or stuck', () => {
   });
 });
 
+describe('typed ID rotation through the relay', () => {
+  it('rotates in both vendors, retires old links, retains history and requires fresh approval', async () => {
+    const inputA = { session_id: 'claude-rotation', cwd: folderA };
+    const inputB = { session_id: 'codex-rotation', cwd: folderB };
+    const atA = (name: string) =>
+      hook(a, 'claude-code', 'command', {
+        ...inputA,
+        command_name: `quorum-${name}`,
+        command_args: '',
+      });
+    const atB = (prompt: string) => hook(b, 'codex', 'prompt', { ...inputB, prompt });
+    const idIn = (out: Record<string, unknown> | undefined) =>
+      /QRM-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}/.exec(String(out?.reason))?.[0] ?? '';
+    const oldA = idIn(await atA('id'));
+    await until(
+      async () =>
+        (await fetch(`${relay.url.replace('ws://', 'http://')}/v1/lookup/${oldA}`)).status,
+      (status) => status === 200,
+      'rotation session A in phone book',
+    );
+    await atB(`$quorum-attach ${oldA}`);
+    const pairing = (m: Machine) =>
+      JSON.parse(readFileSync(join(m.dataDir, 'hooks', 'pairing.json'), 'utf8')) as Record<
+        string,
+        { id: string; attachment: string }
+      >;
+    const savedA = pairing(a)['claude-code:claude-rotation'];
+    const savedB = pairing(b)['codex:codex-rotation'];
+    expect(savedA).toBeDefined();
+    expect(savedB).toBeDefined();
+    const clientA = await QuorumClient.connect({
+      dataDir: a.dataDir,
+      credentialKey: savedA?.attachment ?? '',
+      store: a.store,
+    });
+    const clientB = await QuorumClient.connect({
+      dataDir: b.dataDir,
+      credentialKey: savedB?.attachment ?? '',
+      store: b.store,
+    });
+    const approve = () =>
+      until(
+        () => atA('allow'),
+        (out) => String(out?.reason).includes('Quorum: allowed.'),
+        'fresh approval at rotation session A',
+      );
+    await approve();
+    await until(
+      () => clientB.links(),
+      (list) => list.links.some((peer) => peer.id === oldA && peer.state === 'linked'),
+      'initial rotation-session pair',
+    );
+    await clientB.sendToLinks({
+      to: [oldA],
+      type: 'note',
+      body: { text: 'keep this through rotation' },
+    });
+    await until(
+      () => clientA.exportLinks(),
+      (text) => text.includes('keep this through rotation'),
+      'rotation-session history',
+    );
+
+    const rotatedA = await atA('rotate');
+    const newA = idIn(rotatedA);
+    expect(newA).not.toBe(oldA);
+    expect(newA).toMatch(/^QRM-/);
+    expect(String(rotatedA?.reason)).toContain(`old ID ${oldA} no longer works`);
+    expect(pairing(a)['claude-code:claude-rotation']?.attachment).toBe(savedA?.attachment);
+    expect((await clientA.links()).id).toBe(newA);
+    expect((await clientA.links()).links).toEqual([]);
+    expect(await clientA.exportLinks()).toContain('keep this through rotation');
+    expect(idIn(await atA('id'))).toBe(newA);
+    await until(
+      () => clientB.links(),
+      (list) => list.links.length === 0,
+      'remote unlink after rotation',
+    );
+    await expect(clientB.requestLink(oldA)).rejects.toMatchObject({ status: 404 });
+
+    await until(
+      async () =>
+        (await fetch(`${relay.url.replace('ws://', 'http://')}/v1/lookup/${newA}`)).status,
+      (status) => status === 200,
+      'rotated A in phone book',
+    );
+    await atB(`$quorum-attach ${newA}`);
+    await until(
+      () => clientA.links(),
+      (list) => list.links.some((peer) => peer.id === savedB?.id && peer.state === 'pending'),
+      'new request remains pending until the human allows it',
+    );
+    await approve();
+    await until(
+      () => clientB.links(),
+      (list) => list.links.some((peer) => peer.id === newA && peer.state === 'linked'),
+      'approved pair using new A ID',
+    );
+    const rotatedB = await atB('$quorum-rotate');
+    const newB = idIn(rotatedB);
+    expect(newB).not.toBe(savedB?.id);
+    expect(newB).toMatch(/^QRM-/);
+    expect(String(rotatedB?.reason)).toContain('All links were removed');
+    expect(pairing(b)['codex:codex-rotation']?.attachment).toBe(savedB?.attachment);
+    expect(idIn(await atB('$quorum-id'))).toBe(newB);
+    expect(await clientB.exportLinks()).toContain('keep this through rotation');
+    await until(
+      () => clientA.links(),
+      (list) => list.links.length === 0,
+      'remote unlink after Codex rotation',
+    );
+  }, 60_000);
+});
+
 describe('waking an idle session for requests and new links (D-21)', () => {
   /** Claude Code's asyncRewake watcher: exit 2 and stderr wake the session. */
   const watch = async (m: Machine, input: unknown) => {

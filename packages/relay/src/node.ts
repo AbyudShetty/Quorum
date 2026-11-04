@@ -173,14 +173,26 @@ export const startRelay = async (options: RelayOptions = {}): Promise<Relay> => 
     }
     const lookup = /^\/v1\/lookup\/([^/?]+)$/.exec(url);
     if (request.method === 'GET' && lookup) {
+      let id: string;
+      try {
+        id = decodeURIComponent(lookup[1] ?? '');
+      } catch {
+        json(response, 400, { error: 'Malformed ID encoding.' });
+        return;
+      }
       if (!lookupAllowed(clientOf(request))) {
+        response.setHeader('retry-after', '60');
         json(response, 429, { error: 'Too many lookups; try again in a minute.' });
         return;
       }
-      void lookupId(phonebook, decodeURIComponent(lookup[1] ?? '')).then((entry) => {
-        if (entry) json(response, 200, entry);
-        else json(response, 404, { error: 'No such ID.' });
-      });
+      void lookupId(phonebook, id)
+        .then((entry) => {
+          if (entry) json(response, 200, entry);
+          else json(response, 404, { error: 'No such ID.' });
+        })
+        .catch(() => {
+          json(response, 503, { error: 'The phone book is unavailable; try again later.' });
+        });
       return;
     }
     response.writeHead(404, { 'content-type': 'text/plain' }).end('Not found.\n');
@@ -199,7 +211,7 @@ export const startRelay = async (options: RelayOptions = {}): Promise<Relay> => 
     }
     const client = clientOf(request);
     if (!allowed(client)) {
-      reject(429, 'Too Many Requests');
+      socket.end('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 60\r\nConnection: close\r\n\r\n');
       return;
     }
     const room = roomOf(home);

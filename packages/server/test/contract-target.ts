@@ -57,6 +57,7 @@ export const createTarget: CreateTarget = async () => {
   return {
     baseUrl: server.baseUrl,
     localMode: true,
+    pairing: true,
     pinnedPublicKey: server.publicKey,
     workspace,
     agentA,

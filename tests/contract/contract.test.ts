@@ -8,6 +8,8 @@ import { readBootstrapCode } from '@quorum/local';
 import {
   type ApiPayloadKind,
   type SubmittedEnvelope,
+  type QuorumIdCreated,
+  type QuorumIdRotated,
   validateApiPayload,
   validateDeliveredEnvelope,
   validateErrorResponse,
@@ -82,6 +84,103 @@ describe.skipIf(!targetModule)('/v1 contract', () => {
       });
       const signed = Buffer.from(`quorum/1 hello\n${hello.instance_id}\n${nonce}`, 'utf8');
       expect(verify(null, signed, key, Buffer.from(hello.signature, 'base64url'))).toBe(true);
+    });
+  });
+
+  describe('session ID rotation (API schema 1.1)', () => {
+    const joined = async (name: string) => {
+      if (!t.makeFolder) throw new Error('The rotation target needs makeFolder.');
+      const root = await t.makeFolder(name);
+      const input = { vendor: 'codex', vendor_session_id: `rotation-${ulid()}`, root };
+      const response = await call(t.baseUrl, 'POST', '/v1/quorum-ids', {
+        token: t.human.token,
+        body: input,
+      });
+      expect(response.status).toBe(201);
+      expectPayload('quorumIdCreated', response.body);
+      return { input, identity: response.body as QuorumIdCreated };
+    };
+    const rotate = (body: unknown, token = t.human.token) =>
+      call(t.baseUrl, 'POST', '/v1/quorum-ids/rotate', { token, body });
+
+    it('keeps identity and credentials while replacing only the public ID', async (context) => {
+      if (!t.pairing || !t.makeFolder) return context.skip();
+      const { input, identity } = await joined('rotation-stable');
+      const body = { ...input, expected_id: identity.id };
+      const response = await rotate(body);
+      expect(response.status).toBe(200);
+      expectPayload('quorumIdRotated', response.body);
+      const rotated = response.body as QuorumIdRotated;
+      expect(rotated.previous_id).toBe(identity.id);
+      expect(rotated.id).not.toBe(identity.id);
+      expect(rotated.detached).toEqual([]);
+      const current = await call(t.baseUrl, 'POST', '/v1/quorum-ids', {
+        token: t.human.token,
+        body: input,
+      });
+      expect(current.body).toMatchObject({
+        id: rotated.id,
+        agent: identity.agent,
+        attachment: identity.attachment,
+        created: false,
+      });
+      expect(current.body).not.toHaveProperty('credentials');
+      const links = await call(t.baseUrl, 'GET', '/v1/links', {
+        token: identity.credentials?.access_token ?? '',
+      });
+      expect(links.status).toBe(200);
+      expect(links.body).toEqual({ id: rotated.id, links: [] });
+    });
+
+    it('makes concurrent retries idempotent and rejects a superseded expected ID', async (context) => {
+      if (!t.pairing || !t.makeFolder) return context.skip();
+      const { input, identity } = await joined('rotation-retry');
+      const request = { ...input, expected_id: identity.id };
+      const [one, two] = await Promise.all([rotate(request), rotate(request)]);
+      expect(one.status).toBe(200);
+      expect(two.status).toBe(200);
+      expect(one.body).toEqual(two.body);
+      const first = one.body as QuorumIdRotated;
+      const second = await rotate({ ...input, expected_id: first.id });
+      expect(second.status).toBe(200);
+      expect((second.body as QuorumIdRotated).id).not.toBe(identity.id);
+      const stale = await rotate(request);
+      expect(stale.status).toBe(409);
+      expectError(stale.body);
+      expect(stale.body).toMatchObject({ error: { code: 'pairing.id_changed' } });
+    });
+
+    it('rejects agent callers and missing authentication', async (context) => {
+      if (!t.pairing || !t.makeFolder) return context.skip();
+      const { input, identity } = await joined('rotation-human');
+      const body = { ...input, expected_id: identity.id };
+      const agent = await rotate(body, identity.credentials?.access_token ?? '');
+      expect(agent.status).toBe(403);
+      expectError(agent.body);
+      const anonymous = await call(t.baseUrl, 'POST', '/v1/quorum-ids/rotate', { body });
+      expect(anonymous.status).toBe(401);
+      expectError(anonymous.body);
+    });
+
+    it('requires an expected ID and the original active folder binding', async (context) => {
+      if (!t.pairing || !t.makeFolder) return context.skip();
+      const { input, identity } = await joined('rotation-binding');
+      const malformed = await rotate(input);
+      expect(malformed.status).toBe(400);
+      expectError(malformed.body);
+      const wrongRoot = await rotate({
+        ...input,
+        expected_id: identity.id,
+        root: await t.makeFolder('rotation-wrong-folder'),
+      });
+      expect(wrongRoot.status).toBe(403);
+      expectError(wrongRoot.body);
+      await call(t.baseUrl, 'DELETE', `/v1/attachments/${identity.attachment ?? ''}`, {
+        token: t.human.token,
+      });
+      const inactive = await rotate({ ...input, expected_id: identity.id });
+      expect(inactive.status).toBe(403);
+      expectError(inactive.body);
     });
   });
 

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { openApiDocument } from '../src/index.js';
+import { API_SCHEMA_VERSION, openApiDocument, SPEC_VERSION } from '../src/index.js';
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 const doc = JSON.parse(JSON.stringify(openApiDocument)) as { [key: string]: Json };
@@ -40,6 +40,11 @@ const operations = Object.entries(doc.paths as Record<string, Record<string, Ope
 );
 
 describe('OpenAPI /v1 document', () => {
+  it('versions the additive rotation contract without changing the message protocol', () => {
+    expect(API_SCHEMA_VERSION).toBe('1.1.0-draft');
+    expect(openApiDocument.info.version).toBe(API_SCHEMA_VERSION);
+    expect(SPEC_VERSION).toBe('quorum/1');
+  });
   it('is OpenAPI 3.1 using JSON Schema 2020-12', () => {
     expect(doc.openapi).toMatch(/^3\.1\./);
     expect(doc.jsonSchemaDialect).toBe('https://json-schema.org/draft/2020-12/schema');
@@ -115,6 +120,7 @@ describe('OpenAPI /v1 document', () => {
       'deleteAttachment',
       'exportEvents',
       'revokeAgent',
+      'rotateQuorumId',
       'updateAttachment',
     ]);
   });

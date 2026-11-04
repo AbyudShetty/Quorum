@@ -76,7 +76,7 @@ export interface SessionRow {
   display_root: string | null;
 }
 
-/** A session's permanent Quorum ID (D-20) and the agent that is that session. */
+/** A session's current public Quorum ID (D-20) and the agent that is that session. */
 export interface QuorumIdRow {
   id: string;
   salt: string;
@@ -85,6 +85,14 @@ export interface QuorumIdRow {
   vendor_session_id: string;
   root: string;
   created_at: string;
+}
+
+export interface QuorumIdRotationRow {
+  previous_id: string;
+  agent: string;
+  next_id: string;
+  detached: string;
+  rotated_at: string;
 }
 
 /** requested: this side asked; pending: the other side asked and waits for /quorum-allow. */
@@ -422,6 +430,47 @@ export class Registry {
       'INSERT INTO quorum_ids (id, salt, agent, vendor, vendor_session_id, root, created_at) VALUES (@id, @salt, @agent, @vendor, @vendor_session_id, @root, @created_at)',
       { ...row },
     );
+  }
+
+  rotationOf(previous: string): QuorumIdRotationRow | undefined {
+    return this.#get('SELECT * FROM quorum_id_rotations WHERE previous_id = ?', previous);
+  }
+
+  /** Call after deleting all links whose local foreign key names the retiring ID. */
+  rotateQuorumId(previous: string, id: string, salt: string): void {
+    this.#run('UPDATE quorum_ids SET id = ?, salt = ? WHERE id = ?', [id, salt, previous]);
+    // Preserve both this session's block list and other same-laptop sessions' blocks of it.
+    this.#run(
+      `INSERT OR IGNORE INTO link_blocks (local, remote, created_at)
+       SELECT CASE WHEN local = ? THEN ? ELSE local END,
+              CASE WHEN remote = ? THEN ? ELSE remote END, created_at
+       FROM link_blocks WHERE local = ? OR remote = ?`,
+      [previous, id, previous, id, previous, previous],
+    );
+    this.#run('DELETE FROM link_blocks WHERE local = ? OR remote = ?', [previous, previous]);
+  }
+
+  insertRotation(row: QuorumIdRotationRow): void {
+    this.#run(
+      `INSERT INTO quorum_id_rotations (previous_id, agent, next_id, detached, rotated_at)
+       VALUES (@previous_id, @agent, @next_id, @detached, @rotated_at)`,
+      { ...row },
+    );
+  }
+
+  /** Drop only unsent old-ID handshakes. In-flight rows must retain their place before unlink. */
+  cancelPairingOutbox(id: string, inFlight: readonly string[]): number {
+    const protectedIds = new Set(inFlight);
+    let cancelled = 0;
+    for (const row of this.#all<OutboxRow>(
+      "SELECT * FROM federation_outbox WHERE kind IN ('link', 'accept')",
+    )) {
+      const body = JSON.parse(row.payload) as { from: { id: string } };
+      if (body.from.id === id && !protectedIds.has(row.id)) {
+        cancelled += this.#run('DELETE FROM federation_outbox WHERE id = ?', [row.id]);
+      }
+    }
+    return cancelled;
   }
 
   link(local: string, remote: string): LinkRow | undefined {

@@ -178,6 +178,18 @@ const MIGRATIONS: readonly string[] = [
   ) STRICT;
   CREATE INDEX federation_outbox_due ON federation_outbox (next_at);
   `,
+  // 6: retired public IDs and compare-and-swap rotation retry receipts. Agent identity and
+  // historical workspace memberships are unchanged; an old ID never becomes live again.
+  `
+  CREATE TABLE quorum_id_rotations (
+    previous_id TEXT PRIMARY KEY,
+    agent       TEXT NOT NULL REFERENCES agents (id),
+    next_id     TEXT NOT NULL,
+    detached    TEXT NOT NULL,
+    rotated_at  TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX quorum_id_rotations_agent ON quorum_id_rotations (agent);
+  `,
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

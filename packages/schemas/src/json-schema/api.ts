@@ -4,6 +4,9 @@ import { MESSAGE_TYPES } from './bodies.js';
 import { common, ULID } from './common.js';
 import { DELIVERED_ENVELOPE_ID } from './envelope.js';
 
+/** Additive revision of the HTTP contract; envelope spec remains quorum/1. */
+export const API_SCHEMA_VERSION = '1.1.0-draft';
+
 const apiId = (name: string): string => `urn:quorum:schema:api:${name}:1`;
 
 /** base64url without padding, of an exact byte length. */
@@ -508,6 +511,28 @@ export const apiSchemas = {
       /** Only when the ID is new (or `credentials` was asked for): shown once. */
       credentials: tokenPair,
       created: { type: 'boolean' },
+    },
+  }),
+  /** `/quorum-rotate`: compare-and-swap the human's current session ID. */
+  quorumIdRotate: schema('quorum-id-rotate', {
+    type: 'object',
+    required: ['vendor', 'vendor_session_id', 'root', 'expected_id'],
+    additionalProperties: false,
+    properties: {
+      vendor: { enum: [...VENDORS] },
+      vendor_session_id: { type: 'string', minLength: 1, maxLength: 256 },
+      root: absolutePath,
+      expected_id: { type: 'string', pattern: QUORUM_ID },
+    },
+  }),
+  quorumIdRotated: schema('quorum-id-rotated', {
+    type: 'object',
+    required: ['previous_id', 'id', 'detached'],
+    additionalProperties: false,
+    properties: {
+      previous_id: { type: 'string', pattern: QUORUM_ID },
+      id: { type: 'string', pattern: QUORUM_ID },
+      detached: { type: 'array', uniqueItems: true, items: { type: 'string', pattern: QUORUM_ID } },
     },
   }),
   /** `/quorum-attach <id>`. */

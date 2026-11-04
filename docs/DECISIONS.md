@@ -194,7 +194,7 @@ Decisions are joint, so abhijna confirms or challenges these during the E2 revie
 
 - **Decision (abyud, 2026-10-13; abhijna to review):** after the first relay runs, setting up was still too much (an invite per folder, a home machine that must stay on, mail held by a fragile per-window flag). Instead, sessions pair directly, like phone contacts. Full design: [PAIRING.md](PAIRING.md).
   - Only `npm install -g`; the commands then exist in every Claude Code (`/quorum-…`) and Codex (`$quorum-…`) session: `id`, `attach <id>`, `detach`, `block <id>`, `export`, plus `allow` to accept a request (added while designing: an answer has to be typed by the person, like the commands).
-  - A session joins only by running `id` or `attach`. IDs are short (`QRM-XXXX-XXXX-XXXX`), permanent and self-certifying (derived from the laptop's key; the relay's phone book cannot lie undetected). The relay now stores that phone book (ID → laptop), a deliberate change from "stores nothing"; it never learns who is linked to whom and never sees messages.
+  - A session joins only by running `id` or `attach`. IDs are short (`QRM-XXXX-XXXX-XXXX`), stable until human-requested rotation and self-certifying (derived from the laptop's key; the relay's phone book cannot lie undetected). The relay now stores that phone book (ID → laptop), a deliberate change from "stores nothing"; it never learns who is linked to whom and never sees messages.
   - The other person approves a link; requests wait until that session is open. Blocked and unknown IDs get the same "no such ID". Detaching needs nobody's approval. Attaching twice does nothing.
   - Every laptop runs its own server; servers exchange signed link requests and messages through the relay (TLS to pinned keys, INV-33), each keeping its own copy; the sender retries while the other laptop is off. This brings plan Phase 7's "federation between Quorum servers" forward, in a minimal pairwise form.
   - Groups are links between pairs, all equal; roles come from the humans' prompts, not from the agents.
@@ -203,6 +203,12 @@ Decisions are joint, so abhijna confirms or challenges these during the E2 revie
 - **Why safe:** commands are handled by hooks from what the person typed (Claude Code `UserPromptExpansion`, only person-typed commands; Codex `UserPromptSubmit`), blocked before the model runs. Agents cannot type prompts, so they cannot link, approve or detach themselves (INV-30). Verified live on both vendors.
 - **Supersedes:** the invite/join and asking-before-reading parts of D-18; D-17's numbering and display stay.
 - **Revisit if:** a vendor stops letting hooks see or block typed commands (then: a plain `quorum: id` prefix), or groups need a shared group ID instead of pairwise links.
+
+**Rotation follow-up:** Abyud reported discussing rotation with Abhijna and authorized a separate
+`/quorum-rotate` command (Codex: `$quorum-rotate`), keeping `/quorum-id` as join/show-current.
+Rotation retires the old ID and unlinks peers, requiring fresh approval while retaining history
+and blocks. Implementation contract, retry semantics and shared review scope:
+[ID_ROTATION.md](rfcs/ID_ROTATION.md). This does not close Phase 1b or resolve D-1/D-5.
 
 ## D-21 Link requests answered in a dialog
 

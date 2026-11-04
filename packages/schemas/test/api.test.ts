@@ -159,6 +159,13 @@ const examples: ApiPayloads = {
     },
     created: true,
   },
+  quorumIdRotate: {
+    vendor: 'codex',
+    vendor_session_id: 'thread-1',
+    root: 'C:\\proj\\web',
+    expected_id: 'QRM-7KD2-PX9F-M3TA',
+  },
+  quorumIdRotated: { previous_id: 'QRM-7KD2-PX9F-M3TA', id: 'QRM-0000-1111-2222', detached: [] },
   linkCreate: { to: 'QRM-7KD2-PX9F-M3TA' },
   linkCreated: { state: 'requested' },
   linkSelect: { id: 'QRM-7KD2-PX9F-M3TA' },
@@ -233,6 +240,30 @@ const issues = (kind: ApiPayloadKind, input: unknown): string[] => {
 };
 
 describe('API payloads', () => {
+  it('requires a well-formed current ID and identity binding for rotation', () => {
+    const { expected_id: _expected, ...missing } = examples.quorumIdRotate;
+    expect(issues('quorumIdRotate', missing)).toContain(' required');
+    expect(
+      issues('quorumIdRotate', { ...examples.quorumIdRotate, expected_id: 'not-an-id' }),
+    ).toContain('/expected_id pattern');
+    expect(issues('quorumIdRotate', { ...examples.quorumIdRotate, root: 'relative' })).toContain(
+      '/root pattern',
+    );
+    expect(issues('quorumIdRotate', { ...examples.quorumIdRotate, credentials: true })).toContain(
+      ' additionalProperties',
+    );
+  });
+  it('rotation replies contain only IDs and unique detached peers, never credentials', () => {
+    expect(issues('quorumIdRotated', { ...examples.quorumIdRotated, credentials: {} })).toContain(
+      ' additionalProperties',
+    );
+    expect(
+      issues('quorumIdRotated', {
+        ...examples.quorumIdRotated,
+        detached: ['QRM-0000-1111-2222', 'QRM-0000-1111-2222'],
+      }),
+    ).toContain('/detached uniqueItems');
+  });
   it.each(Object.keys(examples) as ApiPayloadKind[])('accepts a valid %s', (kind) => {
     expect(issues(kind, examples[kind])).toEqual([]);
   });

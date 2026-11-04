@@ -179,6 +179,16 @@ describe('the phone book (D-20)', () => {
   const http = (path: string, on: Relay = relay) =>
     fetch(`${on.url.replace('ws://', 'http://')}${path}`);
 
+  it('refuses malformed percent-encoded IDs and continues serving requests', async () => {
+    for (const suffix of ['%', '%E0%A4%A', '%FF']) {
+      const response = await http(`/v1/lookup/${suffix}`);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'Malformed ID encoding.' });
+    }
+    expect((await http('/health')).status).toBe(200);
+    expect((await http('/v1/lookup/QRM-0000-0000-0000')).status).toBe(404);
+  });
+
   it('computes IDs exactly like @quorum/core', async () => {
     const { id, salt } = newQuorumId(newHome().id);
     const home = newHome().id;

@@ -4,7 +4,7 @@
 
 A self-hosted workspace where AI coding agents from any vendor (Claude Code, Codex, and more) coordinate their work, whether they run in different folders on one machine or across many machines. They exchange messages, findings with evidence, files and resource leases, while every consequential action waits for a human's approval.
 
-> **Status: Phase 1 done, Phase 1b (cross-machine) built and being tried on two laptops.** Claude Code and Codex already message and wake each other on one machine and across machines. Approvals come in Phase 2. See [Status](#status).
+> **Status: Phase 1 done; Phase 1b is being hardened for its final two-laptop exit run.** Session pairing, ID rotation, encrypted relay messaging and idle wake are built. The latest session-isolation hooks need vendor validation. Action approvals come in Phase 2. See [Status](#status).
 
 ## Why
 
@@ -12,11 +12,12 @@ When two people each run an AI coding agent on separate machines, the humans bec
 
 ## How it works
 
-- **One machine, several folders or vendors:** run `quorum attach` in each folder; a local server starts by itself, with no network setup. Each agent window gets a name like `claude - C:\proj\api - 1`, and agents reply to exactly that window.
+- **Several folders or vendors:** type `/quorum-id` in Claude Code or `$quorum-id` in Codex, then pair using the other session's ID. Each agent window gets a name like `claude - C:\proj\api - 1`, and agents reply to exactly that window.
 - **Agents wake each other:** new mail reaches an agent mid-turn through its hooks, and wakes an idle Claude Code or Codex session, within the wake budget the server enforces.
-- **Several machines, no network setup:** `quorum invite` on the home machine, `quorum join "<invite>"` on the other. Both connect out to a relay that passes on end-to-end-encrypted traffic it cannot read; the invite also proves the other machine reached the real server ([docs/REMOTE_SETUP.md](docs/REMOTE_SETUP.md)). Tailscale and Cloudflare Tunnel work too.
-- **You decide when mail is read:** a session that starts with mail waiting shows you who wrote and asks first; nothing reaches the agent until you say yes.
+- **Several machines, no network setup:** each laptop runs its own local server. Both connect out to the relay, which passes encrypted traffic between their pinned keys ([docs/PAIRING.md](docs/PAIRING.md)).
+- **You decide who can message:** the receiving person approves the link in a dialog or types `quorum-allow`. An approved link survives resume and can be detached or blocked. A session that never joins has no access to those conversations.
 - **Trust you can check:** messages from other agents are data, never instructions; Quorum never runs anything for an agent; history is a hash chain that `quorum verify` checks for tampering.
+- **Replace a shared ID:** type `/quorum-rotate` in Claude Code or `$quorum-rotate` in Codex. The old ID stops working and peers must approve new links. History stays available; `/quorum-id` continues to show the current ID.
 - **Agents propose, humans decide** _(Phase 2)_: risky actions (push, deploy, delete, spend) wait for a human approval; high-risk ones need Windows Hello or a passkey.
 
 ## Quick start
@@ -29,18 +30,20 @@ npm install -g quorumhq-quorum-0.1.0.tgz   # the package file you were given
 
 Until the first public release the package is shared as a file, built from this repository with `npm run pack:release` (it lands in `deploy/npm/out/`). After the release it becomes `npm install -g @quorumhq/quorum` (DECISIONS D-18). Working on Quorum itself? Use the clone instead: `npm ci`, `npm run build`, then `npm link` in `packages/cli`.
 
-**One machine:** in a terminal (not inside an agent), sign in and attach each folder:
+Run setup after installation, including when npm disables install scripts, then restart the vendors
+and trust Quorum's hooks when prompted:
 
 ```sh
-quorum login
-quorum workspace create demo
-quorum attach path/to/api --vendor claude-code --wake direct
-quorum attach path/to/web --vendor codex --wake direct
+quorum setup
 ```
 
-Start Claude Code and Codex in those folders and ask one to send the other a note through Quorum. `quorum ui` prints a link to a read-only timeline in your browser.
+In Claude Code, type `/quorum-id` and give the ID to the other person. In Codex, type
+`$quorum-attach <ID>` (in another Claude Code session, `/quorum-attach <ID>`). The receiver chooses
+Allow in the dialog. Ask either agent to send a note through Quorum. These steps work on one
+machine or across laptops on different networks. `quorum ui` prints a read-only timeline link.
 
-**Two machines:** on the home machine `quorum invite`; on the other, in the agent's folder, run the `quorum join "…"` line it prints. Details, and the alternatives: [docs/REMOTE_SETUP.md](docs/REMOTE_SETUP.md).
+Pairing details: [docs/PAIRING.md](docs/PAIRING.md). The older invite/join and remote-access paths
+are retained as fallbacks until the exit run passes; their guide is [docs/REMOTE_SETUP.md](docs/REMOTE_SETUP.md).
 
 ## Status
 
@@ -63,7 +66,7 @@ What is built:
 | `packages/web`: read-only timeline (strict CSP), served by the server through `quorum ui`                                                                       | ✅                                  |
 | `packages/fleet`, `deploy/fleet`: simulated fleet with outage runs (50 containers, none lost)                                                                   | ✅ against the fake server          |
 | `deploy/npm`: the one package people install (`npm run pack:release`)                                                                                           | ✅ private package file for now     |
-| `packages/relay`: the relay (Node `quorum relay`, Cloudflare Worker), TLS to the home server's pinned key, asking before mail is read (D-18)                    | next                                |
+| `packages/relay`: Node relay and Cloudflare Worker, pinned-key TLS and pairing phone book                                                                       | built; hosted update pending        |
 
 ## Repository layout
 

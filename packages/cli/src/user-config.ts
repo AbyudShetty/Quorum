@@ -29,6 +29,10 @@ export interface UserConfigOptions {
 /** What each command does, for the menus of both tools. */
 const COMMANDS: readonly { name: string; hint?: string; what: string }[] = [
   { name: 'id', what: "Join Quorum: show this session's Quorum ID to share" },
+  {
+    name: 'rotate',
+    what: "Replace this session's Quorum ID and unlink its peers; keep history and blocks",
+  },
   { name: 'attach', hint: '<QRM-id>', what: 'Ask to link this session with another session' },
   { name: 'allow', hint: '[QRM-id]', what: 'Accept a session that asked to link with this one' },
   { name: 'detach', hint: '[QRM-id]', what: 'Unlink from one session, or all' },
@@ -186,6 +190,16 @@ export const writeUserConfig = async (options: UserConfigOptions): Promise<Confi
   } else {
     const existed = await exists(p.claudeSettings);
     stripOurHooks(settings);
+    addHook(
+      settings,
+      'PreToolUse',
+      {
+        type: 'command',
+        ...execForm(command, ['hook', 'claude-code', 'pre-tool']),
+        timeout: 10,
+      },
+      '^mcp__quorum__quorum_(send|inbox|status|requests)$',
+    );
     for (const event of EVENTS) {
       addHook(settings, HOOK_EVENT_NAMES[event], {
         type: 'command',
@@ -261,6 +275,16 @@ export const writeUserConfig = async (options: UserConfigOptions): Promise<Confi
   } else {
     const existed = await exists(p.codexHooks);
     stripOurHooks(codexHooks);
+    addHook(
+      codexHooks,
+      'PreToolUse',
+      {
+        type: 'command',
+        command: shellForm(command, ['hook', 'codex', 'pre-tool']),
+        timeout: 10,
+      },
+      '^mcp__quorum__quorum_(send|inbox|status|requests)$',
+    );
     for (const event of EVENTS) {
       addHook(codexHooks, HOOK_EVENT_NAMES[event], {
         type: 'command',

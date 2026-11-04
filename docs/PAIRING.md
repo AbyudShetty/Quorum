@@ -1,6 +1,6 @@
 # Session pairing (DECISIONS D-20)
 
-Status: **design, being built** (Phase 1b, replaces invite/join). Decided by abyud on 2026-10-13; abhijna to review on return.
+Status: **implemented, awaiting the Phase 1b live exit run** (replaces invite/join). D-20 was accepted by both maintainers on 2026-10-19. Rotation implementation was authorized after Abyud reported discussing it with Abhijna; see [the rotation RFC](rfcs/ID_ROTATION.md).
 
 ## 1. What the person does
 
@@ -8,7 +8,8 @@ After `npm install -g @quorumhq/quorum`, these commands exist in every Claude Co
 
 | Claude Code             | Codex                   | What it does                                                                                                    |
 | ----------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `/quorum-id`            | `$quorum-id`            | This session joins Quorum and shows its ID, e.g. `QRM-7KD2-PX9F-M3TA`. The ID belongs to it for life.           |
+| `/quorum-id`            | `$quorum-id`            | Join if needed and show this session's current ID, e.g. `QRM-7KD2-PX9F-M3TA`. It stays the same until rotation. |
+| `/quorum-rotate`        | `$quorum-rotate`        | Give this joined session a new ID, retire the old one and unlink all peers. Pair again with fresh approval.     |
 | `/quorum-attach <id>`   | `$quorum-attach <id>`   | Ask to link this session with the session that has that ID. The other person approves.                          |
 | `/quorum-detach [<id>]` | `$quorum-detach [<id>]` | Unlink (one link, or all). The other side is not asked.                                                         |
 | `/quorum-block <id>`    | `$quorum-block <id>`    | Never hear from that session again; to it, this session's ID looks like one that does not exist.                |
@@ -25,7 +26,7 @@ Your answer:  Not now | Allow | Block
 
 The dialog is an MCP elicitation, opened by Quorum's `quorum_requests` tool. The agent is told to open it but cannot answer it. Anything but a chosen **Allow** or **Block** leaves the request waiting, and you have 10 minutes to answer.
 
-Typing works too: `/quorum-allow [<id>]` (`$quorum-allow` in Codex), the sixth command, or `/quorum-block <id>`. Attaching back to a session that asked first also links the two. A vendor without dialogs only shows the line and the commands to type.
+Typing works too: `/quorum-allow [<id>]` (`$quorum-allow` in Codex), or `/quorum-block <id>`. Attaching back to a session that asked first also links the two. A vendor without dialogs only shows the line and the commands to type.
 
 Requests wake an idle session at most 5 times an hour, and never when wake mode is off. The person still sees every request at the next prompt.
 
@@ -55,7 +56,7 @@ Codex has no custom slash commands: its TUI rejects unknown `/x`, and custom pro
 
 ## 4. Install
 
-`npm install -g` runs a setup step that writes, at user level: Quorum's hooks (`~/.claude/settings.json`, `~/.codex/hooks.json`), its MCP server (`quorum mcp`, for the `quorum_*` tools), the six commands (`~/.claude/commands/quorum-*.md`, `~/.codex/skills/quorum-*/SKILL.md`). Hooks of sessions without an ID exit at once. Codex asks the person once to trust the new hooks. Where install scripts are turned off, the first `quorum` command does the same. `quorum uninstall` removes all of it (npm no longer runs anything on uninstall).
+`npm install -g` runs a setup step that writes, at user level: Quorum's hooks (`~/.claude/settings.json`, `~/.codex/hooks.json`), its MCP server (`quorum mcp`, for the `quorum_*` tools), the seven commands (`~/.claude/commands/quorum-*.md`, `~/.codex/skills/quorum-*/SKILL.md`). Hooks of sessions without an ID exit at once. Codex asks the person once to trust the new hooks. Where install scripts are turned off, the first `quorum` command does the same. `quorum uninstall` removes all of it (npm no longer runs anything on uninstall).
 
 The commands always use this laptop's own server. A sign-in to another machine's server, left by the old `quorum login <link>`, is dropped.
 
