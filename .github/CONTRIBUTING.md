@@ -17,7 +17,7 @@ Thanks for helping. Quorum is a security-sensitive tool, so the bar is "boring a
 ## Setup
 
 ```sh
-nvm use            # Node 24 LTS (22.12+ also supported)
+nvm use            # optional development default; runtime needs Node-API 10 (22.14+, 23.6+, or newer)
 npm ci
 npm run check      # format:check, lint, typecheck, build, test
 ```

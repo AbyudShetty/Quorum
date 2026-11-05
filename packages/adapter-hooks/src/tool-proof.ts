@@ -98,12 +98,28 @@ export const mintToolProof = async (
   await mkdir(directory(dataDir), { recursive: true, mode: 0o700 });
   return withFileLock(dataDir, 'tool-proof-mint', async () => {
     let pending = 0;
-    for (const name of await readdir(directory(dataDir))) {
-      if (!PROOF_FILE.test(name)) continue;
-      const path = join(directory(dataDir), name);
-      const record = await readProof(path);
-      if (!record || record.expiresAt <= now) await rm(path, { force: true });
-      else pending += 1;
+    const names = (await readdir(directory(dataDir))).filter((name) => PROOF_FILE.test(name));
+    // Serial lstat/read/unlink for a full quota can exceed a Windows hook's deadline. Keep
+    // concurrency bounded and hold the mint lock until every operation in a batch has settled.
+    for (let offset = 0; offset < names.length; offset += 16) {
+      const results = await Promise.allSettled(
+        names.slice(offset, offset + 16).map(async (name) => {
+          const path = join(directory(dataDir), name);
+          const record = await readProof(path);
+          if (!record || record.expiresAt <= now) {
+            await rm(path, { force: true });
+            return 0;
+          }
+          return 1;
+        }),
+      );
+      for (const result of results) {
+        if (result.status === 'rejected')
+          throw result.reason instanceof Error
+            ? result.reason
+            : new Error('Could not scan pending Quorum tool calls.');
+        pending += result.value;
+      }
     }
     if (pending >= MAX_PENDING_TOOL_PROOFS) {
       throw new Error('Too many Quorum tool calls are waiting; retry after one minute.');

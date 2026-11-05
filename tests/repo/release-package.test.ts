@@ -1,10 +1,11 @@
 // The one package people install (`npm install -g @quorumhq/quorum`, DECISIONS D-18) is staged
 // from the built workspace packages by deploy/npm/pack.mjs. Needs `npm run build` first (as in
 // `npm run check`).
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const root = resolve(import.meta.dirname, '../..');
@@ -62,6 +63,22 @@ describe('release package (deploy/npm/pack.mjs)', () => {
     expect(existsSync(join(stage, 'lib/server/dist/obsolete-pack-fixture.js'))).toBe(false);
     const all = readdirSync(stage, { recursive: true }).map(String);
     expect(all.filter((f) => /(^|[\\/])(src|test)[\\/]|\.ts$|\.map$/.test(f))).toEqual([]);
+  });
+
+  it('checks the runtime before loading external dependencies from the installed entry point', () => {
+    const entry = pathToFileURL(join(stage, 'bin/quorum.js')).href;
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `Object.defineProperty(process.versions, 'node', {value:'20.20.2'}); await import(${JSON.stringify(entry)});`,
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Quorum requires Node-API 10');
+    expect(result.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
   });
 
   it('turns every import of another Quorum package into a relative path that exists', () => {

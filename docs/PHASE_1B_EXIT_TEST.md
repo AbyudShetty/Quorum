@@ -14,7 +14,9 @@ The exit criteria remain in [PHASE_1B.md](PHASE_1B.md), with the accepted pairin
 
 - Finish the session-isolation and hook-state concurrency fixes and their automated regressions.
 - Run `npm run check` on the final source. Record its result and the Node version. Supported
-  verification is on Node 22.12+ or Node 24; use Node 24 for the live installation.
+  runtime needs Node-API 10 (22.14+, 23.6+, or newer). Both laptops can use their existing
+  compatible Node versions; they do not need to match. Record the actual versions and include
+  a mixed-version run. Node 24 is an optional development default, not a test prerequisite.
 - Run `npm run pack:release` after the last source change. The existing tarball may be older than
   the current code. Copy the newly built file to both laptops; do not reuse an earlier download
   just because the version number and file name match.
@@ -55,20 +57,24 @@ With each agent closed, open PowerShell in the folder containing the tarball:
 
 ```powershell
 node --version
-npm.cmd --version
-npm.cmd install -g ".\quorumhq-quorum-0.1.0.tgz"
+npm --version
+npm install -g ".\quorumhq-quorum-0.1.0.tgz"
 ```
 
-Using `npm.cmd` avoids the PowerShell execution-policy failure previously seen on laptop B.
 On A start Claude Code in its scratch project. On B start Codex in its scratch project. Accept
 the vendor's prompt to trust Quorum's hooks if it appears.
 
 Record every additional setup command or restart. If npm blocks the package's setup script,
-`quorum.cmd setup` is the existing recovery command; it must be reported as an extra step when
+`quorum setup` is the existing recovery command; it must be reported as an extra step when
 assessing the "npm install alone" and five-minute requirement. Recovery success is not evidence
 that the original clean-install criterion passed.
 
 ## Run the cases
+
+Before opening the test sessions, run `quorum doctor` on both laptops. Resolve every FAIL and
+record relevant WARN output. Run it in the same environment/profile used to launch the vendor,
+especially when CODEX_HOME, CLAUDE_CONFIG_DIR or QUORUM_HOME is customized. Its HTTP/WebSocket
+probe establishes reachability; it does not replace pairing, vendor trust or approval tests.
 
 Keep both transcripts. Use a distinct message, such as `A-to-B-01`, for each send so duplicates and
 missing messages are visible. Stop at a security failure; retain the evidence before retrying.
@@ -90,7 +96,7 @@ missing messages are visible. Stop at a security failure; retain the evidence be
 
 For case 11, explicitly stopping the remote Quorum server is needed to test server-to-server
 queueing; merely closing its agent leaves its local server able to receive and store messages.
-Use `quorum.cmd stop` only in the isolated test account, then a Quorum command to start it again.
+Use `quorum stop` only in the isolated test account, then a Quorum command to start it again.
 
 ## Rotate a disclosed ID
 

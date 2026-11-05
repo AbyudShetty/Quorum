@@ -72,7 +72,7 @@ Stays in Phase 6 per plan. Ask both maintainers before moving it earlier. Cheap 
 
 ## D-7 Toolchain
 
-- Node: supported `>=22.12`; CI on 22 and 24 (LTS lines); `.nvmrc` = 24. Odd-numbered Node releases (e.g. 25) are not supported.
+- Node runtime: `^22.14.0 || >=23.6.0`, including odd-numbered releases; no requirement for peers to run the same Node version. Abyud explicitly requested broader Node/OS compatibility in the November 2026 session. Actual testing found the SQLite native binding needs Node-API 10: 22.12 hard-crashes, while 22.14 and 23.6 work. Packaged-runtime tests exercise 22–27 (27 is currently prerelease) separately from the developer toolchain; `.nvmrc` = 24 remains an optional development default. Upstream runtime security maintenance and Quorum application compatibility are separate; use a maintained Node release for deployment. See [COMPATIBILITY.md](COMPATIBILITY.md).
 - TypeScript **6.0.x**, not 7.x: as of 2026-10-01 `typescript-eslint` supports `typescript <6.1`. Move to 7.x when typescript-eslint supports it.
 - ESLint (flat config, `strictTypeChecked`), Prettier, Vitest; GitHub Actions pinned to commit SHAs; Dependabot, `npm audit`, dependency review and CodeQL for supply-chain scanning.
 - npm workspaces (no extra monorepo tool).

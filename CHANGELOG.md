@@ -16,6 +16,34 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Windows readiness: honor `CODEX_HOME` and `CLAUDE_CONFIG_DIR` during setup/uninstall, preserve
+  UTF-8 BOM JSON settings, and refuse to treat permission/read errors as missing files. Setup
+  revision 6 records the active profile, invalidates stale success before upgrades, retries partial
+  installs and secures its data directory before writing state. Explicit incomplete setup exits
+  unsuccessfully while quiet npm installation stays recoverable (INV-25).
+- Add read-only `quorum doctor [--offline]` checks for the runtime, selected launcher, private
+  data directory, active vendor configuration, setup receipt, credential-store availability and
+  relay HTTP/WebSocket reachability. Credential values and raw keychain errors are not displayed;
+  diagnostics do not change settings, start a home, register an ID or relax TLS. Live vendor
+  trust, encrypted peer pairing and approval behavior still require the exit run.
+- Bound Windows test-worker concurrency to available CPU capacity (at most four), avoiding
+  filesystem/native-addon/ACL-process contention across the full suite without changing timeouts
+  or security assertions.
+
+- Runtime/platform compatibility: accept Node 22.14+, 23.6+ and newer majors, refresh vendor
+  hooks when a Node version manager changes the executable path, and run automatic setup on a
+  bare `quorum` invocation when install scripts were disabled. Older runtimes receive a clear
+  minimum-version message before native dependencies load. Tests reproduced an upstream SQLite
+  crash on Node 22.12 (Node-API 9); CLI and database guards require Node-API 10 rather than
+  loading an incompatible native binding. Packaged tests cover CLI/native
+  startup, isolated first-use setup and TLS federation between separate Node processes, including
+  consent, messages, rotation, history and blocks. CI covers Windows, Linux and macOS with Node
+  22–27, including the available Node 27 prerelease. No wire/protocol or credential-storage change.
+- Abandoned tool-proof cleanup uses bounded parallel file checks while holding the mint lock,
+  preventing serial filesystem scans from exhausting Windows hook deadlines at quota. Expiry,
+  malformed-record handling, one-use consumption and the 1024-proof limit remain enforced;
+  a regression checks two concurrent calls competing for the last slot (INV-7/12/25/34).
+
 - Dependency audit findings: refresh compatible lockfile versions of body-parser, fast-uri,
   Fastify, ip-address, qs, Vite and Zod. Scope patched minimatch 11 overrides to ESLint,
   `@eslint/config-array` and `@typescript-eslint/typescript-estree`; their glob call sites use
@@ -28,7 +56,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - Pairing MCP tools bind each invocation to the exact joined vendor session using a one-use,
   argument-bound PreToolUse proof. Global last-active/PID identity fallbacks are removed; unjoined
-  windows and unsupported hooks fail closed. Setup revision 5 installs the binding hooks and
+  windows and unsupported hooks fail closed. Setup revision 6 installs the binding hooks and
   the seventh human command, rotation.
 - Concurrent pairing-state updates and duplicate joins are serialized. Named file locks use
   PID/token ownership and guarded crash recovery rather than evicting live holders by age.

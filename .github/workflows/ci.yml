@@ -20,10 +20,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Supported: active + maintenance Node LTS lines. Windows is included because
-        # agents and humans run Quorum on Windows machines too.
+        # Source/toolchain checks. Product runtime compatibility is tested independently below,
+        # so developer tools' narrower engine ranges do not restrict users' Node versions.
         node: [22, 24]
         os: [ubuntu-latest, windows-latest]
+        include:
+          - node: 26
+            os: ubuntu-latest
+          - node: 26
+            os: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,6 +43,53 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+
+  compatibility:
+    name: packaged runtime (node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '22.14.0'
+            os: windows-latest
+          - node: '23'
+            os: ubuntu-latest
+          - node: '24'
+            os: macos-latest
+          - node: '25'
+            os: windows-latest
+          - node: '26'
+            os: ubuntu-latest
+          - node: '27.0.0-alpha.0.0.0'
+            os: windows-latest
+          - node: '27.0.0-alpha.0.0.0'
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run pack:release
+      - name: Keep the peer's Node executable for mixed-version federation
+        shell: pwsh
+        run: |
+          "QUORUM_PEER_NODE=$(node -p process.execPath)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install and exercise the release with a different-runtime peer
+        shell: pwsh
+        run: |
+          $installPrefix = Join-Path $env:RUNNER_TEMP 'quorum-compat-install'
+          npm install --prefix "$installPrefix" --ignore-scripts --no-audit --no-fund --package-lock=false ./deploy/npm/out/quorumhq-quorum-0.1.0.tgz
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node deploy/npm/runtime-smoke.mjs --package "$installPrefix/node_modules/@quorumhq/quorum" --peer-node "$env:QUORUM_PEER_NODE"
 
   audit:
     name: dependency audit

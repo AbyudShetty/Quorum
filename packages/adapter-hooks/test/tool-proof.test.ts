@@ -146,6 +146,28 @@ describe('single-use vendor tool-call proofs', () => {
     expect(await readdir(callsOf(dir))).toHaveLength(1);
   });
 
+  it('keeps the quota exact when two calls race for its final slot', async () => {
+    const dir = await scratch();
+    const token = await mintToolProof(dir, input, NOW);
+    const record = await readFile(pathOf(dir, token), 'utf8');
+    await Promise.all(
+      Array.from({ length: MAX_PENDING_TOOL_PROOFS - 2 }, (_, n) =>
+        writeFile(join(callsOf(dir), `${n.toString(16).padStart(64, '0')}.json`), record),
+      ),
+    );
+    const results = await Promise.allSettled([
+      mintToolProof(dir, input, NOW),
+      mintToolProof(dir, input, NOW),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.filter((result) => result.status === 'rejected');
+    expect(rejected).toHaveLength(1);
+    const reason: unknown = rejected[0]?.reason;
+    expect(reason).toBeInstanceOf(Error);
+    if (reason instanceof Error) expect(reason.message).toContain('Too many');
+    expect(await readdir(callsOf(dir))).toHaveLength(MAX_PENDING_TOOL_PROOFS);
+  });
+
   it('does not prune unrelated files or follow an invalid proof filename', async () => {
     const dir = await scratch();
     await mkdir(callsOf(dir), { recursive: true });

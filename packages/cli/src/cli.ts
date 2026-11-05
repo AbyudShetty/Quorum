@@ -23,6 +23,8 @@ import {
   checkRelayUrl,
   DEFAULT_RELAY,
   defaultDataDir,
+  ensurePrivateDir,
+  writePrivateFile,
   readRemoteConfig,
   type RemoteConfig,
   relayLinkUrl,
@@ -123,6 +125,8 @@ import {
 } from './vendor-config.js';
 import { removeUserConfig, writeUserConfig } from './user-config.js';
 import { preparePairingToolCall, resolvePairingToolCall } from './pairing-tools.js';
+import { vendorConfigPaths, type VendorConfigEnv } from './vendor-paths.js';
+import { doctor } from './doctor.js';
 
 export interface CliEnv {
   out: (text: string) => void;
@@ -161,15 +165,26 @@ export interface CliEnv {
   killServer?: (pid: number) => void;
   /** The person's home folder, where ~/.claude and ~/.codex live (tests). */
   home?: string;
+  vendorConfigEnv?: VendorConfigEnv;
+  /** Read-only diagnostics overrides (the actual process environment is wired in run.ts). */
+  path?: string;
+  relay?: string;
 }
 
 /** Keychain entry for the signed-in human (used by `export`). */
 export const HUMAN_CREDENTIAL_KEY = 'human';
 
-const HELP = `quorum: coordinate AI coding agents (Phase 1, work in progress)
+const HELP = `quorum: coordinate AI coding agents
 
 Usage: quorum <command> [options]
 
+Inside Claude Code, type /quorum-id; inside Codex, type $quorum-id.
+Share the ID, then quorum-attach <ID> in the other session (with / or $).
+The receiving person approves. quorum-rotate replaces an ID and requires new links.
+
+  setup [--quiet]                          Install or repair vendor hooks, tools and commands
+  doctor [--offline]                       Check runtime, setup, permissions, keychain and relay
+  uninstall                                Remove Quorum's vendor integration; keep history
   serve --local [--idle-minutes <n>]         Run the local server in this terminal (commands also
                                              start it in the background when needed)
   stop                                       Stop the local server
@@ -229,11 +244,13 @@ export const main = async (argv: string[], env: CliEnv): Promise<number> => {
       case '--help':
       case '-h':
         env.out(HELP);
-        return command === undefined ? 1 : 0;
+        return 0;
       case 'serve':
         return await serve(rest, env);
       case 'stop':
         return await stop(rest, env);
+      case 'doctor':
+        return await doctor(rest, env, SETUP_REVISION);
       case 'workspace':
         return await workspace(rest, env);
       case 'login':
@@ -1943,7 +1960,7 @@ const pairingHook = async (
 const setupMarker = (dataDir: string): string => join(dataDir, 'setup.json');
 
 /** Raised whenever setup writes something new, so an updated Quorum sets itself up again. */
-const SETUP_REVISION = 5;
+export const SETUP_REVISION = 6;
 
 /**
  * `quorum setup [--quiet]` (D-20, PAIRING.md §4): Quorum in every Claude Code and Codex session.
@@ -1960,27 +1977,81 @@ const setup = async (args: string[], env: CliEnv): Promise<number> => {
   const dataDir = dataDirOf(env);
   const command = await (env.quorumCommand ?? quorumCommand)();
   const home = env.home ?? homedir();
+  try {
+    await ensurePrivateDir(dataDir);
+    // Invalidate a previous receipt before touching config: quiet install failures must not
+    // leave an old success marker which suppresses repair on the next ordinary invocation.
+    await writePrivateFile(setupMarker(dataDir), '{"complete":false}\n');
+  } catch (error) {
+    if (values.quiet) return 0;
+    throw new NeedsActionError(
+      `Could not create a private Quorum data directory at ${dataDir}. Check its permissions.`,
+      { cause: error },
+    );
+  }
   // Quietly (npm install's step): never fail the install; `quorum setup` shows what went wrong.
-  const changes = await writeUserConfig({ home, command, dataDir }).catch((error: unknown) => {
+  const changes = await writeUserConfig({
+    home,
+    command,
+    dataDir,
+    env: env.vendorConfigEnv ?? {},
+  }).catch((error: unknown) => {
     if (values.quiet) return undefined;
-    throw error;
+    throw new NeedsActionError(
+      'Could not update vendor configuration. Check file permissions and profile directories, then run quorum setup again.',
+      { cause: error },
+    );
   });
   if (!changes) return 0;
   const earlier: string[] = [];
-  for (const old of await listAttachments(dataDir)) {
-    if (old.workspaces.length === 0 && !old.server) continue; // a paired session: no folder config
-    const removed = await removeVendorConfig(old.vendor, old.root, old.attachment, dataDir);
-    if (removed.length > 0) earlier.push(old.root);
+  let oldAttachments: Awaited<ReturnType<typeof listAttachments>> = [];
+  try {
+    oldAttachments = await listAttachments(dataDir);
+  } catch {
+    changes.push({
+      file: dataDir,
+      action: 'skipped',
+      note: 'Legacy attachment metadata could not be read; check permissions.',
+    });
   }
-  await mkdir(dataDir, { recursive: true });
-  await writeFile(
-    setupMarker(dataDir),
-    `${JSON.stringify({ bin: command.bin, node: command.node, revision: SETUP_REVISION, at: new Date().toISOString() })}\n`,
-  );
-  if (values.quiet) return 0;
+  for (const old of oldAttachments) {
+    if (old.workspaces.length === 0 && !old.server) continue; // a paired session: no folder config
+    try {
+      const removed = await removeVendorConfig(old.vendor, old.root, old.attachment, dataDir);
+      if (removed.length > 0) earlier.push(old.root);
+    } catch {
+      changes.push({
+        file: old.root,
+        action: 'skipped',
+        note: 'Legacy configuration could not be updated; check permissions.',
+      });
+    }
+  }
   const skipped = changes.filter((c) => c.action === 'skipped');
+  try {
+    await writePrivateFile(
+      setupMarker(dataDir),
+      `${JSON.stringify({
+        bin: command.bin,
+        node: command.node,
+        revision: SETUP_REVISION,
+        config: vendorConfigPaths(home, env.vendorConfigEnv),
+        complete: skipped.length === 0,
+        at: new Date().toISOString(),
+      })}\n`,
+    );
+  } catch (error) {
+    if (values.quiet) return 0;
+    throw new NeedsActionError(
+      `Could not write Quorum setup state in ${dataDir}. Check permissions and run quorum setup again.`,
+      { cause: error },
+    );
+  }
+  if (values.quiet) return 0;
   env.out(
-    'Quorum is set up in Claude Code and Codex (all folders).\n\n' +
+    (skipped.length
+      ? 'Quorum setup is incomplete; some configuration files were left unchanged.\n\n'
+      : 'Quorum is set up in Claude Code and Codex (all folders).\n\n') +
       'In any session, type /quorum-id in Claude Code (or $quorum-id in Codex) to get its ID; give it to the other person, who types /quorum-attach <ID> ($quorum-attach in Codex).\n\n' +
       'Restart sessions that are already open. Codex asks once to trust the new hooks: choose "Trust all and continue".\n' +
       (earlier.length
@@ -1990,7 +2061,7 @@ const setup = async (args: string[], env: CliEnv): Promise<number> => {
         ? `\nNot changed (fix by hand, then run \`quorum setup\` again): ${skipped.map((c) => `${c.file} (${c.note ?? ''})`).join('; ')}.\n`
         : ''),
   );
-  return 0;
+  return skipped.length ? 1 : 0;
 };
 
 /**
@@ -2001,14 +2072,34 @@ export const ensureSetUp = async (env: CliEnv): Promise<void> => {
   const dataDir = dataDirOf(env);
   const command = await (env.quorumCommand ?? quorumCommand)();
   const marker = await readFile(setupMarker(dataDir), 'utf8').catch(() => '');
-  const done = ((): { bin?: unknown; revision?: unknown } => {
+  const done = ((): {
+    bin?: unknown;
+    node?: unknown;
+    revision?: unknown;
+    complete?: unknown;
+    config?: unknown;
+  } => {
     try {
-      return JSON.parse(marker) as { bin?: unknown; revision?: unknown };
+      return JSON.parse(marker) as {
+        bin?: unknown;
+        node?: unknown;
+        revision?: unknown;
+        complete?: unknown;
+        config?: unknown;
+      };
     } catch {
       return {};
     }
   })();
-  if (done.bin === command.bin && done.revision === SETUP_REVISION) return;
+  if (
+    done.bin === command.bin &&
+    done.node === command.node &&
+    done.revision === SETUP_REVISION &&
+    done.complete === true &&
+    JSON.stringify(done.config) ===
+      JSON.stringify(vendorConfigPaths(env.home ?? homedir(), env.vendorConfigEnv))
+  )
+    return;
   await setup(['--quiet'], env).catch(() => undefined);
 };
 
@@ -2020,7 +2111,11 @@ export const ensureSetUp = async (env: CliEnv): Promise<void> => {
 const uninstall = async (args: string[], env: CliEnv): Promise<number> => {
   parseArgs({ args, options: {}, strict: true });
   const dataDir = dataDirOf(env);
-  const changes = await removeUserConfig({ home: env.home ?? homedir(), dataDir });
+  const changes = await removeUserConfig({
+    home: env.home ?? homedir(),
+    dataDir,
+    env: env.vendorConfigEnv ?? {},
+  });
   await rm(setupMarker(dataDir), { force: true });
   await stop([], env).catch(() => 0);
   env.out(

@@ -215,6 +215,12 @@ const migrate = (db: Db): void => {
  * a crash or power loss, and readers never block the single writer.
  */
 export const openDatabase = (file: string): Db => {
+  // better-sqlite3 13 uses Node-API 10. Older 22.x/23.x can crash during native registration
+  // rather than throw; guard here too for callers that do not use the CLI entry point.
+  if (Number(process.versions.napi ?? 0) < 10)
+    throw new Error(
+      `Quorum SQLite requires Node-API 10 (Node 22.14+, 23.6+, or newer); found Node ${process.versions.node}.`,
+    );
   const db = new Database(file);
   try {
     // First, so every step below (switching to WAL included) waits for another connection's

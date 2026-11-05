@@ -50,13 +50,18 @@ const exists = (path: string): Promise<boolean> =>
   );
 
 /** Is a `quorum` command on the PATH? (Looks for the file; runs nothing.) */
-export const quorumOnPath = async (path = process.env.PATH ?? ''): Promise<boolean> => {
+export const findQuorumLauncher = async (
+  path = process.env.PATH ?? '',
+): Promise<string | undefined> => {
   const names = process.platform === 'win32' ? ['quorum.cmd'] : ['quorum'];
   for (const dir of path.split(delimiter).filter(Boolean)) {
-    for (const name of names) if (await exists(join(dir, name))) return true;
+    for (const name of names) if (await exists(join(dir, name))) return join(dir, name);
   }
-  return false;
+  return undefined;
 };
+
+export const quorumOnPath = async (path = process.env.PATH ?? ''): Promise<boolean> =>
+  (await findQuorumLauncher(path)) !== undefined;
 
 export const quorumCommand = async (): Promise<QuorumCommand> => ({
   node: process.execPath,
@@ -114,11 +119,12 @@ const readJsonFile = async (file: string): Promise<HooksFile | undefined> => {
   let text: string;
   try {
     text = await readFile(file, 'utf8');
-  } catch {
-    return {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw error;
   }
   try {
-    const value: unknown = JSON.parse(text);
+    const value: unknown = JSON.parse(text.replace(/^\uFEFF/, ''));
     return typeof value === 'object' && value !== null && !Array.isArray(value)
       ? (value as HooksFile)
       : undefined;

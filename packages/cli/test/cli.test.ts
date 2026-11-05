@@ -57,8 +57,11 @@ const setup = async () => {
 describe('quorum CLI', () => {
   it('prints help and rejects unknown commands', async () => {
     const { env, text, errText } = await setup();
+    expect(await main([], env)).toBe(0);
     expect(await main(['help'], env)).toBe(0);
     expect(text()).toContain('Usage: quorum');
+    expect(text()).toContain('/quorum-id');
+    expect(text()).toContain('$quorum-id');
     expect(await main(['frobnicate'], env)).toBe(64);
     expect(errText()).toContain('Unknown command');
   });

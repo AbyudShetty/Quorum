@@ -44,3 +44,11 @@ deployed before that run, and both vendors must trust the new PreToolUse hook se
 ID rotation is implemented as `/quorum-rotate` (Codex: `$quorum-rotate`), following Abyud's report
 of discussing it with Abhijna: [RFC and contract](rfcs/ID_ROTATION.md). Naming (D-1) and the
 alternative networking proposal (D-5) remain joint decisions; no new transport is selected here.
+
+The compatibility follow-up removes the Node-24-only test prerequisite. The package supports
+Node-API 10 runtimes (22.14+, 23.6+, and newer majors), with real mixed-process relay tests
+through Node 27 prerelease. Setup refreshes hooks when the Node executable changes; native
+guards prevent old-runtime crashes and bounded proof scans address Windows filesystem load.
+Local checks: 993 passed / 35 skipped on Node 25.2.0, plus six passing mixed-runtime pairs on
+Windows x64. Linux/macOS checks are configured in CI and await GitHub execution. Details:
+[COMPATIBILITY.md](COMPATIBILITY.md), [candidate and checksum](PHASE_1B_CANDIDATE.md).

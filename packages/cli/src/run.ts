@@ -24,12 +24,12 @@ export const keychainService = (
 };
 
 /** Commands that run inside Claude Code or Codex (or set Quorum up): they never set up first. */
-const NO_SETUP = new Set(['hook', 'mcp', 'setup', 'uninstall', 'relay', 'serve']);
+const NO_SETUP = new Set(['hook', 'mcp', 'setup', 'uninstall', 'relay', 'serve', 'doctor']);
 
 export const runFromProcess = async (argv: string[]): Promise<number> => {
   const env = processEnv();
   // Install scripts turned off (or Quorum installed again elsewhere): set up on first use (D-20).
-  if (argv[0] !== undefined && !NO_SETUP.has(argv[0])) await ensureSetUp(env);
+  if (!NO_SETUP.has(argv[0] ?? '')) await ensureSetUp(env);
   return main(argv, env);
 };
 
@@ -37,6 +37,12 @@ const processEnv = (): CliEnv => ({
   out: (text) => process.stdout.write(text),
   err: (text) => process.stderr.write(text),
   store: new KeychainCredentialStore(keychainService()),
+  path: process.env.PATH ?? '',
+  ...(process.env.QUORUM_RELAY ? { relay: process.env.QUORUM_RELAY } : {}),
+  vendorConfigEnv: {
+    ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}),
+    ...(process.env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR } : {}),
+  },
   // A question only a person at a terminal can answer (INV-30). Without a terminal (an agent's
   // shell, a pipe, CI) the answer is no.
   confirm: async (question) => {

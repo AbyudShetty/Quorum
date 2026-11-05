@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemoryCredentialStore } from '@quorum/adapter-mcp';
 import { afterAll, describe, expect, it } from 'vitest';
-import { ensureSetUp } from '../src/cli.js';
+import { ensureSetUp, main } from '../src/cli.js';
 import { removeUserConfig, writeUserConfig } from '../src/user-config.js';
 import type { QuorumCommand } from '../src/vendor-config.js';
 
@@ -31,6 +31,139 @@ const json = (file: string) => JSON.parse(readFileSync(file, 'utf8')) as Record<
 type Groups = { matcher?: string; hooks: Record<string, unknown>[] }[];
 
 describe('quorum setup (user level)', () => {
+  it('honors custom vendor profiles and uninstalls only from those profiles', async () => {
+    const h = home();
+    const env = {
+      CODEX_HOME: join(h, 'codex profile α'),
+      CLAUDE_CONFIG_DIR: join(h, 'claude profile α'),
+    };
+    mkdirSync(join(h, '.claude'));
+    writeFileSync(join(h, '.claude', 'settings.json'), '{"untouched":true}');
+    await writeUserConfig({ home: h, command, dataDir, env });
+    expect(json(join(env.CLAUDE_CONFIG_DIR, 'settings.json')).hooks).toBeDefined();
+    expect(json(join(env.CLAUDE_CONFIG_DIR, '.claude.json')).mcpServers).toBeDefined();
+    expect(existsSync(join(env.CODEX_HOME, 'skills', 'quorum-rotate', 'SKILL.md'))).toBe(true);
+    expect(readFileSync(join(h, '.claude', 'settings.json'), 'utf8')).toBe('{"untouched":true}');
+    expect(existsSync(join(h, '.codex'))).toBe(false);
+    await removeUserConfig({ home: h, dataDir, env });
+    expect(json(join(env.CLAUDE_CONFIG_DIR, 'settings.json')).hooks).toBeUndefined();
+    expect(existsSync(join(env.CODEX_HOME, 'skills', 'quorum-rotate'))).toBe(false);
+    expect(readFileSync(join(h, '.claude', 'settings.json'), 'utf8')).toBe('{"untouched":true}');
+  });
+
+  it('does not treat a read error as a missing file or overwrite its contents', async () => {
+    const h = home();
+    const file = join(h, '.claude', 'settings.json');
+    mkdirSync(file, { recursive: true });
+    writeFileSync(join(file, 'keep.txt'), 'keep');
+    await expect(writeUserConfig({ home: h, command, dataDir })).rejects.toThrow();
+    expect(readFileSync(join(file, 'keep.txt'), 'utf8')).toBe('keep');
+  });
+
+  it('accepts UTF-8 BOM settings without losing unrelated fields', async () => {
+    const h = home();
+    mkdirSync(join(h, '.claude'));
+    writeFileSync(join(h, '.claude', 'settings.json'), '\uFEFF{"model":"kept"}');
+    writeFileSync(join(h, '.claude.json'), '\uFEFF{"numStartups":19}');
+    await writeUserConfig({ home: h, command, dataDir });
+    expect(json(join(h, '.claude', 'settings.json')).model).toBe('kept');
+    expect(json(join(h, '.claude.json')).numStartups).toBe(19);
+  });
+
+  it('retries incomplete setup after the malformed file is repaired', async () => {
+    const h = home();
+    const data = join(h, 'data');
+    mkdirSync(join(h, '.claude'));
+    const file = join(h, '.claude', 'settings.json');
+    writeFileSync(file, '{invalid');
+    const out: string[] = [];
+    const env = {
+      home: h,
+      dataDir: data,
+      quorumCommand: () => Promise.resolve(command),
+      store: new MemoryCredentialStore(),
+      out: (text: string) => out.push(text),
+      err: () => undefined,
+    };
+    expect(await main(['setup'], env)).toBe(1);
+    expect(out.join('')).toContain('setup is incomplete');
+    expect(json(join(data, 'setup.json')).complete).toBe(false);
+    expect(readFileSync(file, 'utf8')).toBe('{invalid');
+    writeFileSync(file, '{}');
+    await ensureSetUp(env);
+    expect(json(join(data, 'setup.json')).complete).toBe(true);
+    expect(json(file).hooks).toBeDefined();
+  });
+
+  it('invalidates an older success receipt when a quiet upgrade cannot read configuration', async () => {
+    const h = home();
+    const data = join(h, 'data');
+    const env = {
+      home: h,
+      dataDir: data,
+      quorumCommand: () => Promise.resolve(command),
+      store: new MemoryCredentialStore(),
+      out: () => undefined,
+      err: () => undefined,
+    };
+    expect(await main(['setup', '--quiet'], env)).toBe(0);
+    const file = join(h, '.claude', 'settings.json');
+    rmSync(file);
+    mkdirSync(file);
+    writeFileSync(join(file, 'keep'), 'untouched');
+    expect(await main(['setup', '--quiet'], env)).toBe(0);
+    expect(json(join(data, 'setup.json')).complete).toBe(false);
+    expect(readFileSync(join(file, 'keep'), 'utf8')).toBe('untouched');
+  });
+
+  it('refreshes setup after CODEX_HOME changes with the same package and runtime', async () => {
+    const h = home();
+    const data = join(h, 'data');
+    const env = {
+      home: h,
+      dataDir: data,
+      quorumCommand: () => Promise.resolve(command),
+      store: new MemoryCredentialStore(),
+      out: () => undefined,
+      err: () => undefined,
+    };
+    await ensureSetUp(env);
+    const target = join(h, 'new codex home');
+    await ensureSetUp({ ...env, vendorConfigEnv: { CODEX_HOME: target } });
+    expect(existsSync(join(target, 'hooks.json'))).toBe(true);
+    expect(json(join(data, 'setup.json')).config).toMatchObject({
+      codexConfig: join(target, 'config.toml'),
+    });
+    expect(existsSync(join(h, '.codex', 'config.toml'))).toBe(true);
+  });
+
+  it('refuses an ambiguous relative profile path before modifying vendor files', async () => {
+    const h = home();
+    await expect(
+      writeUserConfig({ home: h, command, dataDir, env: { CODEX_HOME: 'relative-profile' } }),
+    ).rejects.toThrow('absolute configuration directory');
+    expect(existsSync(join(h, '.claude'))).toBe(false);
+  });
+
+  it('refreshes hooks when a Node version manager changes the executable but keeps the same package', async () => {
+    const h = home();
+    const data = join(h, 'data');
+    const env = {
+      home: h,
+      dataDir: data,
+      quorumCommand: () => Promise.resolve(command),
+      store: new MemoryCredentialStore(),
+      out: () => undefined,
+      err: () => undefined,
+    };
+    await ensureSetUp(env);
+    const changed = { ...command, node: 'C:\\Node Runtimes\\v27\\node.exe' };
+    await ensureSetUp({ ...env, quorumCommand: () => Promise.resolve(changed) });
+    expect(json(join(data, 'setup.json')).node).toBe(changed.node);
+    expect(readFileSync(join(h, '.codex', 'config.toml'), 'utf8')).toContain('v27');
+    expect(readFileSync(join(h, '.claude', 'settings.json'), 'utf8')).toContain('v27');
+  });
+
   it('upgrades an existing setup marker so installed sessions receive the rotation command', async () => {
     const h = home();
     const data = join(h, 'data');
@@ -46,7 +179,7 @@ describe('quorum setup (user level)', () => {
     });
     expect(existsSync(join(h, '.claude', 'commands', 'quorum-rotate.md'))).toBe(true);
     expect(existsSync(join(h, '.codex', 'skills', 'quorum-rotate', 'SKILL.md'))).toBe(true);
-    expect(json(join(data, 'setup.json')).revision).toBe(5);
+    expect(json(join(data, 'setup.json')).revision).toBe(6);
   });
 
   it('puts hooks, the tools and the commands into Claude Code and Codex, keeping what is there', async () => {

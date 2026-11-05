@@ -22,7 +22,9 @@ When two people each run an AI coding agent on separate machines, the humans bec
 
 ## Quick start
 
-Requires Node.js 22.12+ (24 LTS recommended). Install the `quorum` command once per machine:
+Requires Node.js **22.14+, 23.6+, or a newer major** (Node-API 10), including odd-numbered majors. Peers can use different
+Node versions and operating systems; Node 24 is an optional development default. See
+[runtime and platform compatibility](docs/COMPATIBILITY.md). Install the `quorum` command once per machine:
 
 ```sh
 npm install -g quorumhq-quorum-0.1.0.tgz   # the package file you were given
@@ -35,6 +37,7 @@ and trust Quorum's hooks when prompted:
 
 ```sh
 quorum setup
+quorum doctor
 ```
 
 In Claude Code, type `/quorum-id` and give the ID to the other person. In Codex, type
@@ -114,7 +117,7 @@ config/          shared TypeScript and test configuration
 ## Development
 
 ```sh
-npm ci              # install (Node 22.12+; 24 LTS recommended, see .nvmrc)
+npm ci              # install (Node-API 10: 22.14+, 23.6+, or newer; .nvmrc is optional)
 npm run check       # format check, lint, typecheck, build, tests
 npm test -- packages/cli          # run some tests (vitest; config in config/vitest.config.ts)
 npm run generate    # regenerate packages/schemas/openapi.v1.json after changing the API

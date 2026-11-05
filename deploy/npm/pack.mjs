@@ -109,8 +109,12 @@ for (const [, lib] of libOf) {
 await mkdir(join(stage, 'bin'), { recursive: true });
 await writeFile(
   join(stage, 'bin', 'quorum.js'),
-  "#!/usr/bin/env node\nimport { runAndExit } from '../lib/cli/dist/index.js';\n\nawait runAndExit(process.argv.slice(2));\n",
+  (await readFile(join(root, 'packages/cli/bin/quorum.js'), 'utf8')).replace(
+    "'../dist/index.js'",
+    "'../lib/cli/dist/index.js'",
+  ),
 );
+await cp(join(root, 'packages/cli/bin/runtime.js'), join(stage, 'bin/runtime.js'));
 await cp(join(root, 'LICENSE'), join(stage, 'LICENSE'));
 await cp(join(here, 'README.md'), join(stage, 'README.md'));
 

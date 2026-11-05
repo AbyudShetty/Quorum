@@ -18,12 +18,15 @@ import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { HOOK_EVENT_NAMES, type HookEvent, WATCH_HOOK_TIMEOUT_S } from '@quorum/adapter-hooks';
 import { dataDirDenyRules, type ConfigChange, type QuorumCommand } from './vendor-config.js';
+import { vendorConfigPaths, type VendorConfigEnv } from './vendor-paths.js';
 
 export interface UserConfigOptions {
   /** The person's home folder (where ~/.claude and ~/.codex live). */
   home: string;
   command: QuorumCommand;
   dataDir: string;
+  /** Explicit so isolated callers/tests never inherit the maintainer's live vendor directories. */
+  env?: VendorConfigEnv;
 }
 
 /** What each command does, for the menus of both tools. */
@@ -64,11 +67,12 @@ const readJson = async (file: string): Promise<Json | undefined> => {
   let text: string;
   try {
     text = await readFile(file, 'utf8');
-  } catch {
-    return {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw error;
   }
   try {
-    const value: unknown = JSON.parse(text);
+    const value: unknown = JSON.parse(text.replace(/^\uFEFF/, ''));
     return typeof value === 'object' && value !== null && !Array.isArray(value)
       ? (value as Json)
       : undefined;
@@ -162,21 +166,12 @@ const joinToml = (parts: string[][]): string =>
     .replace(/\n{3,}/g, '\n\n')
     .trim()}\n`;
 
-const paths = (home: string) => ({
-  claudeSettings: join(home, '.claude', 'settings.json'),
-  claudeJson: join(home, '.claude.json'),
-  claudeCommands: join(home, '.claude', 'commands'),
-  codexHooks: join(home, '.codex', 'hooks.json'),
-  codexConfig: join(home, '.codex', 'config.toml'),
-  codexSkills: join(home, '.codex', 'skills'),
-});
-
 /** Claude Code's permission rule for the quorum tools (they only message linked sessions). */
 const ALLOW_TOOLS = 'mcp__quorum';
 
 export const writeUserConfig = async (options: UserConfigOptions): Promise<ConfigChange[]> => {
   const { command, dataDir } = options;
-  const p = paths(options.home);
+  const p = vendorConfigPaths(options.home, options.env);
   const changes: ConfigChange[] = [];
 
   // Claude Code: hooks, deny rules, tools allowed.
@@ -344,7 +339,7 @@ export const writeUserConfig = async (options: UserConfigOptions): Promise<Confi
 export const removeUserConfig = async (
   options: Omit<UserConfigOptions, 'command'>,
 ): Promise<ConfigChange[]> => {
-  const p = paths(options.home);
+  const p = vendorConfigPaths(options.home, options.env);
   const changes: ConfigChange[] = [];
 
   const settings = await readJson(p.claudeSettings);
