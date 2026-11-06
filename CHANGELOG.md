@@ -16,6 +16,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Prevent MCP wake scans from exhausting the local server's unauthenticated request quota:
+  reuse verified clients separately for each attachment/window and pinned remote target, serialize
+  wake scans, and stop watchers for exited vendor processes. HTTP 429 health checks honor a bounded
+  Retry-After cooldown and never spawn replacement servers; throttled identity checks report
+  `rate.limited` rather than a false identity failure. `quorum stop` still verifies identity before
+  signalling and retains discovery on throttling. Quotas, session proofs and pinned-key checks
+  remain enforced (INV-7/23/24/34).
 - Windows readiness: honor `CODEX_HOME` and `CLAUDE_CONFIG_DIR` during setup/uninstall, preserve
   UTF-8 BOM JSON settings, and refuse to treat permission/read errors as missing files. Setup
   revision 6 records the active profile, invalidates stale success before upgrades, retries partial

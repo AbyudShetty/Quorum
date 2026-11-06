@@ -18,6 +18,10 @@ This is a private manual-test candidate, not a phase exit or public release.
   guards, and bounded proof cleanup under Windows load. See [COMPATIBILITY.md](COMPATIBILITY.md).
 - Read-only `quorum doctor`, BOM-aware settings reads, preserved unreadable config and private
   setup-state creation, with separate checks of relay HTTP and WebSocket reachability.
+- November 6 MCP rate-limit fix: keep separate verified clients for each attachment/window and
+  pinned target, serialize wake scans, and stop watchers for exited vendor processes. Readiness
+  respects HTTP 429 Retry-After without spawning replacements; throttled identity checks,
+  including `quorum stop`, report a busy server without sending credentials or signalling it.
 
 Details: [adapter hardening](PHASE_1B_ADAPTER_HARDENING.md),
 [rotation RFC and approval record](rfcs/ID_ROTATION.md).
@@ -25,11 +29,11 @@ Details: [adapter hardening](PHASE_1B_ADAPTER_HARDENING.md),
 ## Verification and artifact
 
 `npm run check` passed on **Node 25.2.0** after the compatibility fixes: formatting, ESLint,
-TypeScript, build and the complete suite (**993 tests passed, 35 skipped; 72 test files passed**).
+TypeScript, build and the complete suite (**1001 tests passed, 35 skipped; 74 test files passed**).
 The skipped standalone-contract/opt-in cases do not replace live vendor/network exit evidence.
 The real and fake contract targets run in the normal suite. These results do not close the phase.
 
-`npm run pack:release` rebuilt `deploy/npm/out/quorumhq-quorum-0.1.0.tgz` (104 files). A fresh
+`npm run pack:release` rebuilt `deploy/npm/out/quorumhq-quorum-0.1.0.tgz` (105 files). A fresh
 isolated install with scripts disabled passed native module loading, CLI startup, automatic
 setup, SQLite migration and real TLS relay tests under every runtime pair below. The
 packaged dependency manifest requires patched Fastify `^5.12.8` and Zod `^4.6.7` minimums.
@@ -55,17 +59,23 @@ CI jobs exercise the package on those OS runners. Node 27 is currently prereleas
 SHA-256:
 
 ```text
-3215058ce1df1dae33d7f844823b683af93aee7280315888bbf54a7ac44d9ee4
+cd3c0673c80e015b23563e35ea88e6119603997188df1397cd35aaa1aeb06e65
 ```
 
 Additional Node executables live only in ignored test storage; the system Node installation was
-not changed. Smoke tests use disposable profiles. The verified candidate was also installed over
-the existing global `@quorumhq/quorum` package with scripts disabled; the old `@quorum/cli` link
-is absent. The next ordinary invocation can repair setup; restart vendor sessions before testing.
-The earlier 911/958-test results and checksums describe older builds. Do not identify the candidate
+not changed. Smoke tests use disposable profiles. The earlier compatibility candidate was installed
+globally and the old `@quorum/cli` link is absent. The November 6 HTTP 429 fix was verified in an
+isolated prefix; reinstall it globally after closing old vendor/MCP processes. The rebuilt tarball
+is dated November 6 at 04:35 IST; it replaces the 02:04 build and its `3215058c...` checksum.
+The earlier 911/958/993-test results and checksums describe older builds. Do not identify the candidate
 by its `0.1.0` filename alone. The expanded GitHub CI matrix must pass before release.
 
 ## Remaining gates
+
+The preliminary November 6 Codex 0.166.0 run hit the local HTTP 429 feedback loop described in
+[COMPATIBILITY.md](COMPATIBILITY.md). It is not passing live evidence. Both laptops must install
+the rebuilt candidate and restart old vendor/MCP processes before retrying. The client fix does
+not require another relay deployment if the revised Worker has already been deployed.
 
 1. **Hosted Worker update:** deploy the revised source using the maintainer guide in
    `packages/relay/worker/README.md`; record the deployment. Local tests do not update the hosted copy.
@@ -107,24 +117,17 @@ See [the advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249) and
 
 ## Changed files
 
-The earlier ID-rotation/hardening change was committed by the human. This follow-up changes
-runtime compatibility, onboarding and proof-scan performance. Use `git status --short` and
-`git diff` to review the current changes before staging.
+The human committed the earlier rotation, hardening and compatibility work. This follow-up fixes
+the local MCP HTTP 429 feedback loop. Use `git status --short` and `git diff` before staging.
 
-- CI/contributing: `.github/CONTRIBUTING.md`, `.github/workflows/ci.yml`.
-- Root: `CHANGELOG.md`, `README.md`, `package.json`, `package-lock.json`.
-- Test configuration: `config/vitest.config.ts` bounds Windows workers to avoid filesystem contention.
-- Packaging: `deploy/npm/{README.md,manifest.json,pack.mjs,runtime-smoke.mjs}`.
-- Docs: `docs/{COMPATIBILITY.md,DECISIONS.md,PHASE_1B.md,PHASE_1B_CANDIDATE.md,PHASE_1B_EXIT_TEST.md}`.
-- Hooks: `packages/adapter-hooks/src/tool-proof.ts`, `packages/adapter-hooks/test/tool-proof.test.ts`.
-- CLI: `packages/cli/bin/{quorum.js,runtime.js}`,
-  `packages/cli/src/{cli.ts,run.ts,doctor.ts,vendor-paths.ts,user-config.ts,vendor-config.ts}`,
-  `packages/cli/test/{cli.test.ts,runtime.test.ts,doctor.test.ts,user-config.test.ts}`.
-- Server: `packages/server/src/storage/database.ts`, `packages/server/test/runtime.test.ts`.
-- Packaging regression: `tests/repo/release-package.test.ts`.
+- Changelog/docs: `CHANGELOG.md`, `docs/{COMPATIBILITY.md,PHASE_1B.md,PHASE_1B_CANDIDATE.md,PHASE_1B_EXIT_TEST.md}`.
+- MCP client: `packages/adapter-mcp/src/client.ts`, `packages/adapter-mcp/test/client.test.ts`.
+- CLI: `packages/cli/src/{cli.ts,local-server.ts,pairing-clients.ts}`.
+- CLI regressions: `packages/cli/test/{cli.test.ts,reconnect.test.ts,local-server.test.ts,pairing-clients.test.ts}`.
 
-Security properties touched: INV-7/12/25/34 for proof quota/cleanup, INV-25 for safe runtime
-initialization and native credential handling, INV-33/34 for mixed-runtime federation tests.
+Security properties touched: INV-7/34 for separate window-bound clients and unchanged per-call
+session proofs, INV-23 for retaining the existing request quota, and INV-24 for pinned-key
+verification, restart recovery and withholding credentials/signals on throttled identity checks.
 No invariant, wire schema, credential storage rule or phase gate is weakened.
 
 ## Commands for the human
@@ -134,8 +137,8 @@ Review the files, then run these from the repository root after the recorded che
 
 ```powershell
 git diff --check
-git add -- .github/CONTRIBUTING.md .github/workflows/ci.yml CHANGELOG.md README.md package.json package-lock.json config/vitest.config.ts deploy/npm docs/COMPATIBILITY.md docs/DECISIONS.md docs/PHASE_1B.md docs/PHASE_1B_CANDIDATE.md docs/PHASE_1B_EXIT_TEST.md packages/adapter-hooks/src/tool-proof.ts packages/adapter-hooks/test/tool-proof.test.ts packages/cli packages/server/src/storage/database.ts packages/server/test/runtime.test.ts tests/repo/release-package.test.ts
-git commit -m "Harden Windows setup and verify mixed Node compatibility"
+git add -- CHANGELOG.md docs/COMPATIBILITY.md docs/PHASE_1B.md docs/PHASE_1B_CANDIDATE.md docs/PHASE_1B_EXIT_TEST.md packages/adapter-mcp/src/client.ts packages/adapter-mcp/test/client.test.ts packages/cli/src/cli.ts packages/cli/src/local-server.ts packages/cli/src/pairing-clients.ts packages/cli/test/cli.test.ts packages/cli/test/reconnect.test.ts packages/cli/test/local-server.test.ts packages/cli/test/pairing-clients.test.ts
+git commit -m "Fix MCP reconnect storms and local server rate-limit handling"
 git push
 ```
 

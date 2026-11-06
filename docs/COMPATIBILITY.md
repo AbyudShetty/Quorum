@@ -78,6 +78,17 @@ support interoperability; they do not replace the two-person Phase 1b exit run.
 
 ## Running the packaged regression
 
+The November 6 live run exposed an HTTP 429 feedback loop: repeated MCP wake scans opened fresh
+clients, exhausting the 120/minute unauthenticated quota; readiness polling then mistook throttling
+for a dead server. MCP processes now retain separate verified clients per attachment/window and
+pinned remote target. Wake scans do not overlap or monitor exited vendor processes. Readiness
+checks honor Retry-After without spawning or repeatedly polling; a throttled identity handshake,
+including `quorum stop`, reports `rate.limited` and never sends credentials or signals a process.
+The quota and pinned identity handshake remain unchanged. After installing this fix, close old
+vendor sessions to stop their old MCP processes, wait for the reported cooldown if necessary,
+then run `quorum stop`, `quorum setup` and `quorum doctor` before resuming the same conversations.
+Use the rebuilt package on both laptops; a relay redeployment is unnecessary for this client fix.
+
 Before a live run, use `quorum doctor` on both devices (or `quorum doctor --offline` without
 network checks). It checks the current runtime/launcher, private data directory, setup receipt,
 vendor hooks/MCP presence, credential-store reads and relay HTTP plus WebSocket connectivity.

@@ -49,6 +49,12 @@ The compatibility follow-up removes the Node-24-only test prerequisite. The pack
 Node-API 10 runtimes (22.14+, 23.6+, and newer majors), with real mixed-process relay tests
 through Node 27 prerelease. Setup refreshes hooks when the Node executable changes; native
 guards prevent old-runtime crashes and bounded proof scans address Windows filesystem load.
-Local checks: 993 passed / 35 skipped on Node 25.2.0, plus six passing mixed-runtime pairs on
+Local checks: 1001 passed / 35 skipped on Node 25.2.0, plus six passing mixed-runtime pairs on
 Windows x64. Linux/macOS checks are configured in CI and await GitHub execution. Details:
 [COMPATIBILITY.md](COMPATIBILITY.md), [candidate and checksum](PHASE_1B_CANDIDATE.md).
+
+Preliminary November 6 testing found local HTTP 429 responses causing misleading MCP startup
+timeouts and identity errors from `quorum stop`. The client fix retains verified clients per
+attachment/window, serializes wake scans and backs off readiness checks without changing quotas
+or pinned identity verification. The rebuilt candidate passes automated checks; both maintainers
+must reinstall it, restart old vendor/MCP processes and retry the live exit run.

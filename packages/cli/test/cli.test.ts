@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { saveAttachment } from '@quorum/adapter-mcp';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connectAs, note, startWorld, type World } from '../../adapter-mcp/test/helpers.js';
 import { type CliEnv, HUMAN_CREDENTIAL_KEY, main } from '../src/index.js';
 
@@ -55,6 +55,20 @@ const setup = async () => {
 };
 
 describe('quorum CLI', () => {
+  it('stop reports a busy identity endpoint without signalling or removing discovery', async () => {
+    const { w, env, errText } = await setup();
+    const file = join(w.dataDir, 'local', 'server.json');
+    const before = await readFile(file, 'utf8');
+    const kill = vi.fn();
+    env.killServer = kill;
+    env.fetch = () => Promise.resolve(new Response('{}', { status: 429 }));
+    expect(await main(['stop'], env)).toBe(1);
+    expect(errText()).toContain('rate.limited');
+    expect(errText()).not.toContain('IDENTITY CHECK FAILED');
+    expect(kill).not.toHaveBeenCalled();
+    expect(await readFile(file, 'utf8')).toBe(before);
+  });
+
   it('prints help and rejects unknown commands', async () => {
     const { env, text, errText } = await setup();
     expect(await main([], env)).toBe(0);

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, IdentityError, UnreachableError } from '../src/index.js';
 import { connectAs, note, startWorld, type World } from './helpers.js';
 
@@ -11,6 +11,23 @@ afterEach(async () => {
 });
 
 describe('QuorumClient identity check (INV-24)', () => {
+  it('reports throttled identity checks without loading or sending credentials', async () => {
+    world = await startWorld();
+    const load = vi.spyOn(world.store, 'load');
+    const seen: (string | null)[] = [];
+    const fetcher: typeof fetch = (_url, init) => {
+      seen.push(new Headers(init?.headers).get('authorization'));
+      return Promise.resolve(new Response('{}', { status: 429, headers: { 'retry-after': '12' } }));
+    };
+    await expect(connectAs(world, { fetch: fetcher })).rejects.toMatchObject({
+      status: 429,
+      code: 'rate.limited',
+      fix: 'Wait 12 s, close stale agent sessions if necessary, then retry.',
+    });
+    expect(load).not.toHaveBeenCalled();
+    expect(seen).toEqual([null]);
+  });
+
   it('connects to the real server and sends messages with its token', async () => {
     world = await startWorld();
     const client = await connectAs(world);

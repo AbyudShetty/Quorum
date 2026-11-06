@@ -220,6 +220,17 @@ export class QuorumClient {
   async #handshake(): Promise<void> {
     const nonce = newHelloNonce();
     const response = await this.#raw('POST', '/v1/hello', { nonce });
+    if (response.status === 429) {
+      const seconds = Number(response.headers.get('retry-after'));
+      const retry = Number.isFinite(seconds) && seconds > 0 ? Math.min(60, Math.ceil(seconds)) : 60;
+      await response.body?.cancel();
+      throw new ApiError(
+        429,
+        'rate.limited',
+        'The Quorum server is rate-limiting identity checks. No credential was sent.',
+        `Wait ${String(retry)} s, close stale agent sessions if necessary, then retry.`,
+      );
+    }
     const body: unknown = await response.json().catch(() => undefined);
     const checked = validateApiPayload('helloResponse', body);
     if (!response.ok || !checked.ok) {

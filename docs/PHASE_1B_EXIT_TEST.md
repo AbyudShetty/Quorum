@@ -1,6 +1,10 @@
 # Phase 1b: final manual exit run
 
 Status: **not run**. This checklist records evidence; it does not close the phase by itself.
+Preliminary testing on November 6 with Codex 0.166.0 hit local HTTP 429 responses, misleading
+15-second MCP startup timeouts and an identity-check error from `quorum stop`. The client-side
+feedback loop is documented in [COMPATIBILITY.md](COMPATIBILITY.md). Reinstall the rebuilt
+candidate and restart old vendor/MCP processes before retrying; this is not a passing exit run.
 The exit criteria remain in [PHASE_1B.md](PHASE_1B.md), with the accepted pairing design in
 [PAIRING.md](PAIRING.md) and decisions D-19 to D-21.
 

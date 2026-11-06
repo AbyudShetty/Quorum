@@ -8,6 +8,8 @@ import { IdentityError, MemoryCredentialStore, QuorumClient } from '@quorum/adap
 import { readBootstrapCode } from '@quorum/local';
 import { type LocalServer, startLocalServer } from '@quorum/server';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createPairingClientCache } from '../src/pairing-clients.js';
+import { ensureLocalServer } from '../src/local-server.js';
 
 let root: string;
 let dataDir: string;
@@ -68,6 +70,37 @@ afterAll(async () => {
 });
 
 describe('a local server that restarts', { timeout: 60_000 }, () => {
+  it('keeps repeated wake scans below the open-request quota and reconnects a cached client', async () => {
+    const first = await start();
+    let handshakes = 0;
+    const fetcher: typeof fetch = (url, init) => {
+      const href = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      if (href.endsWith('/v1/hello')) handshakes++;
+      return fetch(url, init);
+    };
+    const cache = createPairingClientCache(async (credentialKey) => {
+      await ensureLocalServer(dataDir, {
+        start: () => {
+          throw new Error('Unexpected spawn');
+        },
+      });
+      return QuorumClient.connect({ dataDir, credentialKey, store, fetch: fetcher });
+    });
+    // Previously each scan spent a health request and a fresh unauthenticated handshake.
+    // Seventy scans exhaust the real server's default 120/minute budget without reuse.
+    for (let i = 0; i < 70; i++) {
+      const client = await cache.get('agent', '');
+      expect(await client.workspaces()).toHaveLength(1);
+    }
+    expect(handshakes).toBe(1);
+    const cached = await cache.get('agent', '');
+    await first.close();
+    const second = await start();
+    expect(await cached.workspaces()).toHaveLength(1);
+    expect(handshakes).toBe(2);
+    await second.close();
+  });
+
   it('is found again on its new port, with a fresh identity check', async () => {
     const first = await start();
     const client = await QuorumClient.connect({ dataDir, credentialKey: 'agent', store });

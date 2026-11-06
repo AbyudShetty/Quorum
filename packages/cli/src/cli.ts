@@ -127,6 +127,7 @@ import { removeUserConfig, writeUserConfig } from './user-config.js';
 import { preparePairingToolCall, resolvePairingToolCall } from './pairing-tools.js';
 import { vendorConfigPaths, type VendorConfigEnv } from './vendor-paths.js';
 import { doctor } from './doctor.js';
+import { createPairingClientCache } from './pairing-clients.js';
 
 export interface CliEnv {
   out: (text: string) => void;
@@ -1530,6 +1531,7 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
       if (!key.startsWith(`${vendor}:`)) continue;
       const state = await loadHookState(dataDir, session.attachment);
       for (const [window, w] of Object.entries(state.windows ?? {})) {
+        if (!isProcessAlive(w.vendorPid)) continue;
         found.push({
           key,
           attachment: session.attachment,
@@ -1541,13 +1543,13 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
     }
     return found.sort((a, b) => b.activeAtMs - a.activeAtMs);
   };
+  const clients = createPairingClientCache((attachment) => connect(env, attachment));
   const targetOf = async (attachment: string, window: string) => {
     const saved = await loadAttachment(dataDir, attachment);
     if (!saved) return undefined;
-    // Each invocation owns its client, including during long dialogs. A shared mutable
-    // `session` could otherwise change while a different window's request was awaiting I/O.
-    const client = await connect(env, attachment);
-    client.session = window;
+    // Sharing across calls of the same window is safe: no other window can change its identity.
+    // A changed explicit remote target requires a fresh pinned handshake.
+    const client = await clients.get(attachment, window, JSON.stringify(saved.server ?? null));
     return { client, attachment: linkedAttachment(saved, (await client.links()).links) };
   };
   const server = createPairingMcpServer({
@@ -1558,15 +1560,18 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
     },
   });
   // Codex has no hook to wake an idle window: this shared process does, for each paired session.
-  const wakers = new Map<string, { workspaces: string; stop: () => Promise<void> }>();
+  const wakers = new Map<string, { signature: string; stop: () => Promise<void> }>();
   const keepWakersCurrent = async () => {
+    const active = new Set<string>();
     for (const { key, attachment, window } of await candidates()) {
+      if (active.has(attachment)) continue;
+      active.add(attachment);
       const target = await targetOf(attachment, window).catch(() => undefined);
       if (!target) continue;
       const wakeOff = target.attachment.wake === 'off';
-      const workspaces = target.attachment.workspaces.join(',');
+      const signature = JSON.stringify([key, window, target.attachment.workspaces, wakeOff]);
       const running = wakers.get(attachment);
-      if (running?.workspaces === workspaces) continue;
+      if (running?.signature === signature) continue;
       await running?.stop();
       const waker = await startCodexWaker({
         client: target.client,
@@ -1589,19 +1594,34 @@ const pairingMcp = async (vendor: HookVendor, env: CliEnv): Promise<number> => {
           },
         },
       }).catch(() => undefined);
-      if (waker) wakers.set(attachment, { workspaces, stop: () => waker.stop() });
+      if (waker) wakers.set(attachment, { signature, stop: () => waker.stop() });
     }
+    for (const [attachment, waker] of wakers) {
+      if (active.has(attachment)) continue;
+      wakers.delete(attachment);
+      await waker.stop();
+    }
+  };
+  let wakeScan: Promise<void> | undefined;
+  let closing = false;
+  const scanWakers = () => {
+    if (closing || wakeScan) return;
+    wakeScan = keepWakersCurrent()
+      .catch(() => undefined)
+      .finally(() => {
+        wakeScan = undefined;
+      });
   };
   const wakeTimer =
     vendor === 'codex' && process.env.QUORUM_CODEX_IDLE_WAKE !== 'off'
-      ? setInterval(() => {
-          void keepWakersCurrent().catch(() => undefined);
-        }, 10_000)
+      ? setInterval(scanWakers, 10_000)
       : undefined;
   wakeTimer?.unref();
-  if (wakeTimer) void keepWakersCurrent().catch(() => undefined);
+  if (wakeTimer) scanWakers();
   const goodbye = async () => {
+    closing = true;
     if (wakeTimer) clearInterval(wakeTimer);
+    await wakeScan;
     await Promise.all([...wakers.values()].map((w) => w.stop()));
   };
   process.stdin.once('end', () => {
