@@ -20,7 +20,7 @@
     "@quorum/local": "0.0.0",
     "@quorum/schemas": "0.0.0",
     "@quorum/web": "0.0.0",
-    "better-sqlite3": "^13.0.3",
+    "better-sqlite3": "^13.2.0",
     "fastify": "^5.12.8"
   },
   "devDependencies": {
